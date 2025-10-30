@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gram Flour Varieties | Nutra superfoods</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/feather-icons"></script>
+    <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Poppins:wght@300;400;600&display=swap');
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+        }
+        
+        .luxury-font {
+            font-family: 'Playfair Display', serif;
+        }
+        
+        .glow-hover:hover {
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+        }
+        
+        .whatsapp-float {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 100;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 500px;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+   <!-- Navigation Bar -->
+<nav class="bg-white shadow-lg sticky top-0 z-50">
+    <div class="container mx-auto px-6 py-3 flex items-center justify-between">
+        <!-- Logo -->
+        <div class="flex items-center">
+            <img src="https://huggingface.co/spaces/punitn91/nutraglow-superfoods-delight/resolve/main/images/s.png" alt="Logo" class="h-20 w-20 rounded-full">
+            <span class="ml-3 luxury-font text-4xl font-bold text-red-600">Nutra Superfoods</span>
+        </div>
+
+        <!-- Desktop Menu -->
+        <div class="hidden md:flex items-center space-x-8">
+            <a href="index.html" class="text-gray-800 font-bold px-4 py-2 rounded-md transition duration-300 hover:bg-red-600 hover:text-white">Home</a>
+            <a href="index.html#products" class="text-gray-800 font-bold px-4 py-2 rounded-md transition duration-300 hover:bg-red-600 hover:text-white">Products</a>
+            <a href="index.html#recipes" class="text-gray-800 font-bold px-4 py-2 rounded-md transition duration-300 hover:bg-red-600 hover:text-white">Recipes</a>
+            <a href="index.html#about" class="text-gray-800 font-bold px-4 py-2 rounded-md transition duration-300 hover:bg-red-600 hover:text-white">About Us</a>
+            <a href="index.html#contact" class="text-gray-800 font-bold px-4 py-2 rounded-md transition duration-300 hover:bg-red-600 hover:text-white">Contact</a>
+        </div>
+
+        <!-- Mobile Menu Button -->
+        <div class="md:hidden">
+            <button id="mobile-menu-button">
+                <i data-feather="menu" class="w-6 h-6 text-gray-800"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="absolute top-full left-0 w-full overflow-hidden md:hidden bg-white shadow-lg transition-all duration-500 ease-in-out max-h-0 z-50">
+        <a href="index.html" class="block px-6 py-3 text-gray-800 font-bold transition duration-300 hover:bg-red-600 hover:text-white">Home</a>
+        <a href="index.html#products" class="block px-6 py-3 text-gray-800 font-bold transition duration-300 hover:bg-red-600 hover:text-white">Products</a>
+        <a href="index.html#recipes" class="block px-6 py-3 text-gray-800 font-bold transition duration-300 hover:bg-red-600 hover:text-white">Recipes</a>
+        <a href="index.html#about" class="block px-6 py-3 text-gray-800 font-bold transition duration-300 hover:bg-red-600 hover:text-white">About Us</a>
+        <a href="index.html#contact" class="block px-6 py-3 text-gray-800 font-bold transition duration-300 hover:bg-red-600 hover:text-white">Contact</a>
+    </div>
+</nav>
+
+<!-- Feather Icons & JS -->
+<script src="https://unpkg.com/feather-icons"></script>
+<script>
+  feather.replace();
+
+  const btn = document.getElementById('mobile-menu-button');
+  const menu = document.getElementById('mobile-menu');
+
+  const toggleMenu = () => {
+      if (menu.style.maxHeight && menu.style.maxHeight !== '0px') {
+          menu.style.maxHeight = '0px';
+      } else {
+          menu.style.maxHeight = menu.scrollHeight + 'px';
+      }
+  }
+
+  btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMenu();
+  });
+
+  document.addEventListener('click', (e) => {
+      if (!menu.contains(e.target) && !btn.contains(e.target)) {
+          menu.style.maxHeight = '0px';
+      }
+  });
+
+  window.addEventListener('scroll', () => {
+      menu.style.maxHeight = '0px';
+  });
+</script>
+
+    <!-- Gram Flour Varieties Section -->
+    <section class="py-16">
+        <div class="container mx-auto px-6">
+            <h1 class="luxury-font text-4xl font-bold text-center text-red-600 mb-12">Gram Flour Varieties</h1>
+            
+            <!-- Variety 1 -->
+            <div class="bg-white rounded-xl shadow-lg overflow-hidden mb-12 glow-hover transition duration-300">
+                <div class="md:flex">
+                    <div class="md:w-1/3">
+                        <img src="https://huggingface.co/spaces/punitn91/nutraglow-superfoods-delight/resolve/main/images/sattuproduct.png" alt="Premium Gram Flour" class="w-full h-[400px] object-contain">
+</div>
+                    <div class="md:w-2/3 p-8">
+                        <h2 class="luxury-font text-3xl text-red-600 mb-4">Premium roasted Gram Flour(sattu)</h2>
+                        <p class="text-gray-700 mb-6">Our finest quality besan made from carefully selected chickpeas. Perfect for all your cooking needs, from traditional Indian dishes to modern gluten-free recipes. This variety has a fine texture and rich, nutty flavor.</p>
+                        <button onclick="openQuoteModal('roasted gram flour')" class="bg-yellow-500 text-white px-6 py-2 rounded-full transition duration-200 hover:bg-red-600 hover:shadow-lg hover:shadow-red-600/60">Get Quote</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Variety 2 -->
+            <div class="bg-white rounded-xl shadow-lg overflow-hidden mb-12 glow-hover transition duration-300">
+                <div class="md:flex">
+                    <div class="md:w-1/3">
+                        <img src="https://huggingface.co/spaces/punitn91/nutraglow-superfoods-delight/resolve/main/images/besanproduct.png" alt="Organic Gram Flour" class="w-full h-[400px] object-contain">
+</div>
+                    <div class="md:w-2/3 p-8">
+                        <h2 class="luxury-font text-3xl text-red-600 mb-4">Premium Gram Flour(besan)</h2>
+                        <p class="text-gray-700 mb-6">Certified organic besan produced without any chemical fertilizers or pesticides. Maintains all the natural nutrients of chickpeas while being environmentally friendly. Ideal for health-conscious consumers and organic food enthusiasts.</p>
+                        <button onclick="openQuoteModal('Gram Flour')" class="bg-yellow-500 text-white px-6 py-2 rounded-full transition duration-200 hover:bg-red-600 hover:shadow-lg hover:shadow-red-600/60">Get Quote</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quote Modal -->
+<div id="quoteModal" class="fixed inset-0 bg-black/50 z-50 hidden overflow-y-auto">
+  <div class="flex min-h-screen items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl p-6 shadow-lg">
+      
+      <!-- Modal Header -->
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="luxury-font text-xl text-red-600" id="modalTitle">Get Quote</h3>
+        <span class="cursor-pointer text-gray-500 text-2xl" onclick="closeModal()">&times;</span>
+      </div>
+
+      <!-- Form -->
+      <form id="quoteForm" class="space-y-4">
+        <input type="hidden" id="productName" value="roasted gram flour">
+
+        <div>
+          <label for="name" class="block text-gray-700 mb-1">Full Name</label>
+          <input type="text" id="name" required
+            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-600">
+        </div>
+
+        <div>
+          <label for="email" class="block text-gray-700 mb-1">Email</label>
+          <input type="email" id="email" required
+            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-600">
+        </div>
+
+        <div>
+          <label for="phone" class="block text-gray-700 mb-1">Phone Number</label>
+          <input type="tel" id="phone" required
+            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-600">
+        </div>
+
+        <div>
+          <label for="quantity" class="block text-gray-700 mb-1">Quantity (kg)</label>
+          <input type="number" id="quantity" min="1"
+            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-600">
+        </div>
+
+        <div>
+          <label for="message" class="block text-gray-700 mb-1">Additional Message</label>
+          <textarea id="message" rows="3"
+            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-600"></textarea>
+        </div>
+
+        <!-- Submit Button -->
+        <div class="pt-2">
+          <button type="submit"
+            class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-full w-full transition duration-300">
+            Submit
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- WhatsApp Script -->
+<script>
+document.getElementById("quoteForm").addEventListener("submit", function (e) {
+  e.preventDefault();
+
+  // Get input values
+  const name = document.getElementById("name").value;
+  const email = document.getElementById("email").value;
+  const phone = document.getElementById("phone").value;
+  const quantity = document.getElementById("quantity").value;
+  const message = document.getElementById("message").value;
+  const product = document.getElementById("productName").value || "Not specified";
+
+  // Create WhatsApp message
+  const whatsappMessage = ⁠ 🧾 *New Quote Request*\n\n📦 *Product:* ${product}\n👤 *Name:* ${name}\n📧 *Email:* ${email}\n📞 *Phone:* ${phone}\n📦 *Quantity:* ${quantity} kg\n💬 *Message:* ${message} ⁠;
+  const encoded = encodeURIComponent(whatsappMessage);
+
+  // Open WhatsApp link
+  const whatsappURL = ⁠ https://wa.me/919334026271?text=${encoded} ⁠;
+  window.open(whatsappURL, "_blank");
+});
+</script>
+
+    <!-- WhatsApp Float -->
+    <div class="whatsapp-float">
+        <a href="https://wa.me/919334026271" target="_blank" class="bg-green-500 text-white p-4 rounded-full shadow-lg flex items-center justify-center">
+            <i data-feather="message-circle" class="w-6 h-6"></i>
+        </a>
+    </div>
+
+    <script>
+        // Modal functions
+        function openQuoteModal(productName) {
+            document.getElementById('productName').value = productName;
+            document.getElementById('modalTitle').textContent = `Get Quote - ${productName}`;
+            document.getElementById('quoteModal').style.display = 'block';
+        }
+        
+        function closeModal() {
+            document.getElementById('quoteModal').style.display = 'none';
+        }
+        
+        // Form submission
+        document.getElementById('quoteForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const product = document.getElementById('productName').value;
+            const name = document.getElementById('name').value;
+            const email = document.getElementById('email').value;
+            const phone = document.getElementById('phone').value;
+            const quantity = document.getElementById('quantity').value;
+            const message = document.getElementById('message').value;
+            
+            const whatsappMessage = `Hello NutraGlow,\n\nI'm interested in getting a quote for your ${product}.\n\nName: ${name}\nEmail: ${email}\nPhone: ${phone}\nQuantity: ${quantity || 'Not specified'} kg\nMessage: ${message || 'None'}`;
+            
+            const encodedMessage = encodeURIComponent(whatsappMessage);
+            window.open(`https://wa.me/919334026271?text=${encodedMessage}`, '_blank');
+            
+            closeModal();
+            document.getElementById('quoteForm').reset();
+        });
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('quoteModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+        
+        // Initialize Feather Icons
+        feather.replace();
+    </script>
+</body>
+</html>
