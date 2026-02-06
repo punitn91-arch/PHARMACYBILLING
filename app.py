@@ -7,7 +7,7 @@ import webbrowser
 import threading
 import os
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, or_
+from sqlalchemy import text, or_, inspect
 
 def open_browser():
     webbrowser.open("http://127.0.0.1:5000")
@@ -212,8 +212,13 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
     def ensure_column(table, column, col_def):
-        cols = db.session.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
-        existing = {c[1] for c in cols}
+        try:
+            insp = inspect(db.engine)
+            existing = {c["name"] for c in insp.get_columns(table)}
+        except Exception:
+            # Fallback for SQLite/older engines
+            cols = db.session.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
+            existing = {c[1] for c in cols}
         if column not in existing:
             db.session.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_def}'))
             db.session.commit()
@@ -311,6 +316,7 @@ with app.app_context():
         db.session.commit()
     except Exception:
         # If schema upgrade fails, app should still run
+        db.session.rollback()
         pass
     if not User.query.filter_by(username="admin").first():
         admin = User(username="admin", role="admin")
