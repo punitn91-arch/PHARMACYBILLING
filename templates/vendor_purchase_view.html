@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Vendor Bill Details{% endblock %}
+
+{% block body %}
+<style>
+.card {
+    background: white;
+    padding: 18px;
+    border-radius: 6px;
+    box-shadow: 0 0 6px #cfd8e3;
+}
+
+.meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.meta-item {
+    background: #f8fbff;
+    border: 1px solid #e0e6ef;
+    border-radius: 6px;
+    padding: 8px;
+}
+
+.note {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #6c757d;
+}
+
+.actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background: #0d6efd;
+    color: white;
+    padding: 8px;
+    font-size: 13px;
+}
+
+td {
+    padding: 8px;
+    border-bottom: 1px solid #ddd;
+    text-align: center;
+    font-size: 13px;
+}
+
+.table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid #e0e6ef;
+    border-radius: 6px;
+    margin-top: 12px;
+}
+
+.totals {
+    margin-top: 10px;
+    text-align: right;
+    font-weight: 700;
+}
+</style>
+
+<div class="card">
+    <h2>Vendor Bill Details</h2>
+    <div class="meta-grid">
+        <div class="meta-item">
+            <b>Vendor:</b> {{ vendor.name if vendor else '-' }}
+        </div>
+        <div class="meta-item">
+            <b>Bill No:</b> {{ purchase.invoice_no if purchase.invoice_no else purchase.purchase_no }}
+        </div>
+        <div class="meta-item">
+            <b>Bill Date:</b> {{ purchase.purchase_date.strftime('%d-%m-%Y') if purchase.purchase_date else '-' }}
+        </div>
+        <div class="meta-item">
+            <b>Payment Mode:</b> {{ purchase.payment_mode or '-' }}
+        </div>
+        <div class="meta-item">
+            <b>Payment Status:</b> {{ purchase.payment_status or '-' }}
+        </div>
+        <div class="meta-item">
+            <b>Created By:</b> {{ purchase.created_by or '-' }}
+        </div>
+    </div>
+
+    {% if mode == "return" %}
+    <div class="note">
+        Return mode: edit items and reduce quantity for unsold stock. Sold quantity cannot be reduced.
+    </div>
+    {% elif mode == "edit" %}
+    <div class="note">
+        Edit mode: update item details and quantities. Stock and totals update automatically.
+    </div>
+    {% endif %}
+
+    <div class="actions">
+        <a class="btn" href="/vendor/edit/{{ purchase.vendor_id }}">Back to Vendor</a>
+    </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Medicines in This Bill</h3>
+    {% if items and items|length > 0 %}
+    <div class="table-wrap">
+    <table>
+        <tr>
+            <th>Medicine</th>
+            <th>Batch</th>
+            <th>Expiry</th>
+            <th>Qty</th>
+            <th>Free</th>
+            <th>Purchase Rate</th>
+            <th>MRP</th>
+            <th>GST %</th>
+            <th>Disc %</th>
+            <th>Total</th>
+            {% if mode in ["edit", "return"] %}
+            <th>Action</th>
+            {% endif %}
+        </tr>
+        {% for it in items %}
+        <tr>
+            <td>{{ it.medicine_name }}</td>
+            <td>{{ it.batch }}</td>
+            <td>{{ it.expiry }}</td>
+            <td>{{ it.qty }}</td>
+            <td>{{ it.free_qty }}</td>
+            <td>{{ it.purchase_rate }}</td>
+            <td>{{ it.mrp }}</td>
+            <td>{{ it.gst_percent }}</td>
+            <td>{{ it.discount_percent }}</td>
+            <td>{{ it.total_value }}</td>
+            {% if mode in ["edit", "return"] %}
+            <td><a class="btn btn-sm" href="/vendor/purchase-item/edit/{{ it.id }}">Edit Item</a></td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+    {% else %}
+    <div>No items found in this bill.</div>
+    {% endif %}
+
+    <div class="totals">
+        Subtotal: {{ "%.2f"|format(purchase.subtotal or 0) }} |
+        GST: {{ "%.2f"|format(purchase.gst_total or 0) }} |
+        Discount: {{ "%.2f"|format(purchase.discount_total or 0) }} |
+        Total: {{ "%.2f"|format(purchase.total_amount or 0) }}
+    </div>
+</div>
+{% endblock %}

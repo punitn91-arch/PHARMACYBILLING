@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block body %}
+
+<style>
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.card-box {
+    background: #ffffff;
+    padding: 12px 14px;
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+}
+
+.card-title {
+    font-size: 12px;
+    color: #777;
+}
+
+.card-value {
+    font-size: 22px;
+    font-weight: bold;
+    margin-top: 4px;
+}
+
+.green { color: #198754; }
+.red { color: #dc3545; }
+.orange { color: #fd7e14; }
+.blue { color: #0d6efd; }
+
+.center-logo {
+    background: #fff;
+    padding: 18px;
+    border-radius: 14px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+    text-align: center;
+}
+ 
+.center-logo img {
+    width: 24%;
+    max-width: 520px;
+}
+
+</style>
+
+<!-- 🔹 TOP DASHBOARD CARDS -->
+<div class="dashboard-grid">
+
+    <div class="card-box">
+        <div class="card-title">Today's Sale</div>
+        <div class="card-value blue">₹ {{ today_sale }}</div>
+        <small>Bills Today: {{ bills_today }}</small>
+    </div>
+
+    <a href="/low-stock" style="text-decoration:none;color:inherit">
+    <div class="card-box">
+        <div class="card-title">Low Stock Items</div>
+        <div class="card-value orange">{{ low_stock }}</div>
+        <small>Require attention</small>
+    </div>
+
+    <a href="/expiring-soon" style="text-decoration:none;color:inherit">
+    <div class="card-box">
+
+        <div class="card-title">Expiring Soon</div>
+        <div class="card-value red">{{ expiring_soon }}</div>
+        <small>Next 30 days</small>
+        </div>
+</a>
+
+</div>
+
+<!-- 🔹 CENTER LOGO -->
+<div class="center-logo">
+    <img src="{{ url_for('static', filename='logo.png') }}">
+</div>
+
+<!-- 🔹 BOTTOM DASHBOARD CARDS -->
+<div class="dashboard-grid mt-4">
+
+    <div class="card-box">
+        <div class="card-title">Inventory Value</div>
+        <div class="card-value green">₹ {{ inventory_value }}</div>
+        <small>Well stocked</small>
+    </div>
+
+    <div class="card-box">
+        <div class="card-title">GST Collected (Today)</div>
+        <div class="card-value blue">₹ {{ gst_collected }}</div>
+        <small>For reporting only</small>
+    </div>
+
+</div>
+
+{% endblock %}

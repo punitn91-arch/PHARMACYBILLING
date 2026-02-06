@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Edit Medicine{% endblock %}
+
+{% block body %}
+
+<style>
+.card {
+    background: white;
+    max-width: 500px;
+    padding: 20px;
+    border-radius: 6px;
+    box-shadow: 0 0 6px #cfd8e3;
+}
+input {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+}
+button {
+    background: #0d6efd;
+    color: white;
+    padding: 10px;
+    width: 100%;
+    border: none;
+}
+</style>
+
+<div class="card">
+    <h2>✏️ Edit Medicine</h2>
+
+    <form method="POST">
+        <input type="text" name="name" value="{{ med.name }}" required>
+        <input type="text" name="batch" value="{{ med.batch }}" required>
+        <input type="date" name="expiry" value="{{ med.expiry }}" required>
+        <input type="number" name="mrp" value="{{ med.mrp }}" required>
+       <label>Discount (%)</label>
+<input type="number"
+       name="discount_percent"
+       value="{{ med.discount_percent }}"
+       min="0"
+       max="100">
+
+
+        <input type="number" name="qty" value="{{ med.qty }}" required>
+        
+
+        <button type="submit">Update Medicine</button>
+    </form>
+</div>
+
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block body %}
+
+<h2>📊 Reports</h2>
+
+<form method="POST">
+
+    <label><b>Report Type</b></label>
+    <select name="report_type" onchange="toggleFilters(this.value)" required>
+        <option value="">Select</option>
+        <option value="daily">Daily Report</option>
+        <option value="monthly">Monthly Report</option>
+        <option value="custom">Custom Date</option>
+        <option value="patient">Patient Wise</option>
+        <option value="mobile">Mobile Wise</option>
+        <option value="profit">Profit / Loss (FIFO)</option>
+    </select>
+
+    <!-- MONTH -->
+    <div id="monthBox" style="display:none">
+        <input type="number" name="month" placeholder="Month (1-12)">
+        <input type="number" name="year" placeholder="Year">
+    </div>
+
+    <!-- CUSTOM DATE -->
+    <div id="dateBox" style="display:none">
+        <input type="date" name="from_date">
+        <input type="date" name="to_date">
+    </div>
+
+    <!-- PATIENT -->
+    <div id="patientBox" style="display:none">
+        <input type="text" name="patient" placeholder="Patient Name">
+    </div>
+
+    <!-- MOBILE -->
+    <div id="mobileBox" style="display:none">
+        <input type="text" name="mobile" placeholder="Mobile Number">
+    </div>
+
+    <br>
+    <button class="btn save">🔍 Generate Report</button>
+    <a href="/reports/export" class="btn hold">📤 Export Excel</a>
+
+</form>
+
+<hr>
+
+{% if report_type == "profit" and profit_summary %}
+
+<h3>Profit / Loss (FIFO)</h3>
+<table>
+    <tr><th>From</th><td>{{ profit_summary.from_date }}</td></tr>
+    <tr><th>To</th><td>{{ profit_summary.to_date }}</td></tr>
+    <tr><th>Gross Sales</th><td>Rs {{ profit_summary.sales_total }}</td></tr>
+    <tr><th>Returns</th><td>Rs {{ profit_summary.returns_total }}</td></tr>
+    <tr><th>Net Sales</th><td>Rs {{ profit_summary.net_sales }}</td></tr>
+    <tr><th>COGS (FIFO)</th><td>Rs {{ profit_summary.cogs }}</td></tr>
+    <tr><th>Return COGS</th><td>Rs {{ profit_summary.return_cogs }}</td></tr>
+    <tr><th>Net COGS</th><td>Rs {{ profit_summary.net_cogs }}</td></tr>
+    <tr><th>Gross Profit</th><td>Rs {{ profit_summary.gross_profit }}</td></tr>
+</table>
+
+{% elif invoices %}
+
+<table>
+<tr>
+    <th>Invoice</th>
+    <th>Patient</th>
+    <th>Mobile</th>
+    <th>Date</th>
+    <th>Total</th>
+    <th>User</th>
+</tr>
+
+{% for i in invoices %}
+<tr>
+    <td>{{ i.invoice_no }}</td>
+    <td>{{ i.customer }}</td>
+    <td>{{ i.mobile }}</td>
+    <td>{{ i.created_at.strftime('%d-%m-%Y') }}</td>
+    <td>₹{{ i.total }}</td>
+    <td>{{ i.created_by }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h3>Total Sale: ₹{{ total }}</h3>
+
+{% else %}
+<p>No data found.</p>
+{% endif %}
+
+<script>
+function toggleFilters(type) {
+    document.getElementById("monthBox").style.display = "none";
+    document.getElementById("dateBox").style.display = "none";
+    document.getElementById("patientBox").style.display = "none";
+    document.getElementById("mobileBox").style.display = "none";
+
+    if (type === "monthly") document.getElementById("monthBox").style.display = "block";
+    if (type === "custom" || type === "profit") document.getElementById("dateBox").style.display = "block";
+    if (type === "patient") document.getElementById("patientBox").style.display = "block";
+    if (type === "mobile") document.getElementById("mobileBox").style.display = "block";
+}
+</script>
+
+{% endblock %}

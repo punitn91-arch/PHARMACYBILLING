@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Vendor Reports{% endblock %}
+
+{% block body %}
+
+<style>
+.card {
+    background:#fff;
+    padding:20px;
+    border-radius:8px;
+    box-shadow:0 0 8px #cfd8e3;
+    margin-bottom: 16px;
+}
+table { width:100%; border-collapse:collapse; }
+th, td { padding:10px; border-bottom:1px solid #ddd; text-align:center; }
+th { background:#0d6efd; color:#fff; }
+</style>
+
+<div class="card">
+    <h2>Vendor Purchase Report</h2>
+    <table>
+        <tr>
+            <th>Vendor</th>
+            <th>Purchases</th>
+            <th>Total Purchase</th>
+            <th>Outstanding</th>
+        </tr>
+        {% for r in purchase_summary %}
+        <tr>
+            <td>{{ r.vendor.name }}</td>
+            <td>{{ r.count }}</td>
+            <td>Rs {{ "%.2f"|format(r.total) }}</td>
+            <td>Rs {{ "%.2f"|format(r.outstanding) }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+{% endblock %}

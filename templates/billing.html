@@ -1,0 +1,948 @@
+{% extends "base.html" %}
+{% block title %}POS Billing{% endblock %}
+
+{% block body %}
+
+<style>
+:root {
+    --paper: #f2f0ea;
+    --panel: #f9f7f2;
+    --line: #c8b58b;
+    --accent: #b58b2f;
+    --accent-dark: #8a6c21;
+    --green: #2f5f95;
+    --green-dark: #244b76;
+    --orange: #d7932e;
+    --orange-dark: #b77721;
+    --text: #2a2a2a;
+    --shadow: rgba(0, 0, 0, 0.08);
+}
+
+.pos-shell {
+    background: var(--paper);
+    border: 2px solid var(--line);
+    box-shadow: 0 2px 6px var(--shadow);
+    padding: 10px;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+}
+
+.panel {
+    background: var(--panel);
+    border: 2px solid var(--line);
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.panel-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    text-transform: uppercase;
+    color: var(--accent-dark);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 5px;
+    letter-spacing: 0.4px;
+}
+
+.top-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+}
+
+.field {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.field label {
+    font-size: 11px;
+    color: #4b4b4b;
+    text-transform: uppercase;
+}
+
+.field input,
+.field select {
+    width: 100%;
+    padding: 5px 7px;
+    border: 1px solid #bdb6a5;
+    background: #fff;
+    font-size: 12px;
+}
+
+.customer-panel {
+    padding: 8px;
+}
+
+.customer-panel .panel-title {
+    font-size: 12px;
+    padding-bottom: 4px;
+    margin-bottom: 6px;
+}
+
+.customer-panel .top-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px 10px;
+}
+
+.customer-panel .field {
+    grid-template-columns: 110px 1fr;
+    gap: 5px;
+    margin-bottom: 0;
+}
+
+.customer-panel .field label {
+    font-size: 10px;
+}
+
+.customer-panel .field input,
+.customer-panel .field select {
+    padding: 4px 6px;
+    font-size: 11px;
+}
+
+.items-bar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.tab {
+    display: inline-block;
+    padding: 5px 12px;
+    border: 1px solid var(--orange-dark);
+    background: var(--orange);
+    color: #fff;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 11px;
+    border-radius: 4px 4px 0 0;
+}
+
+.tab.alt {
+    background: #7aa55a;
+    border-color: #5f8545;
+}
+
+.search-wrap {
+    position: relative;
+}
+
+.search-wrap input {
+    width: 100%;
+    padding: 5px 7px;
+    border: 1px solid #bdb6a5;
+    background: #fff;
+    font-size: 12px;
+}
+
+.autocomplete-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid #bdb6a5;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12);
+    max-height: 260px;
+    overflow-y: auto;
+    z-index: 1200;
+    display: none;
+}
+
+.autocomplete-item {
+    padding: 6px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.autocomplete-item.hovered {
+    background: #e0f2ff;
+    color: #083b7a;
+}
+
+.autocomplete-item.active {
+    background: #1f7d49;
+    color: #fff;
+}
+
+.clear-btn {
+    background: #2f6d61;
+    color: #fff;
+    border: 1px solid #1e5148;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+th, td {
+    border: 1px solid #c8b58b;
+    padding: 5px;
+    text-align: center;
+}
+
+th {
+    background: #efe2c1;
+    color: #5a4b2a;
+    text-transform: uppercase;
+    font-size: 10px;
+}
+
+tr.item-row {
+    background: #e2c07a;
+    color: #352a17;
+}
+
+#billTable .qty-input {
+    width: 60px;
+    text-align: center;
+    padding: 2px 4px;
+    font-size: 12px;
+    color: #1b1b1b;
+    background: #fff;
+    border: 1px solid #bdb6a5;
+}
+
+
+.batch-select {
+    width: 100%;
+    font-size: 10px;
+    padding: 3px 4px;
+    border: 1px solid #bdb6a5;
+    background: #fff;
+}
+
+.medicine-display {
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 12px;
+}
+
+.add-btn {
+    background: #d7c6a0;
+    border: 1px solid #b9a77e;
+    padding: 5px 9px;
+    cursor: pointer;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 11px;
+    margin-top: 6px;
+}
+
+.del {
+    cursor: pointer;
+    font-weight: 700;
+    color: #fff;
+    background: #b43c2a;
+    border-radius: 3px;
+}
+
+.item.is-empty td {
+    background: #fff;
+}
+
+.item.is-empty td:not(:first-child) {
+    display: none;
+}
+
+.item.is-empty .medicine-display {
+    display: none;
+}
+
+.summary-bar {
+    background: var(--green);
+    border: 2px solid var(--green-dark);
+    padding: 8px;
+    color: #e8f3ef;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+}
+
+.sum-box {
+    background: #1f3f63;
+    border: 1px solid #152e4a;
+    padding: 5px 7px;
+    font-size: 11px;
+}
+
+.sum-box b {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #c9d9ee;
+}
+
+.sum-box span {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.summary-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.btn {
+    padding: 6px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid transparent;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.save { background: #1f7d49; color: #fff; border-color: #145b33; }
+.hold { background: #e2b53b; color: #2b1d05; border-color: #c0952c; }
+.reset { background: #b43c2a; color: #fff; border-color: #8f2e20; }
+
+.payment {
+    margin-top: 8px;
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    align-items: center;
+    gap: 8px;
+    color: #e8f3ef;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.payment select {
+    padding: 5px 7px;
+    border: 1px solid #143430;
+    background: #f2f2f2;
+    color: #1b1b1b;
+    font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+    .top-grid { grid-template-columns: 1fr; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .summary-actions { grid-template-columns: 1fr; }
+}
+</style>
+
+<form method="POST" class="pos-shell" id="billingForm">
+    <div class="panel customer-panel">
+        <h3 class="panel-title">Customer / Patient</h3>
+        <div class="top-grid">
+            <div class="field">
+                <label>Patient Name</label>
+                <input type="text" name="customer" required oninput="this.value=this.value.toUpperCase()">
+            </div>
+            <div class="field">
+                <label>Mobile</label>
+                <input type="text" name="mobile">
+            </div>
+            <div class="field">
+                <label>Gender</label>
+                <select name="gender" required>
+                    <option value="">Select</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                    <option>Other</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Doctor</label>
+                <input type="text" name="doctor">
+            </div>
+            <div class="field">
+                <label>Sale Type</label>
+                <select name="sale_type" id="saleTypeSelect">
+                    <option value="sale">Sale</option>
+                    <option value="return">Return Medicine</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="items-bar">
+            <div class="search-wrap">
+                <input type="text" id="medicineSearch" placeholder="Search medicine" autocomplete="off">
+                <div id="medicineDropdown" class="autocomplete-list" role="listbox" aria-label="Medicine suggestions"></div>
+            </div>
+        </div>
+
+        <table id="billTable">
+            <tr>
+                <th>Medicine</th>
+                <th>Batch</th>
+                <th>Expiry</th>
+                <th>QOH</th>
+                <th>Qty</th>
+                <th>MRP</th>
+                <th>Disc %</th>
+                <th>Net</th>
+                <th></th>
+            </tr>
+            <tr class="item item-row is-empty">
+                <td>
+                    <input type="hidden" name="medicine_name" value="">
+                    <input type="text" class="medicine-display" placeholder="" readonly>
+                </td>
+                <td class="batch">
+                    <select class="batch-select" name="batch_override[]" onchange="onBatchChange(this)">
+                        <option value="">AUTO (FIFO)</option>
+                    </select>
+                </td>
+                <td class="exp">-</td>
+                <td class="qoh">0</td>
+                <td>
+                    <input type="number" name="qty[]" value="1" min="1" class="qty-input" oninput="updateRow(this)">
+                </td>
+                <td class="price">0</td>
+                <td class="disc">0</td>
+                <td class="net">0</td>
+                <td class="del" onclick="removeRow(this)">X</td>
+            </tr>
+        </table>
+
+        <div style="margin-top:8px;"></div>
+    </div>
+
+    <div class="summary-bar">
+        <div class="summary-grid">
+            <div class="sum-box"><b>Subtotal</b><span>Rs <span id="subtotal">0</span></span></div>
+            <div class="sum-box"><b>Discount</b><span>Rs <span id="discount">0</span></span></div>
+            <div class="sum-box"><b>CGST 2.5%</b><span>Rs <span id="cgst">0</span></span></div>
+            <div class="sum-box"><b>SGST 2.5%</b><span>Rs <span id="sgst">0</span></span></div>
+            <div class="sum-box"><b>Net Total</b><span>Rs <span id="grand">0</span></span></div>
+            <div class="sum-box"><b>Rounded Amt</b><span>Rs <span id="rounded">0.00</span></span></div>
+        </div>
+
+        <div class="payment">
+            <label>Payment Mode</label>
+            <select name="payment_mode" required>
+                <option value="CASH">Cash</option>
+                <option value="ONLINE">Online / UPI</option>
+            </select>
+        </div>
+
+        <div class="summary-actions">
+            <button class="btn save">Save Bill</button>
+            <button class="btn hold" formaction="/billing/hold" formmethod="POST">Hold</button>
+            <button class="btn reset" type="reset">Reset</button>
+        </div>
+    </div>
+</form>
+
+<script>
+    
+function removeRow(el) {
+    let row = el.closest("tr");
+    let table = document.getElementById("billTable");
+
+    // Kam se kam 1 item rehna chahiye
+    if (table.rows.length > 2) {
+        row.remove();
+        calculateTotal();
+    } else {
+        alert("At least one item is required");
+    }
+}
+
+function addRow() {
+    let row = document.querySelector(".item").cloneNode(true);
+
+    // reset qty
+    row.querySelector(".qty-input").value = 1;
+    let medDisplay = row.querySelector(".medicine-display");
+    if (medDisplay) medDisplay.value = "";
+    let medHidden = row.querySelector("input[type='hidden'][name='medicine_name']");
+    if (medHidden) medHidden.value = "";
+    let batchSelect = row.querySelector(".batch-select");
+    if (batchSelect) {
+        batchSelect.innerHTML = '<option value="">AUTO (FIFO)</option>';
+        batchSelect.value = "";
+    }
+    row.dataset.price = "";
+    row.dataset.discount = "";
+    row.dataset.batch = "";
+    row.dataset.expiry = "";
+    row.dataset.stock = "";
+    row.dataset.medicineName = "";
+    row.dataset.totalStock = "";
+    row.dataset.netAmount = "";
+    row.dataset.discountAmount = "";
+    row.classList.add("is-empty");
+
+    // reset display values
+    row.querySelector(".price").innerText = "0";
+    row.querySelector(".disc").innerText = "0";
+    row.querySelector(".net").innerText = "0";
+    let qohCell = row.querySelector(".qoh");
+    if (qohCell) qohCell.innerText = "0";
+
+    document.getElementById("billTable").appendChild(row);
+    bindRowFocus(row);
+
+    // IMPORTANT: force recalculation
+    updateRow(row.querySelector(".qty-input"));
+    return row;
+}
+
+
+function updateRow(el) {
+    let row = el.closest("tr");
+    let qtyInput = row.querySelector(".qty-input");
+    let qty = parseInt(qtyInput.value || 1);
+    if (!qty || qty < 1) qty = 1;
+
+    let batchSelect = row.querySelector(".batch-select");
+    let name = row.dataset.medicineName || "";
+    let autoMode = !batchSelect || !batchSelect.value;
+    let batches = name ? getAvailableBatches(name) : [];
+
+    let totalStock = batches.reduce((s, b) => s + b.stock, 0);
+    row.dataset.totalStock = totalStock;
+
+    let maxStock = autoMode ? totalStock : parseInt(row.dataset.stock || 0);
+    qtyInput.max = maxStock > 0 ? maxStock : 1;
+    if (qty > qtyInput.max) {
+        qty = qtyInput.max;
+    }
+    qtyInput.value = qty;
+    let qohCell = row.querySelector(".qoh");
+    if (qohCell) {
+        let qohVal = autoMode ? totalStock : parseInt(row.dataset.stock || 0);
+        qohCell.innerText = qohVal;
+    }
+
+    let amountTotal = 0;
+    let discountTotal = 0;
+    let net = 0;
+
+    if (autoMode) {
+        let remaining = qty;
+        for (let b of batches) {
+            let take = Math.min(b.stock, remaining);
+            if (take <= 0) continue;
+            let lineAmt = take * b.mrp;
+            let lineDisc = lineAmt * (b.discount / 100);
+            amountTotal += lineAmt;
+            discountTotal += lineDisc;
+            remaining -= take;
+            if (remaining === 0) break;
+        }
+        net = amountTotal - discountTotal;
+        let avgPrice = qty ? amountTotal / qty : 0;
+        let avgDisc = amountTotal ? (discountTotal / amountTotal) * 100 : 0;
+
+        row.dataset.price = avgPrice;
+        row.dataset.discount = avgDisc;
+        row.dataset.stock = totalStock;
+        row.dataset.expiry = batches.length ? batches[0].expiry : "-";
+
+        row.querySelector(".exp").innerText = batches.length ? batches[0].expiry : "-";
+        row.querySelector(".price").innerText = avgPrice.toFixed(2);
+        row.querySelector(".disc").innerText = avgDisc.toFixed(2);
+    } else {
+        let price = parseFloat(row.dataset.price || 0);
+        let discp = parseFloat(row.dataset.discount || 0);
+        amountTotal = qty * price;
+        discountTotal = amountTotal * discp / 100;
+        net = amountTotal - discountTotal;
+
+        row.querySelector(".exp").innerText = row.dataset.expiry || "-";
+        row.querySelector(".price").innerText = price.toFixed(2);
+        row.querySelector(".disc").innerText = discp.toFixed(2);
+    }
+
+    row.dataset.netAmount = net;
+    row.dataset.discountAmount = discountTotal;
+    row.querySelector(".net").innerText = net.toFixed(2);
+
+    calculateTotal();
+}
+
+function calculateTotal() {
+    let subtotal = 0;
+    let discount = 0;
+
+    document.querySelectorAll(".item").forEach(r => {
+        let net = parseFloat(r.dataset.netAmount || 0);
+        let discAmt = parseFloat(r.dataset.discountAmount || 0);
+        subtotal += net;
+        discount += discAmt;
+    });
+
+    let cgst = subtotal * 0.025;
+    let sgst = subtotal * 0.025;
+
+    document.getElementById("subtotal").innerText = subtotal.toFixed(2);
+    document.getElementById("discount").innerText = discount.toFixed(2);
+    document.getElementById("cgst").innerText = cgst.toFixed(2);
+    document.getElementById("sgst").innerText = sgst.toFixed(2);
+    document.getElementById("grand").innerText = subtotal.toFixed(2);
+    let rounded = Math.round(subtotal);
+    let roundedEl = document.getElementById("rounded");
+    if (roundedEl) roundedEl.innerText = rounded.toFixed(2);
+}
+
+function resetBillUI() {
+    let table = document.getElementById("billTable");
+    let rows = table.querySelectorAll(".item");
+
+    // keep only first row
+    rows.forEach((r, idx) => {
+        if (idx > 0) r.remove();
+    });
+
+    let first = table.querySelector(".item");
+    if (first) {
+        let medHidden = first.querySelector("input[type='hidden'][name='medicine_name']");
+        if (medHidden) medHidden.value = "";
+        let medDisplay = first.querySelector(".medicine-display");
+        if (medDisplay) medDisplay.value = "";
+        let batchSelect = first.querySelector(".batch-select");
+        if (batchSelect) {
+            batchSelect.innerHTML = '<option value="">AUTO (FIFO)</option>';
+            batchSelect.value = "";
+        }
+        first.dataset.price = "";
+        first.dataset.discount = "";
+        first.dataset.batch = "";
+        first.dataset.expiry = "";
+        first.dataset.stock = "";
+        first.dataset.medicineName = "";
+        first.dataset.totalStock = "";
+        first.dataset.netAmount = "";
+        first.dataset.discountAmount = "";
+        let qtyInput = first.querySelector(".qty-input");
+        if (qtyInput) qtyInput.value = 1;
+        first.querySelector(".exp").innerText = "-";
+        let qohCell = first.querySelector(".qoh");
+        if (qohCell) qohCell.innerText = "0";
+        first.querySelector(".price").innerText = "0";
+        let discInput = first.querySelector(".disc-input");
+        if (discInput) discInput.value = "0";
+        first.querySelector(".net").innerText = "0";
+    }
+
+    document.getElementById("subtotal").innerText = "0";
+    document.getElementById("discount").innerText = "0";
+    document.getElementById("cgst").innerText = "0";
+    document.getElementById("sgst").innerText = "0";
+    document.getElementById("grand").innerText = "0";
+    let roundedEl = document.getElementById("rounded");
+    if (roundedEl) roundedEl.innerText = "0.00";
+}
+
+let billingForm = document.getElementById("billingForm");
+if (billingForm) {
+    billingForm.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        let tag = (e.target.tagName || "").toLowerCase();
+        let type = (e.target.type || "").toLowerCase();
+        let allow = tag === "button" || (tag === "input" && (type === "submit" || type === "button"));
+        if (!allow) {
+            e.preventDefault();
+        }
+    });
+    billingForm.addEventListener("reset", function () {
+        // wait for native reset to apply, then clean UI
+        setTimeout(resetBillUI, 0);
+    });
+}
+
+let saleTypeSelect = document.getElementById("saleTypeSelect");
+if (saleTypeSelect) {
+    saleTypeSelect.addEventListener("change", function () {
+        if (this.value === "return") {
+            window.location.href = "/return-medicine";
+        }
+    });
+}
+
+let medicineSearch = document.getElementById("medicineSearch");
+let medicineDropdown = document.getElementById("medicineDropdown");
+let activeRow = document.querySelector(".item");
+let medicineData = [
+    {% for m in medicines %}
+    {
+        name: "{{ m.name|trim|upper }}",
+        batch: "{{ m.batch }}",
+        expiry: "{{ m.expiry }}",
+        stock: {{ m.qty or 0 }},
+        mrp: {{ m.mrp or 0 }},
+        discount: {{ m.discount_percent or 0 }},
+        created_at: "{{ m.created_at.strftime('%Y-%m-%d') if m.created_at else '' }}"
+    },
+    {% endfor %}
+];
+
+let medicineMap = {};
+medicineData.forEach(m => {
+    let key = normalizeName(m.name);
+    if (!medicineMap[key]) medicineMap[key] = [];
+    medicineMap[key].push(m);
+});
+let medicineNameList = Object.keys(medicineMap).sort();
+
+function normalizeName(val) {
+    return (val || "").trim().toUpperCase();
+}
+
+function parseDate(val) {
+    if (!val) return null;
+    let parts = val.split("-");
+    if (parts.length !== 3) return null;
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function isExpired(expiry) {
+    let d = parseDate(expiry);
+    if (!d) return false;
+    let today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return d < today;
+}
+
+function getAllBatches(name) {
+    let list = medicineMap[normalizeName(name)] || [];
+    return list.slice().sort((a, b) => {
+        let aExp = parseDate(a.expiry) || new Date(9999, 11, 31);
+        let bExp = parseDate(b.expiry) || new Date(9999, 11, 31);
+        if (aExp - bExp !== 0) return aExp - bExp;
+        let aPur = parseDate(a.created_at) || new Date(9999, 11, 31);
+        let bPur = parseDate(b.created_at) || new Date(9999, 11, 31);
+        return aPur - bPur;
+    });
+}
+
+function getAvailableBatches(name) {
+    return getAllBatches(name).filter(b => b.stock > 0 && !isExpired(b.expiry));
+}
+
+function refreshBatchOptions(row, name) {
+    let select = row.querySelector(".batch-select");
+    if (!select) return;
+    select.innerHTML = '<option value="">AUTO (FIFO)</option>';
+    let batches = getAllBatches(name);
+    batches.forEach(b => {
+        if (b.stock <= 0) return;
+        let opt = document.createElement("option");
+        opt.value = b.batch;
+        let expLabel = b.expiry ? b.expiry : "-";
+        let label = `${b.batch} | Exp ${expLabel} | Stock ${b.stock} | MRP ${b.mrp}`;
+        if (isExpired(b.expiry)) {
+            opt.disabled = true;
+            label += " (EXPIRED)";
+        }
+        opt.textContent = label;
+        select.appendChild(opt);
+    });
+}
+
+function applyAutoBatch(row) {
+    let name = row.dataset.medicineName || "";
+    let batches = getAvailableBatches(name);
+    row.dataset.totalStock = batches.reduce((s, b) => s + b.stock, 0);
+    if (batches.length) {
+        row.dataset.price = batches[0].mrp;
+        row.dataset.discount = batches[0].discount;
+        row.dataset.stock = batches[0].stock;
+        row.dataset.expiry = batches[0].expiry;
+    } else {
+        row.dataset.price = 0;
+        row.dataset.discount = 0;
+        row.dataset.stock = 0;
+        row.dataset.expiry = "-";
+    }
+    updateRow(row.querySelector(".qty-input"));
+}
+
+function onBatchChange(sel) {
+    let row = sel.closest("tr");
+    if (!row) return;
+    let name = row.dataset.medicineName || "";
+    if (!name) return;
+    if (!sel.value) {
+        applyAutoBatch(row);
+        return;
+    }
+    let batches = getAllBatches(name);
+    let batch = batches.find(b => b.batch === sel.value);
+    if (!batch) return;
+    row.dataset.price = batch.mrp;
+    row.dataset.discount = batch.discount;
+    row.dataset.stock = batch.stock;
+    row.dataset.expiry = batch.expiry;
+    updateRow(row.querySelector(".qty-input"));
+}
+
+document.querySelectorAll("#billTable .item").forEach(r => {
+    r.addEventListener("click", function () {
+        activeRow = this;
+    });
+});
+
+function bindRowFocus(row) {
+    if (!row) return;
+    row.addEventListener("click", function () {
+        activeRow = this;
+    });
+}
+
+function selectMedicine(name) {
+    let normalized = normalizeName(name);
+    if (!normalized) return;
+    if (!medicineMap[normalized] || !medicineMap[normalized].length) return;
+    if (!activeRow) {
+        activeRow = document.querySelector("#billTable .item");
+    }
+
+    let currentHidden = activeRow.querySelector("input[type='hidden'][name='medicine_name']");
+    if (currentHidden && currentHidden.value) {
+        activeRow = addRow();
+    }
+
+    let hidden = activeRow.querySelector("input[type='hidden'][name='medicine_name']");
+    let display = activeRow.querySelector(".medicine-display");
+    if (hidden) hidden.value = normalized;
+    if (display) display.value = normalized;
+
+    activeRow.dataset.medicineName = normalized;
+    activeRow.classList.remove("is-empty");
+
+    refreshBatchOptions(activeRow, normalized);
+    applyAutoBatch(activeRow);
+}
+
+let dropdownOpen = false;
+let activeIndex = -1;
+let currentItems = [];
+
+function closeDropdown() {
+    if (!medicineDropdown) return;
+    medicineDropdown.style.display = "none";
+    medicineDropdown.innerHTML = "";
+    dropdownOpen = false;
+    activeIndex = -1;
+    currentItems = [];
+}
+
+function setActive(idx, mode) {
+    if (!medicineDropdown) return;
+    let items = medicineDropdown.querySelectorAll(".autocomplete-item");
+    if (!items.length) {
+        activeIndex = -1;
+        return;
+    }
+    if (idx < 0) idx = items.length - 1;
+    if (idx >= items.length) idx = 0;
+
+    items.forEach(el => {
+        el.classList.remove("active");
+        el.classList.remove("hovered");
+    });
+
+    let cls = mode === "hover" ? "hovered" : "active";
+    items[idx].classList.add(cls);
+    items[idx].scrollIntoView({ block: "nearest" });
+    activeIndex = idx;
+}
+
+function renderDropdown(list) {
+    if (!medicineDropdown) return;
+    medicineDropdown.innerHTML = "";
+    currentItems = list;
+    if (!list.length) {
+        closeDropdown();
+        return;
+    }
+    list.forEach((name, idx) => {
+        let item = document.createElement("div");
+        item.className = "autocomplete-item";
+        item.textContent = name;
+        item.setAttribute("role", "option");
+        item.addEventListener("mouseenter", function () {
+            setActive(idx, "hover");
+        });
+        item.addEventListener("mousedown", function (e) {
+            e.preventDefault();
+        });
+        item.addEventListener("click", function () {
+            selectMedicine(name);
+            closeDropdown();
+            if (medicineSearch) medicineSearch.value = "";
+        });
+        medicineDropdown.appendChild(item);
+    });
+    medicineDropdown.style.display = "block";
+    dropdownOpen = true;
+    setActive(0, "keyboard");
+}
+
+function filterMedicines(query) {
+    let q = normalizeName(query);
+    if (!q) return [];
+    let matches = medicineNameList.filter(n => n.includes(q));
+    return matches.slice(0, 25);
+}
+
+if (medicineSearch) {
+    medicineSearch.addEventListener("input", function () {
+        let list = filterMedicines(this.value);
+        renderDropdown(list);
+    });
+
+    medicineSearch.addEventListener("keydown", function (e) {
+        if (!dropdownOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            let list = filterMedicines(this.value);
+            renderDropdown(list);
+        }
+        if (!dropdownOpen) return;
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActive(activeIndex + 1, "keyboard");
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive(activeIndex - 1, "keyboard");
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (activeIndex >= 0 && currentItems[activeIndex]) {
+                selectMedicine(currentItems[activeIndex]);
+                this.value = "";
+                closeDropdown();
+            }
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            closeDropdown();
+        }
+    });
+
+    medicineSearch.addEventListener("blur", function () {
+        setTimeout(closeDropdown, 120);
+    });
+}
+</script>
+
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Add User{% endblock %}
+
+{% block body %}
+
+<div class="card">
+    <h2>➕ Add New User</h2>
+
+    <form method="POST">
+        <input type="text" name="username" placeholder="Username" required><br>
+        <input type="password" name="password" placeholder="Password" required><br>
+
+        <select name="role">
+            <option value="staff">Staff</option>
+            <option value="admin">Admin</option>
+        </select><br>
+
+        <button class="btn">Create User</button>
+    </form>
+</div>
+
+{% endblock %}

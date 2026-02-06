@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Edit Purchase Item{% endblock %}
+
+{% block body %}
+<style>
+.card {
+    background: white;
+    padding: 18px;
+    border-radius: 6px;
+    box-shadow: 0 0 6px #cfd8e3;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+}
+
+label {
+    font-weight: 600;
+    font-size: 13px;
+    display: block;
+    margin-bottom: 6px;
+}
+
+input, select, textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.meta {
+    font-size: 13px;
+    margin-bottom: 12px;
+    color: #084298;
+    font-weight: 600;
+}
+
+.note {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #6c757d;
+}
+
+.actions {
+    margin-top: 15px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.full {
+    grid-column: 1 / -1;
+}
+</style>
+
+<div class="card">
+    <h2>Edit Purchase Item</h2>
+    <div class="meta">
+        Vendor: <b>{{ vendor.name if vendor else '-' }}</b> |
+        Bill No: <b>{{ purchase.invoice_no if purchase and purchase.invoice_no else (purchase.purchase_no if purchase else '-') }}</b> |
+        Date: <b>{{ purchase.purchase_date.strftime('%d-%m-%Y') if purchase and purchase.purchase_date else '-' }}</b>
+    </div>
+
+    <form method="POST" id="editPurchaseForm">
+        <div class="grid">
+            <div>
+                <label>Medicine Name</label>
+                <input type="text" name="medicine_name" required value="{{ item.medicine_name }}">
+            </div>
+            <div>
+                <label>Composition</label>
+                <input type="text" name="composition" value="{{ item.composition or '' }}">
+            </div>
+            <div>
+                <label>Company</label>
+                <input type="text" name="company" value="{{ item.company or '' }}">
+            </div>
+            <div>
+                <label>Distributor</label>
+                <input type="text" name="distributor_name" value="{{ item.distributor_name or '' }}">
+            </div>
+            <div>
+                <label>Pack</label>
+                <select name="pack_type">
+                    <option {% if item.pack_type == 'Strip' %}selected{% endif %}>Strip</option>
+                    <option {% if item.pack_type == 'Box' %}selected{% endif %}>Box</option>
+                    <option {% if item.pack_type == 'Bottle' %}selected{% endif %}>Bottle</option>
+                    <option {% if item.pack_type == 'Unit' %}selected{% endif %}>Unit</option>
+                </select>
+            </div>
+            <div>
+                <label>Batch</label>
+                <input type="text" name="batch" required value="{{ item.batch }}">
+            </div>
+            <div>
+                <label>Expiry (MM/YYYY)</label>
+                <input type="text" name="expiry" required placeholder="MM/YYYY" value="{{ item.expiry }}">
+            </div>
+            <div>
+                <label>Qty</label>
+                <input type="number" name="qty" min="0" value="{{ item.qty or 0 }}">
+            </div>
+            <div>
+                <label>Free</label>
+                <input type="number" name="free_qty" min="0" value="{{ item.free_qty or 0 }}">
+            </div>
+            <div>
+                <label>Purchase Rate</label>
+                <input type="number" step="0.01" name="purchase_rate" value="{{ item.purchase_rate or 0 }}">
+            </div>
+            <div>
+                <label>MRP</label>
+                <input type="number" step="0.01" name="mrp" value="{{ item.mrp or 0 }}">
+            </div>
+            <div>
+                <label>GST %</label>
+                <input type="number" step="0.01" name="gst_percent" value="{{ item.gst_percent or 0 }}">
+            </div>
+            <div>
+                <label>Disc %</label>
+                <input type="number" step="0.01" name="discount_percent" value="{{ item.discount_percent or 0 }}">
+            </div>
+            <div>
+                <label>Total</label>
+                <input type="number" step="0.01" name="total_value" readonly value="{{ item.total_value or 0 }}">
+            </div>
+        </div>
+
+        <div class="note">
+            Sold Qty: {{ sold_qty }} | Remaining Qty: {{ item.remaining_qty }}
+        </div>
+
+        <div class="actions">
+            <button class="btn" type="submit">Update</button>
+            <a href="/vendor/edit/{{ item.vendor_id }}">Back</a>
+        </div>
+    </form>
+</div>
+
+<script>
+function calculateTotal() {
+    let form = document.getElementById("editPurchaseForm");
+    if (!form) return;
+    let qty = parseFloat(form.querySelector("input[name='qty']").value || 0);
+    let rate = parseFloat(form.querySelector("input[name='purchase_rate']").value || 0);
+    let gst = parseFloat(form.querySelector("input[name='gst_percent']").value || 0);
+    let disc = parseFloat(form.querySelector("input[name='discount_percent']").value || 0);
+    let base = qty * rate;
+    let discAmt = base * disc / 100;
+    let taxable = base - discAmt;
+    let gstAmt = taxable * gst / 100;
+    let total = taxable + gstAmt;
+    form.querySelector("input[name='total_value']").value = total.toFixed(2);
+}
+
+document.addEventListener("input", function (e) {
+    if (e.target.closest("#editPurchaseForm")) {
+        calculateTotal();
+    }
+});
+
+window.addEventListener("load", calculateTotal);
+</script>
+
+{% endblock %}

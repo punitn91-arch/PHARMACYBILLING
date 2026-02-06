@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Vendor Master{% endblock %}
+
+{% block body %}
+
+<style>
+.card {
+    background: white;
+    padding: 15px;
+    border-radius: 6px;
+    box-shadow: 0 0 6px #cfd8e3;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background: #0d6efd;
+    color: white;
+    padding: 10px;
+}
+
+td {
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+    text-align: center;
+}
+
+.add-btn {
+    background: #198754;
+    color: white;
+    padding: 8px 14px;
+    text-decoration: none;
+    border-radius: 4px;
+}
+
+.badge {
+    padding: 4px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.badge-active { background: #d1e7dd; color: #0f5132; }
+.badge-inactive { background: #f8d7da; color: #842029; }
+</style>
+
+<div class="card">
+    <h2>Vendor Master</h2>
+
+    <div style="text-align:right; margin-bottom:10px;">
+        <a href="/vendor/add" class="add-btn">Add Vendor</a>
+        <a href="/vendor/reports" class="add-btn" style="margin-left:8px;">Purchase Reports</a>
+        <a href="/vendor/medicine-history" class="add-btn" style="margin-left:8px;">Medicine History</a>
+    </div>
+
+    <table>
+        <tr>
+            <th>#</th>
+            <th>Name</th>
+            <th>Mobile</th>
+            <th>GST</th>
+            <th>Type</th>
+            <th>Last Purchase</th>
+            <th>Outstanding</th>
+            <th>Payment Status</th>
+            <th>Active</th>
+            <th>Attachment</th>
+            <th>Action</th>
+        </tr>
+
+        {% for v in vendors %}
+        <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ v.name }}</td>
+            <td>{{ v.mobile }}</td>
+            <td>{{ v.gst_no }}</td>
+            <td>{{ v.vendor_type }}</td>
+            <td>{{ v.last_purchase_date if v.last_purchase_date else '-' }}</td>
+            <td>{{ v.outstanding_balance }}</td>
+            <td>{{ v.payment_status }}</td>
+            <td>
+                {% if v.is_active %}
+                    <span class="badge badge-active">Active</span>
+                {% else %}
+                    <span class="badge badge-inactive">Inactive</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if v.attachment_ref %}
+                    <a href="/static/uploads/vendors/{{ v.attachment_ref }}" target="_blank">View</a>
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>
+                <a href="/vendor/edit/{{ v.id }}" title="Edit">Edit</a> |
+                <a href="/vendor/delete/{{ v.id }}" onclick="return confirm('Delete this vendor?')" title="Delete">Delete</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+{% endblock %}
