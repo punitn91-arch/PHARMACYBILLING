@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Add Appointment{% endblock %}
+
+{% block body %}
+<style>
+.form-card {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 0 8px #dce4ef;
+    max-width: 640px;
+    padding: 18px;
+}
+
+.form-card h2 {
+    margin-top: 0;
+}
+
+.grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: 1fr 1fr;
+}
+
+.grid .full {
+    grid-column: 1 / -1;
+}
+
+label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+input,
+select,
+textarea {
+    width: 100%;
+    border: 1px solid #ccd7e3;
+    border-radius: 6px;
+    padding: 9px 10px;
+}
+
+textarea {
+    min-height: 90px;
+    resize: vertical;
+}
+
+.actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.btn {
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+    padding: 10px 14px;
+    text-decoration: none;
+}
+
+.btn-primary {
+    background: #0d6efd;
+}
+
+.btn-secondary {
+    background: #6c757d;
+}
+
+@media (max-width: 700px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="form-card">
+    <h2>Add Doctor Appointment</h2>
+    <form method="POST">
+        <div class="grid">
+            <div>
+                <label>Patient Name</label>
+                <input type="text" name="patient_name" value="{{ form_data.patient_name }}" required>
+            </div>
+
+            <div>
+                <label>Mobile</label>
+                <input type="text" name="mobile" value="{{ form_data.mobile }}" maxlength="15">
+            </div>
+
+            <div class="full">
+                <label>Doctor Name</label>
+                <input type="text" name="doctor_name" value="{{ form_data.doctor_name }}" list="doctor-list" required>
+                <datalist id="doctor-list">
+                    {% for d in doctor_names %}
+                    <option value="{{ d }}"></option>
+                    {% endfor %}
+                </datalist>
+            </div>
+
+            <div>
+                <label>Appointment Date</label>
+                <input type="date" name="appointment_date" value="{{ form_data.appointment_date }}" required>
+            </div>
+
+            <div>
+                <label>Appointment Time</label>
+                <input type="time" name="appointment_time" value="{{ form_data.appointment_time }}" required>
+            </div>
+
+            <div>
+                <label>Payment Mode</label>
+                <select name="payment_mode" required>
+                    {% for mode in payment_modes %}
+                    <option value="{{ mode }}" {% if form_data.payment_mode == mode %}selected{% endif %}>{{ mode }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label>Doctor Discount (Rs)</label>
+                <input type="number" name="doctor_discount" value="{{ form_data.doctor_discount }}" min="0" step="0.01">
+            </div>
+
+            <div>
+                <label>Consultation Fee (Rs)</label>
+                <input type="number" name="consultation_fee" value="{{ form_data.consultation_fee }}" min="0" step="0.01">
+            </div>
+
+            <div class="full">
+                <label>Reason</label>
+                <input type="text" name="reason" value="{{ form_data.reason }}" placeholder="Follow-up, fever, BP, etc.">
+            </div>
+
+            <div class="full">
+                <label>Notes</label>
+                <textarea name="notes" placeholder="Additional notes">{{ form_data.notes }}</textarea>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Save Appointment</button>
+            <a href="{{ url_for('appointments') }}" class="btn btn-secondary">Back to List</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

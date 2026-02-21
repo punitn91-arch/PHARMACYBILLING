@@ -348,35 +348,36 @@ tr.item-row {
 </style>
 
 <form method="POST" class="pos-shell" id="billingForm">
+    <input type="hidden" name="hold_bill_id" id="holdBillId" value="{{ restored_hold_bill.hold_bill_id if restored_hold_bill else '' }}">
     <div class="panel customer-panel">
         <h3 class="panel-title">Customer / Patient</h3>
         <div class="top-grid">
             <div class="field">
                 <label>Patient Name</label>
-                <input type="text" name="customer" required oninput="this.value=this.value.toUpperCase()">
+                <input type="text" name="customer" required oninput="this.value=this.value.toUpperCase()" value="{{ restored_hold_bill.header.customer if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Mobile</label>
-                <input type="text" name="mobile">
+                <input type="text" name="mobile" value="{{ restored_hold_bill.header.mobile if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Gender</label>
                 <select name="gender" required>
                     <option value="">Select</option>
-                    <option>Male</option>
-                    <option>Female</option>
-                    <option>Other</option>
+                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Male" %}selected{% endif %}>Male</option>
+                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Female" %}selected{% endif %}>Female</option>
+                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Other" %}selected{% endif %}>Other</option>
                 </select>
             </div>
             <div class="field">
                 <label>Doctor</label>
-                <input type="text" name="doctor">
+                <input type="text" name="doctor" value="{{ restored_hold_bill.header.doctor if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Sale Type</label>
                 <select name="sale_type" id="saleTypeSelect">
-                    <option value="sale">Sale</option>
-                    <option value="return">Return Medicine</option>
+                    <option value="sale" {% if not restored_hold_bill or restored_hold_bill.header.sale_type == "sale" %}selected{% endif %}>Sale</option>
+                    <option value="return" {% if restored_hold_bill and restored_hold_bill.header.sale_type == "return" %}selected{% endif %}>Return Medicine</option>
                 </select>
             </div>
         </div>
@@ -405,6 +406,11 @@ tr.item-row {
             <tr class="item item-row is-empty">
                 <td>
                     <input type="hidden" name="medicine_name" value="">
+                    <input type="hidden" class="line-expiry" name="line_expiry[]" value="">
+                    <input type="hidden" class="line-qoh" name="line_qoh[]" value="0">
+                    <input type="hidden" class="line-mrp" name="line_mrp[]" value="0">
+                    <input type="hidden" class="line-discount" name="line_discount_percent[]" value="0">
+                    <input type="hidden" class="line-net" name="line_net[]" value="0">
                     <input type="text" class="medicine-display" placeholder="" readonly>
                 </td>
                 <td class="batch">
@@ -436,12 +442,18 @@ tr.item-row {
             <div class="sum-box"><b>Net Total</b><span>Rs <span id="grand">0</span></span></div>
             <div class="sum-box"><b>Rounded Amt</b><span>Rs <span id="rounded">0.00</span></span></div>
         </div>
+        <input type="hidden" name="subtotal" id="subtotalInput" value="0">
+        <input type="hidden" name="discount" id="discountInput" value="0">
+        <input type="hidden" name="cgst" id="cgstInput" value="0">
+        <input type="hidden" name="sgst" id="sgstInput" value="0">
+        <input type="hidden" name="net_total" id="netTotalInput" value="0">
+        <input type="hidden" name="rounded_amount" id="roundedInput" value="0">
 
         <div class="payment">
             <label>Payment Mode</label>
             <select name="payment_mode" required>
-                <option value="CASH">Cash</option>
-                <option value="ONLINE">Online / UPI</option>
+                <option value="CASH" {% if not restored_hold_bill or restored_hold_bill.header.payment_mode == "CASH" %}selected{% endif %}>Cash</option>
+                <option value="ONLINE" {% if restored_hold_bill and restored_hold_bill.header.payment_mode == "ONLINE" %}selected{% endif %}>Online / UPI</option>
             </select>
         </div>
 
@@ -454,7 +466,51 @@ tr.item-row {
 </form>
 
 <script>
-    
+let restoredHoldBill = {{ restored_hold_bill|tojson if restored_hold_bill else 'null' }};
+let restoreModeActive = !!(restoredHoldBill && restoredHoldBill.hold_bill_id);
+
+function toNum(val, fallback = 0) {
+    let n = parseFloat(val);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function syncRowHidden(row) {
+    if (!row) return;
+    let expiryInput = row.querySelector(".line-expiry");
+    let qohInput = row.querySelector(".line-qoh");
+    let mrpInput = row.querySelector(".line-mrp");
+    let discountInput = row.querySelector(".line-discount");
+    let netInput = row.querySelector(".line-net");
+
+    let exp = (row.dataset.expiry || row.querySelector(".exp")?.innerText || "-").trim();
+    let qoh = toNum(row.querySelector(".qoh")?.innerText || row.dataset.stock || 0, 0);
+    let mrp = toNum(row.dataset.price || row.querySelector(".price")?.innerText || 0, 0);
+    let disc = toNum(row.dataset.discount || row.querySelector(".disc")?.innerText || 0, 0);
+    let net = toNum(row.dataset.netAmount || row.querySelector(".net")?.innerText || 0, 0);
+
+    if (expiryInput) expiryInput.value = exp;
+    if (qohInput) qohInput.value = qoh.toFixed(2);
+    if (mrpInput) mrpInput.value = mrp.toFixed(2);
+    if (discountInput) discountInput.value = disc.toFixed(2);
+    if (netInput) netInput.value = net.toFixed(2);
+}
+
+function syncSummaryHidden(subtotal, discount, cgst, sgst, netTotal, rounded) {
+    let subtotalInput = document.getElementById("subtotalInput");
+    let discountInput = document.getElementById("discountInput");
+    let cgstInput = document.getElementById("cgstInput");
+    let sgstInput = document.getElementById("sgstInput");
+    let netTotalInput = document.getElementById("netTotalInput");
+    let roundedInput = document.getElementById("roundedInput");
+
+    if (subtotalInput) subtotalInput.value = subtotal.toFixed(2);
+    if (discountInput) discountInput.value = discount.toFixed(2);
+    if (cgstInput) cgstInput.value = cgst.toFixed(2);
+    if (sgstInput) sgstInput.value = sgst.toFixed(2);
+    if (netTotalInput) netTotalInput.value = netTotal.toFixed(2);
+    if (roundedInput) roundedInput.value = rounded.toFixed(2);
+}
+
 function removeRow(el) {
     let row = el.closest("tr");
     let table = document.getElementById("billTable");
@@ -491,6 +547,7 @@ function addRow() {
     row.dataset.totalStock = "";
     row.dataset.netAmount = "";
     row.dataset.discountAmount = "";
+    row.dataset.restoredSnapshot = "";
     row.classList.add("is-empty");
 
     // reset display values
@@ -499,6 +556,7 @@ function addRow() {
     row.querySelector(".net").innerText = "0";
     let qohCell = row.querySelector(".qoh");
     if (qohCell) qohCell.innerText = "0";
+    syncRowHidden(row);
 
     document.getElementById("billTable").appendChild(row);
     bindRowFocus(row);
@@ -511,6 +569,7 @@ function addRow() {
 
 function updateRow(el) {
     let row = el.closest("tr");
+    row.dataset.restoredSnapshot = "";
     let qtyInput = row.querySelector(".qty-input");
     let qty = parseInt(qtyInput.value || 1);
     if (!qty || qty < 1) qty = 1;
@@ -523,7 +582,7 @@ function updateRow(el) {
     let totalStock = batches.reduce((s, b) => s + b.stock, 0);
     row.dataset.totalStock = totalStock;
 
-    let maxStock = autoMode ? totalStock : parseInt(row.dataset.stock || 0);
+    let maxStock = autoMode ? totalStock : toNum(row.dataset.stock || 0, 0);
     qtyInput.max = maxStock > 0 ? maxStock : 1;
     if (qty > qtyInput.max) {
         qty = qtyInput.max;
@@ -531,7 +590,7 @@ function updateRow(el) {
     qtyInput.value = qty;
     let qohCell = row.querySelector(".qoh");
     if (qohCell) {
-        let qohVal = autoMode ? totalStock : parseInt(row.dataset.stock || 0);
+        let qohVal = autoMode ? totalStock : toNum(row.dataset.stock || 0, 0);
         qohCell.innerText = qohVal;
     }
 
@@ -578,6 +637,7 @@ function updateRow(el) {
     row.dataset.netAmount = net;
     row.dataset.discountAmount = discountTotal;
     row.querySelector(".net").innerText = net.toFixed(2);
+    syncRowHidden(row);
 
     calculateTotal();
 }
@@ -604,6 +664,7 @@ function calculateTotal() {
     let rounded = Math.round(subtotal);
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = rounded.toFixed(2);
+    syncSummaryHidden(subtotal, discount, cgst, sgst, subtotal, rounded);
 }
 
 function resetBillUI() {
@@ -635,6 +696,7 @@ function resetBillUI() {
         first.dataset.totalStock = "";
         first.dataset.netAmount = "";
         first.dataset.discountAmount = "";
+        first.dataset.restoredSnapshot = "";
         let qtyInput = first.querySelector(".qty-input");
         if (qtyInput) qtyInput.value = 1;
         first.querySelector(".exp").innerText = "-";
@@ -644,6 +706,7 @@ function resetBillUI() {
         let discInput = first.querySelector(".disc-input");
         if (discInput) discInput.value = "0";
         first.querySelector(".net").innerText = "0";
+        syncRowHidden(first);
     }
 
     document.getElementById("subtotal").innerText = "0";
@@ -653,6 +716,7 @@ function resetBillUI() {
     document.getElementById("grand").innerText = "0";
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = "0.00";
+    syncSummaryHidden(0, 0, 0, 0, 0, 0);
 }
 
 let billingForm = document.getElementById("billingForm");
@@ -666,7 +730,11 @@ if (billingForm) {
             e.preventDefault();
         }
     });
-    billingForm.addEventListener("reset", function () {
+    billingForm.addEventListener("reset", function (e) {
+        if (restoreModeActive) {
+            e.preventDefault();
+            return;
+        }
         // wait for native reset to apply, then clean UI
         setTimeout(resetBillUI, 0);
     });
@@ -684,19 +752,8 @@ if (saleTypeSelect) {
 let medicineSearch = document.getElementById("medicineSearch");
 let medicineDropdown = document.getElementById("medicineDropdown");
 let activeRow = document.querySelector(".item");
-let medicineData = [
-    {% for m in medicines %}
-    {
-        name: "{{ m.name|trim|upper }}",
-        batch: "{{ m.batch }}",
-        expiry: "{{ m.expiry }}",
-        stock: {{ m.qty or 0 }},
-        mrp: {{ m.mrp or 0 }},
-        discount: {{ m.discount_percent or 0 }},
-        created_at: "{{ m.created_at.strftime('%Y-%m-%d') if m.created_at else '' }}"
-    },
-    {% endfor %}
-];
+let f2OnQty = false;
+let medicineData = {{ medicine_data|tojson }};
 
 let medicineMap = {};
 medicineData.forEach(m => {
@@ -712,9 +769,49 @@ function normalizeName(val) {
 
 function parseDate(val) {
     if (!val) return null;
-    let parts = val.split("-");
-    if (parts.length !== 3) return null;
-    return new Date(parts[0], parts[1] - 1, parts[2]);
+    let raw = String(val).trim();
+    if (!raw) return null;
+    if (raw.includes("-")) {
+        let parts = raw.split("-");
+        if (parts.length === 3) {
+            let y = parseInt(parts[0], 10);
+            let m = parseInt(parts[1], 10);
+            let d = parseInt(parts[2], 10);
+            if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                return new Date(y, m - 1, d);
+            }
+        }
+    }
+    if (raw.includes("/")) {
+        let parts = raw.split("/");
+        if (parts.length === 2) {
+            let m = parseInt(parts[0], 10);
+            let y = parseInt(parts[1], 10);
+            if (!isNaN(m) && !isNaN(y)) {
+                if (y < 100) y += 2000;
+                // Use last day of month for MM/YY
+                return new Date(y, m, 0);
+            }
+        } else if (parts.length === 3) {
+            if (parts[0].length === 4) {
+                let y = parseInt(parts[0], 10);
+                let m = parseInt(parts[1], 10);
+                let d = parseInt(parts[2], 10);
+                if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                    return new Date(y, m - 1, d);
+                }
+            } else {
+                let d = parseInt(parts[0], 10);
+                let m = parseInt(parts[1], 10);
+                let y = parseInt(parts[2], 10);
+                if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                    if (y < 100) y += 2000;
+                    return new Date(y, m - 1, d);
+                }
+            }
+        }
+    }
+    return null;
 }
 
 function isExpired(expiry) {
@@ -790,11 +887,18 @@ function onBatchChange(sel) {
     }
     let batches = getAllBatches(name);
     let batch = batches.find(b => b.batch === sel.value);
-    if (!batch) return;
-    row.dataset.price = batch.mrp;
-    row.dataset.discount = batch.discount;
-    row.dataset.stock = batch.stock;
-    row.dataset.expiry = batch.expiry;
+    if (batch) {
+        row.dataset.price = batch.mrp;
+        row.dataset.discount = batch.discount;
+        row.dataset.stock = batch.stock;
+        row.dataset.expiry = batch.expiry;
+    } else {
+        let selectedOpt = sel.options[sel.selectedIndex];
+        row.dataset.price = toNum(selectedOpt?.dataset?.mrp, row.dataset.price || 0);
+        row.dataset.discount = toNum(selectedOpt?.dataset?.discount, row.dataset.discount || 0);
+        row.dataset.stock = toNum(selectedOpt?.dataset?.stock, row.dataset.stock || 0);
+        row.dataset.expiry = selectedOpt?.dataset?.expiry || row.dataset.expiry || "-";
+    }
     updateRow(row.querySelector(".qty-input"));
 }
 
@@ -809,6 +913,137 @@ function bindRowFocus(row) {
     row.addEventListener("click", function () {
         activeRow = this;
     });
+}
+
+function setSummaryValues(subtotal, discount, cgst, sgst, netTotal, rounded) {
+    document.getElementById("subtotal").innerText = subtotal.toFixed(2);
+    document.getElementById("discount").innerText = discount.toFixed(2);
+    document.getElementById("cgst").innerText = cgst.toFixed(2);
+    document.getElementById("sgst").innerText = sgst.toFixed(2);
+    document.getElementById("grand").innerText = netTotal.toFixed(2);
+    let roundedEl = document.getElementById("rounded");
+    if (roundedEl) roundedEl.innerText = rounded.toFixed(2);
+    syncSummaryHidden(subtotal, discount, cgst, sgst, netTotal, rounded);
+}
+
+function populateRestoredRow(row, rawItem) {
+    if (!row || !rawItem) return;
+    let item = rawItem || {};
+    let medicineName = normalizeName(item.name || "");
+    if (!medicineName) return;
+
+    row.classList.remove("is-empty");
+    row.dataset.medicineName = medicineName;
+
+    let hidden = row.querySelector("input[type='hidden'][name='medicine_name']");
+    let display = row.querySelector(".medicine-display");
+    if (hidden) hidden.value = medicineName;
+    if (display) display.value = medicineName;
+
+    refreshBatchOptions(row, medicineName);
+
+    let batch = (item.batch || "").trim();
+    let expiry = (item.expiry || "-").trim() || "-";
+    let qoh = toNum(item.qoh, 0);
+    let qty = parseInt(item.qty || 0, 10);
+    if (!qty || qty < 1) qty = 1;
+    let mrp = toNum(item.mrp, 0);
+    let disc = toNum(item.discount_percent, 0);
+    let net = toNum(item.net_amount, 0);
+    let amount = toNum(item.amount, mrp * qty);
+    let discAmt = toNum(item.discount_amount, amount - net);
+    if (discAmt < 0) discAmt = 0;
+
+    let batchSelect = row.querySelector(".batch-select");
+    if (batchSelect) {
+        if (batch) {
+            let hasBatch = Array.from(batchSelect.options).some(o => o.value === batch);
+            if (!hasBatch) {
+                let restoredOpt = document.createElement("option");
+                restoredOpt.value = batch;
+                restoredOpt.textContent = `${batch} | Restored`;
+                restoredOpt.dataset.mrp = mrp.toFixed(2);
+                restoredOpt.dataset.discount = disc.toFixed(2);
+                restoredOpt.dataset.stock = qoh.toFixed(2);
+                restoredOpt.dataset.expiry = expiry;
+                batchSelect.appendChild(restoredOpt);
+            }
+            batchSelect.value = batch;
+        } else {
+            batchSelect.value = "";
+        }
+    }
+
+    row.dataset.price = mrp;
+    row.dataset.discount = disc;
+    row.dataset.stock = qoh;
+    row.dataset.totalStock = qoh;
+    row.dataset.expiry = expiry;
+    row.dataset.netAmount = net;
+    row.dataset.discountAmount = discAmt;
+    row.dataset.restoredSnapshot = "1";
+
+    let qtyInput = row.querySelector(".qty-input");
+    if (qtyInput) {
+        qtyInput.value = qty;
+        qtyInput.max = qoh > 0 ? qoh : qty;
+    }
+
+    row.querySelector(".exp").innerText = expiry;
+    let qohCell = row.querySelector(".qoh");
+    if (qohCell) qohCell.innerText = qoh;
+    row.querySelector(".price").innerText = mrp.toFixed(2);
+    row.querySelector(".disc").innerText = disc.toFixed(2);
+    row.querySelector(".net").innerText = net.toFixed(2);
+    syncRowHidden(row);
+}
+
+function applyRestoredBill(payload) {
+    if (!payload || !payload.hold_bill_id) return;
+
+    let holdIdInput = document.getElementById("holdBillId");
+    if (holdIdInput) holdIdInput.value = payload.hold_bill_id;
+
+    let header = payload.header || {};
+    let customerInput = document.querySelector("input[name='customer']");
+    let mobileInput = document.querySelector("input[name='mobile']");
+    let doctorInput = document.querySelector("input[name='doctor']");
+    let genderSelect = document.querySelector("select[name='gender']");
+    let paymentSelect = document.querySelector("select[name='payment_mode']");
+    let saleSelect = document.querySelector("select[name='sale_type']");
+
+    if (customerInput) customerInput.value = (header.customer || "").toUpperCase();
+    if (mobileInput) mobileInput.value = header.mobile || "";
+    if (doctorInput) doctorInput.value = header.doctor || "";
+    if (genderSelect) genderSelect.value = header.gender || "";
+    if (saleSelect && header.sale_type) saleSelect.value = String(header.sale_type).toLowerCase();
+    if (paymentSelect && header.payment_mode) {
+        let mode = String(header.payment_mode).toUpperCase();
+        if (mode.includes("ONLINE") || mode.includes("UPI")) mode = "ONLINE";
+        paymentSelect.value = mode;
+    }
+
+    let table = document.getElementById("billTable");
+    if (!table) return;
+
+    resetBillUI();
+
+    let items = Array.isArray(payload.items) ? payload.items : [];
+    if (items.length) {
+        items.forEach((item, idx) => {
+            let row = idx === 0 ? table.querySelector(".item") : addRow();
+            populateRestoredRow(row, item);
+        });
+    }
+
+    let totals = payload.totals || {};
+    let subtotal = toNum(totals.subtotal, 0);
+    let discount = toNum(totals.discount, 0);
+    let cgst = toNum(totals.cgst, subtotal * 0.025);
+    let sgst = toNum(totals.sgst, subtotal * 0.025);
+    let netTotal = toNum(totals.net_total, subtotal);
+    let rounded = toNum(totals.rounded_amount, Math.round(netTotal));
+    setSummaryValues(subtotal, discount, cgst, sgst, netTotal, rounded);
 }
 
 function selectMedicine(name) {
@@ -942,6 +1177,37 @@ if (medicineSearch) {
     medicineSearch.addEventListener("blur", function () {
         setTimeout(closeDropdown, 120);
     });
+}
+
+document.addEventListener("keydown", function (e) {
+    if (e.key !== "F2") return;
+    e.preventDefault();
+    let active = document.activeElement;
+    let isQty = active && active.classList && active.classList.contains("qty-input");
+    if (isQty || f2OnQty) {
+        if (medicineSearch) {
+            medicineSearch.focus();
+            medicineSearch.select();
+        }
+        f2OnQty = false;
+        return;
+    }
+    let row = activeRow || document.querySelector("#billTable .item");
+    if (!row) return;
+    let qtyInput = row.querySelector(".qty-input");
+    if (qtyInput) {
+        qtyInput.focus();
+        qtyInput.select();
+        f2OnQty = true;
+    }
+});
+
+if (restoredHoldBill && restoredHoldBill.hold_bill_id) {
+    applyRestoredBill(restoredHoldBill);
+} else {
+    let firstRow = document.querySelector("#billTable .item");
+    if (firstRow) syncRowHidden(firstRow);
+    syncSummaryHidden(0, 0, 0, 0, 0, 0);
 }
 </script>
 

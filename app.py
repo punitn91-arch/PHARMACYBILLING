@@ -1,11 +1,12 @@
 # app.py
-from flask import Flask, render_template, request, redirect,url_for, flash, session
-from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry
 from datetime import datetime, time, timedelta, date
 from functools import wraps
 import webbrowser
 import threading
 import os
+from decimal import Decimal, ROUND_HALF_UP
 from werkzeug.utils import secure_filename
 from sqlalchemy import text, or_, inspect
 
@@ -40,6 +41,426 @@ def to_int(val):
 def to_float(val):
     return float(val) if val not in (None, "", " ") else 0.0
 
+def to_decimal(val, default="0"):
+    if val in (None, "", " "):
+        return Decimal(default)
+    try:
+        return Decimal(str(val))
+    except Exception:
+        return Decimal(default)
+
+def quantize_decimal(val, places="0.0001"):
+    return to_decimal(val).quantize(Decimal(places), rounding=ROUND_HALF_UP)
+
+def decimal_str(val):
+    if val is None:
+        return "0"
+    try:
+        return format(val, "f")
+    except Exception:
+        return str(val)
+
+def parse_pack_qty(val):
+    if val in (None, "", " "):
+        return None
+    v = str(val).strip()
+    if not v:
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        return None
+
+def to_int_safe(val, default=0):
+    try:
+        return int(str(val).strip())
+    except (TypeError, ValueError):
+        return default
+
+def to_float_safe(val, default=0.0):
+    try:
+        return float(str(val).strip())
+    except (TypeError, ValueError):
+        return default
+
+def find_medicine_for_hold(name, batch=""):
+    if not name:
+        return None
+    if batch:
+        med = Medicine.query.filter_by(name=name, batch=batch).first()
+        if med:
+            return med
+    return Medicine.query.filter_by(name=name).first()
+
+def build_hold_items_from_form(form):
+    items = []
+
+    meds_list = form.getlist("medicine_name")
+    qty_list = form.getlist("qty[]")
+    if not qty_list:
+        qty_list = form.getlist("qty")
+
+    batch_overrides = form.getlist("batch_override[]")
+    if not batch_overrides:
+        batch_overrides = form.getlist("batch_override")
+
+    expiry_list = form.getlist("line_expiry[]")
+    qoh_list = form.getlist("line_qoh[]")
+    mrp_list = form.getlist("line_mrp[]")
+    discount_list = form.getlist("line_discount_percent[]")
+    net_list = form.getlist("line_net[]")
+
+    row_count = max(
+        len(meds_list),
+        len(qty_list),
+        len(batch_overrides),
+        len(expiry_list),
+        len(mrp_list),
+        len(discount_list),
+        len(net_list)
+    )
+
+    for idx in range(row_count):
+        name = (meds_list[idx] if idx < len(meds_list) else "").strip().upper()
+        if not name:
+            continue
+
+        qty_val = to_int_safe(qty_list[idx] if idx < len(qty_list) else 0, 0)
+        if qty_val <= 0:
+            continue
+
+        batch = (batch_overrides[idx] if idx < len(batch_overrides) else "").strip()
+        expiry = (expiry_list[idx] if idx < len(expiry_list) else "").strip()
+        qoh_raw = qoh_list[idx] if idx < len(qoh_list) else ""
+        mrp_raw = mrp_list[idx] if idx < len(mrp_list) else ""
+        discount_raw = discount_list[idx] if idx < len(discount_list) else ""
+        net_raw = net_list[idx] if idx < len(net_list) else ""
+
+        qoh = to_float_safe(qoh_raw, 0)
+        mrp = to_float_safe(mrp_raw, 0)
+        discount_percent = to_float_safe(discount_raw, 0)
+        net_amount = to_float_safe(net_raw, 0)
+
+        med = find_medicine_for_hold(name, batch)
+        if med:
+            if not batch:
+                batch = med.batch or ""
+            if not expiry:
+                expiry = med.expiry or ""
+            if qoh_raw in (None, "", " "):
+                qoh = to_float_safe(med.qty, 0)
+            if mrp_raw in (None, "", " "):
+                mrp = to_float_safe(med.mrp, 0)
+            if discount_raw in (None, "", " "):
+                discount_percent = to_float_safe(med.discount_percent, 0)
+
+        line_amount = qty_val * mrp
+        if net_amount <= 0:
+            net_amount = line_amount - (line_amount * discount_percent / 100)
+        discount_amount = line_amount - net_amount
+        if discount_amount < 0:
+            discount_amount = 0
+
+        items.append({
+            "name": name,
+            "batch": batch,
+            "expiry": expiry,
+            "qoh": round(qoh, 2),
+            "qty": qty_val,
+            "mrp": round(mrp, 2),
+            "discount_percent": round(discount_percent, 2),
+            "discount_amount": round(discount_amount, 2),
+            "net_amount": round(net_amount, 2),
+            "amount": round(line_amount, 2)
+        })
+
+    return items
+
+def build_hold_totals_from_form(form, items):
+    subtotal_raw = form.get("subtotal")
+    discount_raw = form.get("discount")
+    cgst_raw = form.get("cgst")
+    sgst_raw = form.get("sgst")
+    net_total_raw = form.get("net_total")
+    rounded_raw = form.get("rounded_amount")
+
+    subtotal = to_float_safe(subtotal_raw, 0.0) if subtotal_raw not in (None, "") else round(sum(i["net_amount"] for i in items), 2)
+    discount = to_float_safe(discount_raw, 0.0) if discount_raw not in (None, "") else round(sum(i["discount_amount"] for i in items), 2)
+    cgst = to_float_safe(cgst_raw, round(subtotal * 0.025, 2)) if cgst_raw not in (None, "") else round(subtotal * 0.025, 2)
+    sgst = to_float_safe(sgst_raw, round(subtotal * 0.025, 2)) if sgst_raw not in (None, "") else round(subtotal * 0.025, 2)
+    net_total = to_float_safe(net_total_raw, subtotal) if net_total_raw not in (None, "") else subtotal
+    rounded_amount = to_float_safe(rounded_raw, round(net_total, 2)) if rounded_raw not in (None, "") else round(net_total, 2)
+
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "cgst": round(cgst, 2),
+        "sgst": round(sgst, 2),
+        "net_total": round(net_total, 2),
+        "rounded_amount": round(rounded_amount, 2)
+    }
+
+def normalize_hold_bill_data(hold_bill):
+    payload = hold_bill.data if isinstance(hold_bill.data, (dict, list)) else {}
+    raw_items = []
+    totals = {}
+    header = {}
+
+    if isinstance(payload, dict):
+        header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+        raw_items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        if not raw_items and isinstance(payload.get("cart"), list):
+            raw_items = payload.get("cart")
+        totals = payload.get("totals") if isinstance(payload.get("totals"), dict) else {}
+    elif isinstance(payload, list):
+        raw_items = payload
+
+    items = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        name = (raw.get("name") or raw.get("medicine_name") or "").strip().upper()
+        if not name:
+            continue
+        qty_val = to_int_safe(raw.get("qty"), 0)
+        if qty_val <= 0:
+            continue
+        batch = (raw.get("batch") or "").strip()
+        expiry = (raw.get("expiry") or "").strip()
+        qoh_source = raw.get("qoh", raw.get("stock", ""))
+        mrp_source = raw.get("mrp", raw.get("price", ""))
+        qoh = to_float_safe(qoh_source, 0)
+        mrp = to_float_safe(mrp_source, 0)
+        discount_percent = to_float_safe(raw.get("discount_percent", raw.get("discount", 0)), 0)
+        net_amount = to_float_safe(raw.get("net_amount", raw.get("net", raw.get("amount", 0))), 0)
+
+        med = find_medicine_for_hold(name, batch)
+        if med:
+            if not batch:
+                batch = med.batch or ""
+            if not expiry:
+                expiry = med.expiry or ""
+            if qoh_source in (None, "", " "):
+                qoh = to_float_safe(med.qty, 0)
+            if mrp_source in (None, "", " "):
+                mrp = to_float_safe(med.mrp, 0)
+
+        line_amount = qty_val * mrp
+        if net_amount <= 0:
+            net_amount = line_amount - (line_amount * discount_percent / 100)
+        discount_amount = line_amount - net_amount
+        if discount_amount < 0:
+            discount_amount = 0
+
+        items.append({
+            "name": name,
+            "batch": batch,
+            "expiry": expiry,
+            "qoh": round(qoh, 2),
+            "qty": qty_val,
+            "mrp": round(mrp, 2),
+            "discount_percent": round(discount_percent, 2),
+            "discount_amount": round(discount_amount, 2),
+            "net_amount": round(net_amount, 2),
+            "amount": round(line_amount, 2)
+        })
+
+    subtotal = to_float_safe(totals.get("subtotal"), round(sum(i["net_amount"] for i in items), 2))
+    discount = to_float_safe(totals.get("discount"), round(sum(i["discount_amount"] for i in items), 2))
+    cgst = to_float_safe(totals.get("cgst"), round(subtotal * 0.025, 2))
+    sgst = to_float_safe(totals.get("sgst"), round(subtotal * 0.025, 2))
+    net_total = to_float_safe(totals.get("net_total"), subtotal)
+    rounded_amount = to_float_safe(totals.get("rounded_amount"), round(net_total, 2))
+
+    return {
+        "hold_bill_id": hold_bill.id,
+        "header": {
+            "customer": (header.get("customer") or hold_bill.customer or "").strip(),
+            "mobile": (header.get("mobile") or hold_bill.mobile or "").strip(),
+            "doctor": (header.get("doctor") or hold_bill.doctor or "").strip(),
+            "gender": (header.get("gender") or hold_bill.gender or "").strip(),
+            "sale_type": (header.get("sale_type") or "sale").strip().lower() or "sale",
+            "payment_mode": (header.get("payment_mode") or "CASH").strip().upper() or "CASH"
+        },
+        "items": items,
+        "totals": {
+            "subtotal": round(subtotal, 2),
+            "discount": round(discount, 2),
+            "cgst": round(cgst, 2),
+            "sgst": round(sgst, 2),
+            "net_total": round(net_total, 2),
+            "rounded_amount": round(rounded_amount, 2)
+        }
+    }
+
+LOW_STOCK_LIMIT = 5
+LOW_STOCK_TARGET = 10
+LOW_STOCK_MIN_ORDER = 5
+
+def get_low_stock_items(limit=LOW_STOCK_LIMIT, target_stock=LOW_STOCK_TARGET, min_order_qty=LOW_STOCK_MIN_ORDER):
+    # Aggregate stock by medicine name across all batches.
+    medicines = Medicine.query.order_by(
+        db.func.lower(Medicine.name).asc(),
+        Medicine.expiry.asc(),
+        Medicine.batch.asc(),
+        Medicine.id.asc()
+    ).all()
+
+    grouped = {}
+    for med in medicines:
+        name = (med.name or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        entry = grouped.get(key)
+        if not entry:
+            entry = {
+                "name": name,
+                "batch": (med.batch or "").strip() or "-",
+                "expiry": (med.expiry or "").strip(),
+                "stock": 0,
+                "qty": 0,
+                "batch_count": 0,
+                "mrp": to_float(med.mrp)
+            }
+            grouped[key] = entry
+
+        qty = to_int(med.qty)
+        entry["stock"] += qty
+        entry["qty"] = entry["stock"]
+        entry["batch_count"] += 1
+
+        expiry = (med.expiry or "").strip()
+        if expiry and (not entry["expiry"] or expiry < entry["expiry"]):
+            entry["expiry"] = expiry
+
+        current_mrp = to_float(med.mrp)
+        if entry["mrp"] is not None and entry["mrp"] != current_mrp:
+            entry["mrp"] = None
+
+    low_items = []
+    for entry in grouped.values():
+        if entry["stock"] > limit:
+            continue
+        if entry["batch_count"] > 1:
+            entry["batch"] = f"{entry['batch_count']} batches"
+        entry["suggested"] = max(target_stock - entry["stock"], min_order_qty)
+        low_items.append(entry)
+
+    low_items.sort(key=lambda item: item["name"].lower())
+    return low_items
+
+def generate_vendor_note_no(note_type):
+    prefix = "VN-DN-" if note_type == "DEBIT" else "VN-CN-"
+    last = VendorNote.query.filter_by(note_type=note_type).order_by(VendorNote.id.desc()).first()
+    next_num = 1
+    if last and last.note_no and last.note_no.startswith(prefix):
+        try:
+            next_num = int(last.note_no.replace(prefix, "")) + 1
+        except Exception:
+            next_num = last.id + 1
+    return f"{prefix}{next_num:06d}"
+
+def compute_vendor_note_totals(items):
+    subtotal = Decimal("0")
+    gst_total = Decimal("0")
+    prepared = []
+    for raw in items:
+        qty = int(raw.get("qty") or 0)
+        free_qty = int(raw.get("free_qty") or 0)
+        rate = quantize_decimal(raw.get("purchase_rate") or 0, "0.0001")
+        gst_percent = quantize_decimal(raw.get("gst_percent") or 0, "0.01")
+        disc_percent = quantize_decimal(raw.get("disc_percent") or 0, "0.01")
+        base = Decimal(qty) * rate
+        disc_amt = base * disc_percent / Decimal("100")
+        taxable = base - disc_amt
+        gst_amt = taxable * gst_percent / Decimal("100")
+        line_total = quantize_decimal(taxable + gst_amt, "0.0001")
+        subtotal += taxable
+        gst_total += gst_amt
+        prepared.append({
+            "qty": qty,
+            "free_qty": free_qty,
+            "purchase_rate": rate,
+            "gst_percent": gst_percent,
+            "disc_percent": disc_percent,
+            "line_total": line_total
+        })
+    subtotal = quantize_decimal(subtotal, "0.0001")
+    gst_total = quantize_decimal(gst_total, "0.0001")
+    return subtotal, gst_total, prepared
+
+def vendor_note_to_dict(note, include_items=False, include_ledger=False):
+    data = {
+        "id": note.id,
+        "note_no": note.note_no,
+        "note_type": note.note_type,
+        "vendor_id": note.vendor_id,
+        "reference_purchase_id": note.reference_purchase_id,
+        "supplier_bill_no": note.supplier_bill_no,
+        "note_date": note.note_date.isoformat() if note.note_date else None,
+        "status": note.status,
+        "reason_code": note.reason_code,
+        "reason_text": note.reason_text,
+        "subtotal": decimal_str(note.subtotal),
+        "gst_total": decimal_str(note.gst_total),
+        "round_off": decimal_str(note.round_off),
+        "grand_total": decimal_str(note.grand_total),
+        "remarks": note.remarks,
+        "created_by": note.created_by,
+        "created_at": note.created_at.isoformat() if note.created_at else None,
+        "posted_at": note.posted_at.isoformat() if note.posted_at else None,
+        "cancelled_at": note.cancelled_at.isoformat() if note.cancelled_at else None,
+        "cancel_reason": note.cancel_reason
+    }
+    if include_items:
+        data["items"] = [
+            {
+                "id": it.id,
+                "medicine_id": it.medicine_id,
+                "batch_no": it.batch_no,
+                "expiry": it.expiry,
+                "qty": it.qty,
+                "free_qty": it.free_qty,
+                "purchase_rate": decimal_str(it.purchase_rate),
+                "mrp": decimal_str(it.mrp),
+                "gst_percent": decimal_str(it.gst_percent),
+                "disc_percent": decimal_str(it.disc_percent),
+                "line_total": decimal_str(it.line_total),
+                "hsn": it.hsn
+            }
+            for it in VendorNoteItem.query.filter_by(note_id=note.id).order_by(VendorNoteItem.id.asc()).all()
+        ]
+    if include_ledger:
+        data["ledger"] = [
+            {
+                "id": l.id,
+                "txn_date": l.txn_date.isoformat() if l.txn_date else None,
+                "txn_type": l.txn_type,
+                "debit": decimal_str(l.debit),
+                "credit": decimal_str(l.credit),
+                "notes": l.notes
+            }
+            for l in VendorLedgerEntry.query.filter_by(ref_table="vendor_notes", ref_id=note.id).order_by(VendorLedgerEntry.id.asc()).all()
+        ]
+    return data
+
+def get_purchase_items_for_return(med, batch_no=None, reference_purchase_id=None):
+    query = VendorPurchaseItem.query
+    if reference_purchase_id:
+        query = query.filter(VendorPurchaseItem.purchase_id == reference_purchase_id)
+    query = query.filter(
+        or_(
+            VendorPurchaseItem.medicine_id == med.id,
+            (VendorPurchaseItem.medicine_id.is_(None) &
+             (VendorPurchaseItem.medicine_name == med.name) &
+             (VendorPurchaseItem.batch == med.batch))
+        )
+    )
+    if batch_no:
+        query = query.filter(VendorPurchaseItem.batch == batch_no)
+    return query.order_by(VendorPurchaseItem.created_at.asc(), VendorPurchaseItem.id.asc()).all()
+
 def parse_date(val):
     if not val:
         return None
@@ -47,6 +468,47 @@ def parse_date(val):
         return datetime.strptime(val, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+def parse_time_value(val):
+    if not val:
+        return None
+    raw = str(val).strip()
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+def generate_appointment_no():
+    prefix = "APT-"
+    last = Appointment.query.order_by(Appointment.id.desc()).first()
+    next_num = 1
+    if last and last.appointment_no and last.appointment_no.startswith(prefix):
+        try:
+            next_num = int(last.appointment_no.replace(prefix, "")) + 1
+        except Exception:
+            next_num = last.id + 1
+    return f"{prefix}{next_num:06d}"
+
+def get_doctor_suggestions():
+    names = set()
+    invoice_names = db.session.query(Invoice.doctor).filter(
+        Invoice.doctor.isnot(None),
+        Invoice.doctor != ""
+    ).all()
+    appt_names = db.session.query(Appointment.doctor_name).filter(
+        Appointment.doctor_name.isnot(None),
+        Appointment.doctor_name != ""
+    ).all()
+    for (name,) in invoice_names + appt_names:
+        nm = (name or "").strip()
+        if nm:
+            names.add(nm)
+    return sorted(names, key=lambda x: x.lower())
+
+APPOINTMENT_STATUSES = ("BOOKED", "CHECKED_IN", "COMPLETED", "CANCELLED")
+APPOINTMENT_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD")
 
 def find_medicine_by_name_batch(name, batch):
     n = (name or "").strip()
@@ -241,6 +703,7 @@ with app.app_context():
         ensure_column("medicine", "composition", "TEXT")
         ensure_column("medicine", "company", "TEXT")
         ensure_column("medicine", "pack_type", "TEXT")
+        ensure_column("medicine", "pack_qty", "INTEGER")
 
         # Vendor extra fields
         ensure_column("vendor", "shop_name", "TEXT")
@@ -250,6 +713,7 @@ with app.app_context():
         ensure_column("vendor", "pincode", "TEXT")
         ensure_column("vendor", "account_holder_name", "TEXT")
         ensure_column("vendor_purchase", "invoice_no", "TEXT")
+        ensure_column("vendor_purchase", "paid_amount", "REAL")
 
         ensure_column("return_bill", "return_no", "TEXT")
         ensure_column("return_bill", "payment_mode", "TEXT")
@@ -268,6 +732,29 @@ with app.app_context():
         ensure_column("return_item", "cost_price", "REAL")
         ensure_column("return_item", "cost_amount", "REAL")
         ensure_column("vendor_purchase_item", "remaining_qty", "INTEGER")
+        ensure_column("vendor_purchase_item", "pack_type", "TEXT")
+        ensure_column("vendor_purchase_item", "pack_qty", "INTEGER")
+        ensure_column("stock_history", "ref_table", "TEXT")
+        ensure_column("stock_history", "ref_id", "INTEGER")
+        ensure_column("appointment", "payment_mode", "TEXT")
+        ensure_column("appointment", "doctor_discount", "REAL")
+        ensure_column("appointment", "consultation_fee", "REAL")
+        db.session.execute(text(
+            'UPDATE "appointment" '
+            "SET \"payment_mode\" = 'CASH' "
+            'WHERE "payment_mode" IS NULL OR "payment_mode" = \'\''
+        ))
+        db.session.execute(text(
+            'UPDATE "appointment" '
+            'SET "doctor_discount" = 0 '
+            'WHERE "doctor_discount" IS NULL'
+        ))
+        db.session.execute(text(
+            'UPDATE "appointment" '
+            'SET "consultation_fee" = 0 '
+            'WHERE "consultation_fee" IS NULL'
+        ))
+        db.session.commit()
 
         db.session.execute(text(
             'CREATE TABLE IF NOT EXISTS "sales_allocation" ('
@@ -337,8 +824,13 @@ def login_required(f):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        user = User.query.filter_by(username=request.form["username"]).first()
-        if user and user.check_password(request.form["password"]):
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        if not username or not password:
+            flash("Username and password are required", "danger")
+            return render_template("login.html")
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
             session["user_id"] = user.id
             session["username"] = user.username
             session["role"] = user.role
@@ -386,7 +878,7 @@ def index():
     bills_today = len(today_invoices)
 
     # ---------- LOW STOCK ----------
-    low_stock_count = Medicine.query.filter(Medicine.qty <= 5).count()
+    low_stock_count = len(get_low_stock_items(limit=LOW_STOCK_LIMIT))
 
     # ---------- EXPIRING SOON (30 days) ----------
     exp_limit = today + timedelta(days=30)
@@ -394,9 +886,18 @@ def index():
         Medicine.expiry <= exp_limit.strftime("%Y-%m-%d")
     ).count()
 
-    # ---------- INVENTORY VALUE ----------
-    inventory_value = sum(
-        m.qty * m.mrp for m in Medicine.query.all()
+    # ---------- INVENTORY VALUE (AT PURCHASE RATE) ----------
+    inventory_value = (
+        db.session.query(
+            db.func.coalesce(
+                db.func.sum(
+                    db.func.coalesce(VendorPurchaseItem.remaining_qty, 0) *
+                    db.func.coalesce(VendorPurchaseItem.purchase_rate, 0)
+                ),
+                0
+            )
+        ).scalar()
+        or 0
     )
 
     # ---------- GST COLLECTED (ONLY DISPLAY) ----------
@@ -416,20 +917,20 @@ def index():
 @app.route("/low-stock")
 @login_required
 def low_stock():
-    medicines = Medicine.query.filter(Medicine.qty <= 5).order_by(Medicine.qty).all()
+    medicines = get_low_stock_items(limit=LOW_STOCK_LIMIT)
     return render_template("low_stock.html", medicines=medicines)
 @app.route("/order-list")
 @login_required
 def order_list():
-    medicines = Medicine.query.filter(Medicine.qty <= 5).all()
+    medicines = get_low_stock_items(limit=LOW_STOCK_LIMIT)
 
     order_items = []
     for m in medicines:
         order_items.append({
-            "name": m.name,
-            "batch": m.batch,
-            "stock": m.qty,
-            "suggested": max(10 - m.qty, 5)  # auto order logic
+            "name": m["name"],
+            "batch": m["batch"],
+            "stock": m["stock"],
+            "suggested": m["suggested"]
         })
 
     return render_template("order_list.html", items=order_items)
@@ -478,14 +979,28 @@ def add_medicine():
         flash("Access denied", "danger")
         return redirect("/medicines")
     if request.method == "POST":
-        qty = int(request.form["qty"])
+        name = (request.form.get("name") or "").strip()
+        batch = (request.form.get("batch") or "").strip()
+        expiry = (request.form.get("expiry") or "").strip()
+        if not name or not batch or not expiry:
+            flash("Name, batch and expiry are required", "danger")
+            return redirect("/medicines/add")
+        qty = to_int(request.form.get("qty"))
+        pack_type = (request.form.get("pack_type") or "").strip()
+        pack_qty_raw = (request.form.get("pack_qty") or "").strip()
+        pack_qty = parse_pack_qty(pack_qty_raw)
+        if pack_qty_raw and (pack_qty is None or pack_qty < 1):
+            flash("Pack quantity must be at least 1", "danger")
+            return redirect("/medicines/add")
 
         med = Medicine(
-            name=request.form["name"],
-            batch=request.form["batch"],
-            mrp=float(request.form["mrp"]),
+            name=name,
+            batch=batch,
+            mrp=to_float(request.form.get("mrp")),
             qty=qty,
-            expiry=request.form["expiry"]
+            expiry=expiry,
+            pack_type=pack_type,
+            pack_qty=pack_qty
         )
 
         db.session.add(med)
@@ -526,12 +1041,28 @@ def edit_medicine(id):
     old_qty = med.qty
 
     if request.method == "POST":
-        med.name = request.form["name"]
-        med.batch = request.form["batch"]
-        med.expiry = request.form["expiry"]
-        med.mrp = float(request.form["mrp"])
-        med.discount_percent = int(request.form.get("discount_percent", 0))
-        med.qty = int(request.form["qty"])
+        name = (request.form.get("name") or "").strip()
+        batch = (request.form.get("batch") or "").strip()
+        expiry = (request.form.get("expiry") or "").strip()
+        if not name or not batch or not expiry:
+            flash("Name, batch and expiry are required", "danger")
+            return redirect(request.url)
+        med.name = name
+        med.batch = batch
+        med.expiry = expiry
+        med.mrp = to_float(request.form.get("mrp"))
+        med.discount_percent = to_int(request.form.get("discount_percent"))
+        med.qty = to_int(request.form.get("qty"))
+        pack_type = (request.form.get("pack_type") or "").strip()
+        pack_qty_raw = (request.form.get("pack_qty") or "").strip()
+        pack_qty = parse_pack_qty(pack_qty_raw)
+        if pack_qty_raw and (pack_qty is None or pack_qty < 1):
+            flash("Pack quantity must be at least 1", "danger")
+            return redirect(request.url)
+        if pack_type:
+            med.pack_type = pack_type
+        if pack_qty_raw:
+            med.pack_qty = pack_qty
 
         change = med.qty - old_qty
 
@@ -594,15 +1125,34 @@ def delete_medicine(id):
 def billing():
     meds = Medicine.query.order_by(Medicine.name).all()
     medicine_names = sorted({m.name for m in meds})
+    medicine_data = []
+    for m in meds:
+        medicine_data.append({
+            "name": (m.name or "").strip().upper(),
+            "batch": m.batch or "",
+            "expiry": m.expiry or "",
+            "stock": m.qty or 0,
+            "mrp": float(m.mrp or 0),
+            "discount": m.discount_percent or 0,
+            "created_at": m.created_at.strftime("%Y-%m-%d") if m.created_at else ""
+        })
     
     cart = []
+    posted_hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0) if request.method == "POST" else 0
+
+    def redirect_to_billing_with_context():
+        if posted_hold_bill_id > 0:
+            return redirect(url_for("billing", hold_bill_id=posted_hold_bill_id))
+        return redirect("/billing")
 
     if request.method == "POST":
         subtotal = 0
         total_discount = 0
 
         meds_list = request.form.getlist("medicine_name")
-        batch_overrides = request.form.getlist("batch_override")
+        batch_overrides = request.form.getlist("batch_override[]")
+        if not batch_overrides:
+            batch_overrides = request.form.getlist("batch_override")
         qty_list = request.form.getlist("qty")
         if not qty_list:
             qty_list = request.form.getlist("qty[]")
@@ -611,7 +1161,7 @@ def billing():
             name = (name or "").strip().upper()
             if not name:
                 continue
-            qty = int(qty or 0)
+            qty = to_int_safe(qty, 0)
             if qty <= 0:
                 continue
             batch_override = (batch_overrides[idx] or "").strip() if idx < len(batch_overrides) else ""
@@ -621,24 +1171,24 @@ def billing():
                 med = Medicine.query.filter_by(name=name, batch=batch_override).first()
                 if not med:
                     flash(f"Batch not found for {name}", "danger")
-                    return redirect("/billing")
+                    return redirect_to_billing_with_context()
                 exp_dt = parse_expiry_date(med.expiry)
                 if exp_dt and exp_dt < date.today():
                     flash(f"Batch {med.batch} of {med.name} is expired", "danger")
-                    return redirect("/billing")
+                    return redirect_to_billing_with_context()
                 if qty > med.qty:
                     flash(f"Not enough stock for {med.name} ({med.batch})", "danger")
-                    return redirect("/billing")
+                    return redirect_to_billing_with_context()
                 allocations.append((med, qty))
             else:
                 candidates = get_batch_candidates(name)
                 total_available = sum(m.qty for m in candidates)
                 if total_available <= 0:
                     flash(f"No stock available for {name}", "danger")
-                    return redirect("/billing")
+                    return redirect_to_billing_with_context()
                 if qty > total_available:
                     flash(f"Not enough stock for {name}. Available: {total_available}", "danger")
-                    return redirect("/billing")
+                    return redirect_to_billing_with_context()
                 remaining = qty
                 for med in candidates:
                     take = min(med.qty, remaining)
@@ -673,7 +1223,6 @@ def billing():
                 )
                 db.session.add(history)
 
-
                 fifo_alloc = fifo_consume(med, take_qty)
                 cost_amount = sum(a["qty"] * a["cost_rate"] for a in fifo_alloc)
                 cost_price = round(cost_amount / take_qty, 4) if take_qty else 0
@@ -696,13 +1245,16 @@ def billing():
         cgst = round(subtotal * 0.025, 2)
         sgst = round(subtotal * 0.025, 2)
         total = round(subtotal, 2)
+        rounded_total = round(subtotal)
 
         last = Invoice.query.order_by(Invoice.id.desc()).first()
         inv_no = f"INV-{datetime.now().year}-{1000 + ((last.id + 1) if last else 1)}"
+        customer = (request.form.get("customer") or "").strip()
+        mobile = (request.form.get("mobile") or "").strip()
         inv = Invoice(
             invoice_no=inv_no,
-            customer=request.form["customer"],
-            mobile=request.form["mobile"],
+            customer=customer,
+            mobile=mobile,
             doctor=request.form.get("doctor", ""),
             gender=request.form.get("gender", ""),
             subtotal=subtotal,
@@ -743,6 +1295,11 @@ def billing():
                     returned_qty=0
                 ))
 
+        if posted_hold_bill_id > 0:
+            held_bill = HoldBill.query.get(posted_hold_bill_id)
+            if held_bill:
+                db.session.delete(held_bill)
+
         db.session.commit()
 
         return render_template(
@@ -759,9 +1316,26 @@ def billing():
             cgst=cgst,
             sgst=sgst,
             total=total,
+            rounded_total=rounded_total,
             date=datetime.now().strftime("%d-%m-%Y")
         )
-    return render_template("billing.html", medicines=meds, medicine_names=medicine_names)
+
+    restored_hold_bill = None
+    restore_hold_bill_id = to_int_safe(request.args.get("hold_bill_id"), 0)
+    if restore_hold_bill_id > 0:
+        hold_bill = HoldBill.query.get(restore_hold_bill_id)
+        if not hold_bill:
+            flash("Held bill not found. It may have been deleted.", "warning")
+        else:
+            restored_hold_bill = normalize_hold_bill_data(hold_bill)
+
+    return render_template(
+        "billing.html",
+        medicines=meds,
+        medicine_names=medicine_names,
+        medicine_data=medicine_data,
+        restored_hold_bill=restored_hold_bill
+    )
 
 
 # ---------------- RETURN MEDICINE ----------------
@@ -1108,45 +1682,57 @@ def return_invoice(id):
 @app.route("/billing/hold", methods=["POST"])
 @login_required
 def hold_bill():
-    cart = []
-    meds_list = request.form.getlist("medicine_name")
-    batch_overrides = request.form.getlist("batch_override")
-    qty_list = request.form.getlist("qty")
-    if not qty_list:
-        qty_list = request.form.getlist("qty[]")
+    items = build_hold_items_from_form(request.form)
+    hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0)
 
-    for idx, (name, qty) in enumerate(zip(meds_list, qty_list)):
-        name = (name or "").strip().upper()
-        if not name:
-            continue
-        qty_val = int(qty or 0)
-        if qty_val <= 0:
-            continue
-        batch_override = (batch_overrides[idx] or "").strip() if idx < len(batch_overrides) else ""
-        med = None
-        if batch_override:
-            med = Medicine.query.filter_by(name=name, batch=batch_override).first()
-        if not med:
-            med = Medicine.query.filter_by(name=name).first()
-        cart.append({
-            "name": name,
-            "qty": qty_val,
-            "mrp": med.mrp if med else 0,
-            "batch": batch_override or (med.batch if med else ""),
-            "expiry": med.expiry if med else "",
-            "amount": qty_val * (med.mrp if med else 0)
-        })
+    customer = (request.form.get("customer") or "").strip()
+    mobile = (request.form.get("mobile") or "").strip()
+    doctor = (request.form.get("doctor") or "").strip()
+    gender = (request.form.get("gender") or "").strip()
+    sale_type = (request.form.get("sale_type") or "sale").strip().lower() or "sale"
+    payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
 
-    db.session.add(HoldBill(
-        customer=request.form["customer"],
-        mobile=request.form["mobile"],
-        doctor=request.form.get("doctor", ""),
-        gender=request.form.get("gender", ""),
-        data=cart
-    ))
+    if not customer:
+        flash("Please enter patient name before holding bill", "danger")
+        if hold_bill_id > 0:
+            return redirect(url_for("billing", hold_bill_id=hold_bill_id))
+        return redirect("/billing")
+
+    payload = {
+        "header": {
+            "customer": customer,
+            "mobile": mobile,
+            "doctor": doctor,
+            "gender": gender,
+            "sale_type": sale_type,
+            "payment_mode": payment_mode
+        },
+        "items": items,
+        "totals": build_hold_totals_from_form(request.form, items)
+    }
+
+    hold_bill = HoldBill.query.get(hold_bill_id) if hold_bill_id > 0 else None
+    if hold_bill:
+        hold_bill.customer = customer
+        hold_bill.mobile = mobile
+        hold_bill.doctor = doctor
+        hold_bill.gender = gender
+        hold_bill.data = payload
+        flash_msg = "Pending bill updated"
+    else:
+        hold_bill = HoldBill(
+            customer=customer,
+            mobile=mobile,
+            doctor=doctor,
+            gender=gender,
+            data=payload
+        )
+        db.session.add(hold_bill)
+        flash_msg = "Bill saved to Pending Bills"
+
     db.session.commit()
 
-    flash("Bill saved to Pending Bills", "info")
+    flash(flash_msg, "info")
     return redirect("/pending-bills")
 
 # ---------------- PENDING BILLS ----------------
@@ -1159,17 +1745,11 @@ def pending_bills():
 @app.route("/restore-bill/<int:id>")
 @login_required
 def restore_bill(id):
-    hb = HoldBill.query.get_or_404(id)
-    session["hold_bill"] = {
-        "customer": hb.customer,
-        "mobile": hb.mobile,
-        "doctor": hb.doctor,
-        "gender": hb.gender,
-        "cart": hb.data
-    }
-    db.session.delete(hb)
-    db.session.commit()
-    return redirect("/billing")
+    hb = HoldBill.query.get(id)
+    if not hb:
+        flash("Held bill not found.", "warning")
+        return redirect("/pending-bills")
+    return redirect(url_for("billing", hold_bill_id=hb.id))
 
 @app.route("/delete-hold/<int:id>")
 @login_required
@@ -1267,6 +1847,7 @@ def invoices():
 def view_invoice(id):
     inv = Invoice.query.get_or_404(id)
     items = InvoiceItem.query.filter_by(invoice_id=id).all()
+    rounded_total = round(inv.subtotal or 0)
 
     return render_template(
         "invoice.html",
@@ -1282,6 +1863,7 @@ def view_invoice(id):
         cgst=inv.cgst,
         sgst=inv.sgst,
         total=inv.total,
+        rounded_total=rounded_total,
         date=inv.created_at.strftime("%d-%m-%Y")
     )
 @app.route("/invoice/edit/<int:id>", methods=["GET", "POST"])
@@ -1503,11 +2085,46 @@ def vendor_reports():
     for v in vendors:
         total = db.session.query(db.func.sum(VendorPurchase.total_amount)).filter_by(vendor_id=v.id).scalar() or 0
         count = db.session.query(db.func.count(VendorPurchase.id)).filter_by(vendor_id=v.id).scalar() or 0
+        mrp_value = (
+            db.session.query(
+                db.func.coalesce(
+                    db.func.sum(
+                        (db.func.coalesce(VendorPurchaseItem.qty, 0) + db.func.coalesce(VendorPurchaseItem.free_qty, 0))
+                        * db.func.coalesce(VendorPurchaseItem.mrp, 0)
+                    ),
+                    0
+                )
+            )
+            .filter(
+                VendorPurchaseItem.vendor_id == v.id,
+                db.func.coalesce(VendorPurchaseItem.mrp, 0) > 0
+            )
+            .scalar()
+            or 0
+        )
+        cost_value = (
+            db.session.query(
+                db.func.coalesce(
+                    db.func.sum(db.func.coalesce(VendorPurchaseItem.total_value, 0)),
+                    0
+                )
+            )
+            .filter(
+                VendorPurchaseItem.vendor_id == v.id,
+                db.func.coalesce(VendorPurchaseItem.mrp, 0) > 0
+            )
+            .scalar()
+            or 0
+        )
+        margin_amount = mrp_value - cost_value
+        margin_percent = (margin_amount / mrp_value * 100) if mrp_value else 0
         purchase_summary.append({
             "vendor": v,
             "total": round(total, 2),
             "count": count,
-            "outstanding": round(v.outstanding_balance or 0, 2)
+            "outstanding": round(v.outstanding_balance or 0, 2),
+            "margin_amount": round(margin_amount, 2),
+            "margin_percent": round(margin_percent, 2)
         })
     return render_template("vendor_reports.html", purchase_summary=purchase_summary)
 
@@ -1726,6 +2343,7 @@ def add_vendor_purchase(id):
     companies = request.form.getlist("company")
     distributors = request.form.getlist("distributor_name")
     pack_types = request.form.getlist("pack_type")
+    pack_qtys = request.form.getlist("pack_qty")
     batches = request.form.getlist("batch")
     expiries = request.form.getlist("expiry")
     qtys = request.form.getlist("qty")
@@ -1756,6 +2374,8 @@ def add_vendor_purchase(id):
         company = (companies[idx] or "").strip() if idx < len(companies) else ""
         distributor_name = (distributors[idx] or "").strip() if idx < len(distributors) else ""
         pack_type = (pack_types[idx] or "").strip() if idx < len(pack_types) else ""
+        pack_qty_raw = (pack_qtys[idx] or "").strip() if idx < len(pack_qtys) else ""
+        pack_qty = parse_pack_qty(pack_qty_raw)
 
         if not name:
             continue
@@ -1764,6 +2384,12 @@ def add_vendor_purchase(id):
             return redirect(f"/vendor/edit/{vendor.id}")
         if qty <= 0:
             continue
+        if not pack_type:
+            flash(f"Pack type is required for {name}", "danger")
+            return redirect(f"/vendor/edit/{vendor.id}")
+        if not pack_qty_raw or pack_qty is None or pack_qty < 1:
+            flash(f"Pack quantity must be at least 1 for {name}", "danger")
+            return redirect(f"/vendor/edit/{vendor.id}")
 
         base_amount = qty * purchase_rate
         discount_amt = base_amount * discount_percent / 100
@@ -1782,6 +2408,7 @@ def add_vendor_purchase(id):
             "company": company,
             "distributor_name": distributor_name,
             "pack_type": pack_type,
+            "pack_qty": pack_qty,
             "batch": batch,
             "expiry": expiry,
             "qty": qty,
@@ -1803,10 +2430,11 @@ def add_vendor_purchase(id):
         invoice_no=invoice_no,
         payment_mode=payment_mode,
         payment_status=payment_status,
-        subtotal=round(subtotal, 2),
-        gst_total=round(gst_total, 2),
-        discount_total=round(discount_total, 2),
-        total_amount=round(total_amount, 2),
+        paid_amount=paid_amount,
+        subtotal=subtotal,
+        gst_total=gst_total,
+        discount_total=discount_total,
+        total_amount=total_amount,
         created_by=session.get("username")
     )
     db.session.add(purchase)
@@ -1821,6 +2449,7 @@ def add_vendor_purchase(id):
                 composition=item["composition"],
                 company=item["company"],
                 pack_type=item["pack_type"],
+                pack_qty=item["pack_qty"],
                 batch=item["batch"],
                 expiry=item["expiry"],
                 mrp=item["mrp"] or 0,
@@ -1840,6 +2469,8 @@ def add_vendor_purchase(id):
                 med.company = item["company"]
             if item["pack_type"]:
                 med.pack_type = item["pack_type"]
+            if item.get("pack_qty") is not None:
+                med.pack_qty = item["pack_qty"]
 
         old_stock = med.qty
         med.qty += item["qty"] + item["free_qty"]
@@ -1866,6 +2497,7 @@ def add_vendor_purchase(id):
             company=item["company"],
             distributor_name=item["distributor_name"],
             pack_type=item["pack_type"],
+            pack_qty=item["pack_qty"],
             batch=item["batch"],
             expiry=item["expiry"],
             qty=item["qty"],
@@ -1906,6 +2538,127 @@ def view_vendor_purchase(purchase_id):
         mode=mode
     )
 
+@app.route("/vendor/purchase/delete/<int:purchase_id>")
+@login_required
+def delete_vendor_purchase(purchase_id):
+    purchase = VendorPurchase.query.get_or_404(purchase_id)
+    vendor = Vendor.query.get(purchase.vendor_id)
+    items = VendorPurchaseItem.query.filter_by(purchase_id=purchase.id).all()
+    bill_no = purchase.invoice_no if purchase.invoice_no else (purchase.purchase_no or f"PB-{purchase.id:06d}")
+
+    linked_note = VendorNote.query.filter_by(reference_purchase_id=purchase.id).first()
+    if linked_note:
+        flash("Cannot delete this bill because vendor note entries are linked to it.", "danger")
+        return redirect(f"/vendor/edit/{purchase.vendor_id}")
+
+    item_ids = [it.id for it in items]
+    if item_ids:
+        linked_alloc = SalesAllocation.query.filter(SalesAllocation.purchase_item_id.in_(item_ids)).first()
+        if linked_alloc:
+            flash("Cannot delete this bill because invoice/return transactions are linked.", "danger")
+            return redirect(f"/vendor/edit/{purchase.vendor_id}")
+
+    for it in items:
+        total_qty = to_int(it.qty) + to_int(it.free_qty)
+        if total_qty <= 0:
+            continue
+        med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+        if not med:
+            med = find_medicine_by_name_batch(it.medicine_name, it.batch)
+        if not med:
+            flash(f"Cannot delete bill. Medicine missing: {it.medicine_name} ({it.batch})", "danger")
+            return redirect(f"/vendor/edit/{purchase.vendor_id}")
+        if to_int(med.qty) < total_qty:
+            flash(
+                f"Cannot delete bill. Stock already used for {med.name} ({med.batch}). "
+                "Return/cancel related sales first.",
+                "danger"
+            )
+            return redirect(f"/vendor/edit/{purchase.vendor_id}")
+
+    purchase_total = to_float(purchase.total_amount)
+    status = (purchase.payment_status or "").strip().lower()
+    raw_paid_amount = getattr(purchase, "paid_amount", None)
+    paid_amount = to_float(raw_paid_amount)
+    if paid_amount < 0:
+        paid_amount = 0
+    outstanding_reduction = purchase_total
+    legacy_partial_unknown = False
+    if status == "partial":
+        if raw_paid_amount is None:
+            legacy_partial_unknown = True
+            outstanding_reduction = 0
+        else:
+            outstanding_reduction = purchase_total - paid_amount
+    if outstanding_reduction < 0:
+        outstanding_reduction = 0
+
+    purchase_no = purchase.purchase_no or f"PB-{purchase.id:06d}"
+
+    for it in items:
+        total_qty = to_int(it.qty) + to_int(it.free_qty)
+        if total_qty <= 0:
+            continue
+        med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+        if not med:
+            med = find_medicine_by_name_batch(it.medicine_name, it.batch)
+        if not med:
+            continue
+        old_stock = to_int(med.qty)
+        med.qty = old_stock - total_qty
+        db.session.add(StockHistory(
+            medicine_id=med.id,
+            medicine_name=med.name,
+            batch=med.batch,
+            action="PURCHASE_DELETE",
+            stock_before=old_stock,
+            qty_change=-total_qty,
+            stock_after=med.qty,
+            user=session.get("username"),
+            remark=f"Purchase bill deleted {bill_no}",
+            ref_table="vendor_purchase",
+            ref_id=purchase.id
+        ))
+
+    if vendor:
+        vendor.total_purchases = max((vendor.total_purchases or 0) - purchase_total, 0)
+        if status == "unpaid":
+            vendor.outstanding_balance = max((vendor.outstanding_balance or 0) - outstanding_reduction, 0)
+        elif status == "partial" and not legacy_partial_unknown:
+            vendor.outstanding_balance = max((vendor.outstanding_balance or 0) - outstanding_reduction, 0)
+        latest_purchase = VendorPurchase.query.filter(
+            VendorPurchase.vendor_id == vendor.id,
+            VendorPurchase.id != purchase.id
+        ).order_by(VendorPurchase.purchase_date.desc(), VendorPurchase.id.desc()).first()
+        vendor.last_purchase_date = latest_purchase.purchase_date.date() if latest_purchase and latest_purchase.purchase_date else None
+        if (vendor.outstanding_balance or 0) <= 0:
+            vendor.payment_status = "Paid"
+        elif latest_purchase and latest_purchase.payment_status:
+            vendor.payment_status = latest_purchase.payment_status
+
+    StockHistory.query.filter(
+        StockHistory.action == "PURCHASE",
+        StockHistory.remark.like(f"Purchase {purchase_no}%")
+    ).delete(synchronize_session=False)
+    if item_ids:
+        StockHistory.query.filter(
+            StockHistory.action == "PURCHASE_EDIT",
+            StockHistory.remark.in_([f"Purchase item {item_id} edited" for item_id in item_ids])
+        ).delete(synchronize_session=False)
+
+    VendorLedgerEntry.query.filter_by(ref_table="vendor_purchase", ref_id=purchase.id).delete(synchronize_session=False)
+    VendorPurchaseItem.query.filter_by(purchase_id=purchase.id).delete(synchronize_session=False)
+    db.session.delete(purchase)
+
+    db.session.commit()
+    if legacy_partial_unknown:
+        flash(
+            f"Bill {bill_no} deleted. Outstanding balance for old partial bill was not auto-adjusted (paid amount missing).",
+            "warning"
+        )
+    flash(f"Bill {bill_no} deleted. Linked purchase entries and stock updates removed.", "warning")
+    return redirect(f"/vendor/edit/{purchase.vendor_id}")
+
 @app.route("/vendor/purchase-item/edit/<int:item_id>", methods=["GET", "POST"])
 @login_required
 def edit_vendor_purchase_item(item_id):
@@ -1928,6 +2681,8 @@ def edit_vendor_purchase_item(item_id):
         company = (request.form.get("company") or "").strip()
         distributor_name = (request.form.get("distributor_name") or "").strip()
         pack_type = (request.form.get("pack_type") or "").strip()
+        pack_qty_raw = (request.form.get("pack_qty") or "").strip()
+        pack_qty = parse_pack_qty(pack_qty_raw)
         batch = (request.form.get("batch") or "").strip()
         expiry_raw = (request.form.get("expiry") or "").strip()
         expiry = normalize_expiry(expiry_raw)
@@ -1946,6 +2701,9 @@ def edit_vendor_purchase_item(item_id):
             return redirect(request.url)
         if qty <= 0:
             flash("Quantity must be greater than 0", "danger")
+            return redirect(request.url)
+        if pack_qty_raw and (pack_qty is None or pack_qty < 1):
+            flash("Pack quantity must be at least 1", "danger")
             return redirect(request.url)
 
         new_total_qty = qty + free_qty
@@ -1981,12 +2739,16 @@ def edit_vendor_purchase_item(item_id):
             med.company = company
             med.pack_type = pack_type
             med.discount_percent = int(discount_percent or 0)
+            if pack_qty_raw:
+                med.pack_qty = pack_qty
 
         item.medicine_name = name
         item.composition = composition
         item.company = company
         item.distributor_name = distributor_name
         item.pack_type = pack_type
+        if pack_qty_raw:
+            item.pack_qty = pack_qty
         item.batch = batch
         item.expiry = expiry
         item.qty = qty
@@ -1996,19 +2758,19 @@ def edit_vendor_purchase_item(item_id):
         item.mrp = mrp
         item.gst_percent = gst_percent
         item.discount_percent = discount_percent
-        item.total_value = round(new_total, 2)
+        item.total_value = new_total
 
         if purchase:
-            purchase.subtotal = round(max((purchase.subtotal or 0) - old_taxable + new_taxable, 0), 2)
-            purchase.gst_total = round(max((purchase.gst_total or 0) - old_gst + new_gst, 0), 2)
-            purchase.discount_total = round(max((purchase.discount_total or 0) - old_discount + new_discount, 0), 2)
-            purchase.total_amount = round(max((purchase.total_amount or 0) - old_total + new_total, 0), 2)
+            purchase.subtotal = max((purchase.subtotal or 0) - old_taxable + new_taxable, 0)
+            purchase.gst_total = max((purchase.gst_total or 0) - old_gst + new_gst, 0)
+            purchase.discount_total = max((purchase.discount_total or 0) - old_discount + new_discount, 0)
+            purchase.total_amount = max((purchase.total_amount or 0) - old_total + new_total, 0)
 
         if vendor:
             delta_total = new_total - old_total
-            vendor.total_purchases = round((vendor.total_purchases or 0) + delta_total, 2)
+            vendor.total_purchases = (vendor.total_purchases or 0) + delta_total
             if purchase and (purchase.payment_status or "").lower() in ("unpaid", "partial"):
-                vendor.outstanding_balance = round((vendor.outstanding_balance or 0) + delta_total, 2)
+                vendor.outstanding_balance = (vendor.outstanding_balance or 0) + delta_total
 
         if diff_total_qty != 0 and med:
             history = StockHistory(
@@ -2036,6 +2798,373 @@ def edit_vendor_purchase_item(item_id):
         sold_qty=sold_qty
     )
 
+
+# ---------------- VENDOR NOTES (DEBIT/CREDIT) ----------------
+@app.route("/api/vendor-notes", methods=["POST"])
+@login_required
+def api_create_vendor_note():
+    data = request.get_json(silent=True) or {}
+    note_type = (data.get("note_type") or "").strip().upper()
+    if note_type not in ("DEBIT", "CREDIT"):
+        return jsonify({"error": "Invalid note_type"}), 400
+
+    vendor_id = data.get("vendor_id")
+    vendor = Vendor.query.get(vendor_id) if vendor_id else None
+    if not vendor:
+        return jsonify({"error": "Invalid vendor_id"}), 400
+
+    note_date = parse_date(data.get("note_date"))
+    if not note_date:
+        return jsonify({"error": "note_date is required (YYYY-MM-DD)"}), 400
+
+    reference_purchase_id = data.get("reference_purchase_id")
+    if reference_purchase_id:
+        purchase = VendorPurchase.query.get(reference_purchase_id)
+        if not purchase:
+            return jsonify({"error": "Invalid reference_purchase_id"}), 400
+
+    note = VendorNote(
+        note_no=generate_vendor_note_no(note_type),
+        note_type=note_type,
+        vendor_id=vendor.id,
+        reference_purchase_id=reference_purchase_id,
+        supplier_bill_no=(data.get("supplier_bill_no") or "").strip() or None,
+        note_date=note_date,
+        status="DRAFT",
+        reason_code=(data.get("reason_code") or "").strip() or None,
+        reason_text=(data.get("reason_text") or "").strip() or None,
+        remarks=(data.get("remarks") or "").strip() or None,
+        created_by=session.get("username"),
+        created_at=datetime.utcnow()
+    )
+
+    mode = (data.get("mode") or "").strip().upper()
+    if note_type == "CREDIT" and mode == "AMOUNT_ONLY":
+        amount = data.get("grand_total") if "grand_total" in data else data.get("amount")
+        amount_dec = quantize_decimal(amount or 0, "0.0001")
+        note.subtotal = amount_dec
+        note.gst_total = quantize_decimal(0, "0.0001")
+        note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
+        note.grand_total = quantize_decimal(note.subtotal + note.round_off, "0.0001")
+
+    db.session.add(note)
+    db.session.commit()
+    return jsonify(vendor_note_to_dict(note)), 201
+
+
+@app.route("/api/vendor-notes/<int:note_id>/items", methods=["PUT"])
+@login_required
+def api_update_vendor_note_items(note_id):
+    note = VendorNote.query.get_or_404(note_id)
+    if note.status != "DRAFT":
+        return jsonify({"error": "Only DRAFT notes can be edited"}), 400
+
+    data = request.get_json(silent=True) or {}
+    items = data.get("items") or []
+
+    if note.note_type == "DEBIT" and not items:
+        return jsonify({"error": "DEBIT note requires items"}), 400
+
+    if items:
+        for idx, raw in enumerate(items):
+            med_id = raw.get("medicine_id")
+            if not med_id:
+                return jsonify({"error": f"medicine_id missing at item {idx+1}"}), 400
+            if note.note_type == "DEBIT" and not (raw.get("batch_no") or "").strip():
+                return jsonify({"error": f"batch_no required at item {idx+1}"}), 400
+            qty = int(raw.get("qty") or 0)
+            if qty <= 0:
+                return jsonify({"error": f"qty must be > 0 at item {idx+1}"}), 400
+
+        subtotal, gst_total, prepared = compute_vendor_note_totals(items)
+        with db.session.begin():
+            VendorNoteItem.query.filter_by(note_id=note.id).delete()
+            for idx, raw in enumerate(items):
+                prepared_item = prepared[idx]
+                item = VendorNoteItem(
+                    note_id=note.id,
+                    medicine_id=raw.get("medicine_id"),
+                    batch_no=(raw.get("batch_no") or "").strip() or None,
+                    expiry=(raw.get("expiry") or "").strip() or None,
+                    qty=prepared_item["qty"],
+                    free_qty=prepared_item["free_qty"],
+                    purchase_rate=prepared_item["purchase_rate"],
+                    mrp=quantize_decimal(raw.get("mrp") or 0, "0.0001"),
+                    gst_percent=prepared_item["gst_percent"],
+                    disc_percent=prepared_item["disc_percent"],
+                    line_total=prepared_item["line_total"],
+                    hsn=(raw.get("hsn") or "").strip() or None
+                )
+                db.session.add(item)
+
+            note.subtotal = subtotal
+            note.gst_total = gst_total
+            if "round_off" in data:
+                note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
+            note.grand_total = quantize_decimal(note.subtotal + note.gst_total + to_decimal(note.round_off), "0.0001")
+            db.session.add(note)
+    else:
+        # Amount-only credit note
+        amount = data.get("grand_total") if "grand_total" in data else data.get("amount")
+        amount_dec = quantize_decimal(amount or 0, "0.0001")
+        with db.session.begin():
+            VendorNoteItem.query.filter_by(note_id=note.id).delete()
+            note.subtotal = amount_dec
+            note.gst_total = quantize_decimal(0, "0.0001")
+            if "round_off" in data:
+                note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
+            note.grand_total = quantize_decimal(note.subtotal + to_decimal(note.round_off), "0.0001")
+            db.session.add(note)
+
+    db.session.commit()
+    return jsonify(vendor_note_to_dict(note, include_items=True)), 200
+
+
+@app.route("/api/vendor-notes/<int:note_id>/post", methods=["POST"])
+@login_required
+def api_post_vendor_note(note_id):
+    note = VendorNote.query.get_or_404(note_id)
+    if note.status != "DRAFT":
+        return jsonify({"error": "Only DRAFT notes can be posted"}), 400
+
+    items = VendorNoteItem.query.filter_by(note_id=note.id).all()
+
+    if note.note_type == "DEBIT":
+        if not items:
+            return jsonify({"error": "DEBIT note requires items"}), 400
+        adjustments = []
+        allocations = []
+        for it in items:
+            if not it.batch_no:
+                return jsonify({"error": "batch_no required for DEBIT note"}), 400
+            total_qty = to_int(it.qty) + to_int(it.free_qty)
+            if total_qty <= 0:
+                return jsonify({"error": "qty must be > 0"}), 400
+            med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+            if not med:
+                return jsonify({"error": "Invalid medicine_id in items"}), 400
+            if to_int(med.qty) < total_qty:
+                return jsonify({"error": f"Insufficient stock for {med.name} ({med.batch})"}), 400
+
+            purchase_items = get_purchase_items_for_return(
+                med,
+                batch_no=it.batch_no,
+                reference_purchase_id=note.reference_purchase_id
+            )
+            available = sum(to_int(p.remaining_qty) for p in purchase_items)
+            if available < total_qty:
+                return jsonify({"error": f"Return qty exceeds available purchase stock for {med.name} ({med.batch})"}), 400
+
+            remaining = total_qty
+            for pi in purchase_items:
+                if remaining <= 0:
+                    break
+                avail = to_int(pi.remaining_qty)
+                if avail <= 0:
+                    continue
+                take = avail if avail <= remaining else remaining
+                allocations.append((it, pi, take))
+                remaining -= take
+            adjustments.append((med, total_qty))
+
+        with db.session.begin():
+            for med, total_qty in adjustments:
+                old_qty = med.qty
+                med.qty = to_int(med.qty) - total_qty
+                history = StockHistory(
+                    medicine_id=med.id,
+                    medicine_name=med.name,
+                    batch=med.batch,
+                    action="V_DEBIT_NOTE",
+                    stock_before=old_qty,
+                    qty_change=-total_qty,
+                    stock_after=med.qty,
+                    user=session.get("username"),
+                    remark=f"Vendor debit note {note.note_no}",
+                    ref_table="vendor_notes",
+                    ref_id=note.id
+                )
+                db.session.add(history)
+
+            for it, pi, take in allocations:
+                pi.remaining_qty = to_int(pi.remaining_qty) - take
+                db.session.add(VendorNoteAllocation(
+                    note_id=note.id,
+                    note_item_id=it.id,
+                    purchase_item_id=pi.id,
+                    qty=take
+                ))
+
+            db.session.add(VendorLedgerEntry(
+                vendor_id=note.vendor_id,
+                txn_date=datetime.utcnow(),
+                txn_type="DEBIT_NOTE",
+                ref_table="vendor_notes",
+                ref_id=note.id,
+                debit=quantize_decimal(note.grand_total or 0, "0.0001"),
+                credit=quantize_decimal(0, "0.0001"),
+                notes=f"Vendor debit note {note.note_no}"
+            ))
+
+            note.status = "POSTED"
+            note.posted_at = datetime.utcnow()
+            db.session.add(note)
+
+    elif note.note_type == "CREDIT":
+        if to_decimal(note.grand_total) <= 0:
+            return jsonify({"error": "grand_total must be > 0"}), 400
+        with db.session.begin():
+            db.session.add(VendorLedgerEntry(
+                vendor_id=note.vendor_id,
+                txn_date=datetime.utcnow(),
+                txn_type="CREDIT_NOTE",
+                ref_table="vendor_notes",
+                ref_id=note.id,
+                debit=quantize_decimal(note.grand_total or 0, "0.0001"),
+                credit=quantize_decimal(0, "0.0001"),
+                notes=f"Vendor credit note {note.note_no}"
+            ))
+
+            note.status = "POSTED"
+            note.posted_at = datetime.utcnow()
+            db.session.add(note)
+
+    db.session.commit()
+    return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
+
+
+@app.route("/api/vendor-notes/<int:note_id>/cancel", methods=["POST"])
+@login_required
+def api_cancel_vendor_note(note_id):
+    note = VendorNote.query.get_or_404(note_id)
+    if note.status != "POSTED":
+        return jsonify({"error": "Only POSTED notes can be cancelled"}), 400
+
+    data = request.get_json(silent=True) or {}
+    cancel_reason = (data.get("cancel_reason") or "").strip() or None
+
+    items = VendorNoteItem.query.filter_by(note_id=note.id).all()
+    allocations = VendorNoteAllocation.query.filter_by(note_id=note.id).all()
+
+    with db.session.begin():
+        if note.note_type == "DEBIT":
+            for it in items:
+                total_qty = to_int(it.qty) + to_int(it.free_qty)
+                if total_qty <= 0:
+                    continue
+                med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                if not med:
+                    continue
+                old_qty = med.qty
+                med.qty = to_int(med.qty) + total_qty
+                history = StockHistory(
+                    medicine_id=med.id,
+                    medicine_name=med.name,
+                    batch=med.batch,
+                    action="V_NOTE_REV",
+                    stock_before=old_qty,
+                    qty_change=total_qty,
+                    stock_after=med.qty,
+                    user=session.get("username"),
+                    remark=f"Debit note cancel {note.note_no}",
+                    ref_table="vendor_notes",
+                    ref_id=note.id
+                )
+                db.session.add(history)
+
+            if allocations:
+                for alloc in allocations:
+                    pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                    if not pi:
+                        continue
+                    pi.remaining_qty = to_int(pi.remaining_qty) + to_int(alloc.qty)
+            else:
+                for it in items:
+                    total_qty = to_int(it.qty) + to_int(it.free_qty)
+                    if total_qty <= 0:
+                        continue
+                    med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                    if not med:
+                        continue
+                    purchase_items = get_purchase_items_for_return(
+                        med,
+                        batch_no=it.batch_no,
+                        reference_purchase_id=note.reference_purchase_id
+                    )
+                    remaining = total_qty
+                    for pi in purchase_items:
+                        if remaining <= 0:
+                            break
+                        take = remaining
+                        pi.remaining_qty = to_int(pi.remaining_qty) + take
+                        remaining -= take
+
+        db.session.add(VendorLedgerEntry(
+            vendor_id=note.vendor_id,
+            txn_date=datetime.utcnow(),
+            txn_type="REVERSAL",
+            ref_table="vendor_notes",
+            ref_id=note.id,
+            debit=quantize_decimal(0, "0.0001"),
+            credit=quantize_decimal(note.grand_total or 0, "0.0001"),
+            notes=f"Reversal of {note.note_no}"
+        ))
+
+        note.status = "CANCELLED"
+        note.cancelled_at = datetime.utcnow()
+        note.cancel_reason = cancel_reason
+        db.session.add(note)
+
+    db.session.commit()
+    return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
+
+
+@app.route("/api/vendor-notes", methods=["GET"])
+@login_required
+def api_list_vendor_notes():
+    vendor_id = request.args.get("vendor_id")
+    note_type = (request.args.get("type") or "").strip().upper()
+    status = (request.args.get("status") or "").strip().upper()
+    date_from = parse_date(request.args.get("date_from"))
+    date_to = parse_date(request.args.get("date_to"))
+    q = (request.args.get("q") or "").strip()
+    page = int(request.args.get("page") or 1)
+    per_page = int(request.args.get("per_page") or 50)
+
+    query = VendorNote.query
+    if vendor_id:
+        query = query.filter(VendorNote.vendor_id == int(vendor_id))
+    if note_type:
+        query = query.filter(VendorNote.note_type == note_type)
+    if status:
+        query = query.filter(VendorNote.status == status)
+    if date_from:
+        query = query.filter(VendorNote.note_date >= date_from)
+    if date_to:
+        query = query.filter(VendorNote.note_date <= date_to)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(
+            VendorNote.note_no.ilike(like),
+            VendorNote.supplier_bill_no.ilike(like)
+        ))
+
+    total = query.count()
+    notes = query.order_by(VendorNote.note_date.desc(), VendorNote.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    return jsonify({
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "data": [vendor_note_to_dict(n) for n in notes]
+    }), 200
+
+
+@app.route("/api/vendor-notes/<int:note_id>", methods=["GET"])
+@login_required
+def api_view_vendor_note(note_id):
+    note = VendorNote.query.get_or_404(note_id)
+    return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
+
 @app.route("/vendor/delete/<int:id>")
 @login_required
 def delete_vendor(id):
@@ -2054,6 +3183,209 @@ def delete_vendor(id):
 def customer():
     return "<h2>Customer Master – Coming Soon</h2>"
 
+@app.route("/appointments")
+@login_required
+def appointments():
+    selected_date = parse_date(request.args.get("date")) or date.today()
+    selected_status = (request.args.get("status") or "ALL").strip().upper()
+    q = (request.args.get("q") or "").strip()
+
+    query = Appointment.query.filter(Appointment.appointment_date == selected_date)
+    if selected_status and selected_status != "ALL":
+        query = query.filter(Appointment.status == selected_status)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(
+            Appointment.appointment_no.ilike(like),
+            Appointment.patient_name.ilike(like),
+            Appointment.mobile.ilike(like),
+            Appointment.doctor_name.ilike(like)
+        ))
+
+    appointments = query.order_by(Appointment.appointment_time.asc(), Appointment.id.asc()).all()
+
+    status_counts = {status: 0 for status in APPOINTMENT_STATUSES}
+    daily_appointments = Appointment.query.filter(
+        Appointment.appointment_date == selected_date
+    ).all()
+    for item in daily_appointments:
+        if item.status in status_counts:
+            status_counts[item.status] += 1
+
+    return render_template(
+        "appointments.html",
+        appointments=appointments,
+        selected_date=selected_date.isoformat(),
+        selected_status=selected_status,
+        q=q,
+        status_counts=status_counts,
+        all_statuses=APPOINTMENT_STATUSES
+    )
+
+@app.route("/appointments/add", methods=["GET", "POST"])
+@login_required
+def add_appointment():
+    doctor_names = get_doctor_suggestions()
+    form_data = {
+        "patient_name": "",
+        "mobile": "",
+        "doctor_name": "",
+        "appointment_date": date.today().isoformat(),
+        "appointment_time": "",
+        "payment_mode": "CASH",
+        "doctor_discount": "0",
+        "consultation_fee": "0",
+        "reason": "",
+        "notes": ""
+    }
+
+    if request.method == "POST":
+        form_data["patient_name"] = (request.form.get("patient_name") or "").strip()
+        form_data["mobile"] = (request.form.get("mobile") or "").strip()
+        form_data["doctor_name"] = (request.form.get("doctor_name") or "").strip()
+        form_data["appointment_date"] = (request.form.get("appointment_date") or "").strip()
+        form_data["appointment_time"] = (request.form.get("appointment_time") or "").strip()
+        form_data["payment_mode"] = (request.form.get("payment_mode") or "CASH").strip().upper()
+        form_data["doctor_discount"] = (request.form.get("doctor_discount") or "0").strip()
+        form_data["consultation_fee"] = (request.form.get("consultation_fee") or "0").strip()
+        form_data["reason"] = (request.form.get("reason") or "").strip()
+        form_data["notes"] = (request.form.get("notes") or "").strip()
+
+        appt_date = parse_date(form_data["appointment_date"])
+        appt_time = parse_time_value(form_data["appointment_time"])
+
+        if not form_data["patient_name"] or not form_data["doctor_name"] or not appt_date or not appt_time:
+            flash("Patient, doctor, appointment date and time are required.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+
+        if form_data["mobile"] and not form_data["mobile"].isdigit():
+            flash("Mobile number should contain digits only.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+
+        if form_data["payment_mode"] not in APPOINTMENT_PAYMENT_MODES:
+            flash("Invalid payment mode selected.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+
+        try:
+            doctor_discount = float(form_data["doctor_discount"] or 0)
+        except ValueError:
+            flash("Doctor discount amount should be a valid number.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+        if doctor_discount < 0:
+            flash("Doctor discount amount cannot be negative.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+
+        try:
+            consultation_fee = float(form_data["consultation_fee"] or 0)
+        except ValueError:
+            flash("Consultation fee should be a valid number.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+        if consultation_fee < 0:
+            flash("Consultation fee cannot be negative.", "danger")
+            return render_template(
+                "add_appointment.html",
+                doctor_names=doctor_names,
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES
+            )
+
+        appointment = Appointment(
+            appointment_no=generate_appointment_no(),
+            patient_name=form_data["patient_name"],
+            mobile=form_data["mobile"],
+            doctor_name=form_data["doctor_name"],
+            appointment_date=appt_date,
+            appointment_time=appt_time,
+            payment_mode=form_data["payment_mode"],
+            doctor_discount=doctor_discount,
+            consultation_fee=consultation_fee,
+            status="BOOKED",
+            reason=form_data["reason"],
+            notes=form_data["notes"],
+            created_by=session.get("username")
+        )
+        db.session.add(appointment)
+        db.session.commit()
+
+        flash("Appointment booked successfully.", "success")
+        return redirect(url_for("appointments", date=appt_date.isoformat()))
+
+    return render_template(
+        "add_appointment.html",
+        doctor_names=doctor_names,
+        form_data=form_data,
+        payment_modes=APPOINTMENT_PAYMENT_MODES
+    )
+
+@app.route("/appointments/<int:id>/status", methods=["POST"])
+@login_required
+def update_appointment_status(id):
+    appointment = Appointment.query.get_or_404(id)
+    new_status = (request.form.get("status") or "").strip().upper()
+
+    if new_status not in APPOINTMENT_STATUSES:
+        flash("Invalid appointment status.", "danger")
+        return redirect(request.referrer or url_for("appointments"))
+
+    now = datetime.utcnow()
+    appointment.status = new_status
+    if new_status == "CHECKED_IN":
+        appointment.checked_in_at = appointment.checked_in_at or now
+    elif new_status == "COMPLETED":
+        appointment.completed_at = now
+        appointment.checked_in_at = appointment.checked_in_at or now
+    elif new_status == "CANCELLED":
+        appointment.cancelled_at = now
+
+    db.session.commit()
+    flash("Appointment status updated.", "success")
+    return redirect(
+        request.referrer or url_for(
+            "appointments",
+            date=(appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat())
+        )
+    )
+
+@app.route("/appointments/delete/<int:id>", methods=["POST"])
+@login_required
+def delete_appointment(id):
+    appointment = Appointment.query.get_or_404(id)
+    selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
+    db.session.delete(appointment)
+    db.session.commit()
+    flash("Appointment deleted successfully.", "success")
+    return redirect(request.referrer or url_for("appointments", date=selected_date))
+
 @app.route("/reports", methods=["GET", "POST"])
 @login_required
 def reports():
@@ -2069,7 +3401,6 @@ def reports():
     profit_summary = None
 
     report_type = request.form.get("report_type")
-
     if request.method == "POST":
 
         # DAILY
@@ -2127,11 +3458,13 @@ def reports():
             else:
                 start = datetime.strptime(from_date, "%Y-%m-%d")
                 end = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                sales_total = db.session.query(db.func.coalesce(db.func.sum(Invoice.total), 0)).filter(
+                sales_total = db.session.query(db.func.coalesce(db.func.sum(Invoice.subtotal), 0)).filter(
                     Invoice.created_at >= start,
                     Invoice.created_at < end
                 ).scalar() or 0
-                returns_total = db.session.query(db.func.coalesce(db.func.sum(Return.total_refund), 0)).filter(
+                returns_total = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.net_amount), 0)).join(
+                    Return, ReturnItem.return_id == Return.id
+                ).filter(
                     Return.created_at >= start,
                     Return.created_at < end,
                     Return.is_cancelled == False
@@ -2153,6 +3486,7 @@ def reports():
                 net_sales = sales_total - returns_total
                 net_cogs = cogs - return_cogs
                 gross_profit = net_sales - net_cogs
+                gross_profit_percentage = (gross_profit / net_sales * 100) if net_sales else 0
 
                 profit_summary = {
                     "from_date": from_date,
@@ -2163,7 +3497,8 @@ def reports():
                     "cogs": round(cogs, 2),
                     "return_cogs": round(return_cogs, 2),
                     "net_cogs": round(net_cogs, 2),
-                    "gross_profit": round(gross_profit, 2)
+                    "gross_profit": round(gross_profit, 2),
+                    "gross_profit_percentage": round(gross_profit_percentage, 2)
                 }
 
         total = sum(i.total for i in invoices)
@@ -2197,7 +3532,8 @@ def export_excel():
         "Patient Name": i.customer,
         "Mobile": i.mobile,
         "Date": i.created_at.strftime("%d-%m-%Y"),
-        "Total": i.total,
+        "Total (ex GST)": i.subtotal,
+        "Payment Mode": i.payment_mode,
         "User": i.created_by
     } for i in invoices]
 
@@ -2251,9 +3587,15 @@ def add_user():
     if request.method == "POST":
         can_edit_invoice = bool(request.form.get("can_edit_invoice"))
         can_delete_invoice = bool(request.form.get("can_delete_invoice"))
+        username = (request.form.get("username") or "").strip()
+        role = (request.form.get("role") or "user").strip()
+        password = request.form.get("password") or ""
+        if not username or not password:
+            flash("Username and password are required", "danger")
+            return redirect("/users/add")
         user = User(
-            username=request.form["username"],
-            role=request.form["role"],
+            username=username,
+            role=role,
             can_view_medicine=bool(request.form.get("can_view_medicine")),
             can_add_medicine=bool(request.form.get("can_add_medicine")),
             can_edit_medicine=bool(request.form.get("can_edit_medicine")),
@@ -2265,7 +3607,7 @@ def add_user():
             can_view_reports=bool(request.form.get("can_view_reports")),
             can_manage_users=bool(request.form.get("can_manage_users"))
             )
-        user.set_password(request.form["password"])
+        user.set_password(password)
         
         db.session.add(user)
         db.session.commit()
@@ -2280,7 +3622,15 @@ def change_user_password(user_id):
     user = User.query.get_or_404(user_id)
 
     if request.method == "POST":
-        user.set_password(request.form["password"])
+        new_password = (request.form.get("new_password") or request.form.get("password") or "").strip()
+        confirm_password = (request.form.get("confirm_password") or "").strip()
+        if not new_password:
+            flash("Password is required", "danger")
+            return redirect(request.url)
+        if confirm_password and new_password != confirm_password:
+            flash("New password and confirm password do not match", "danger")
+            return redirect(request.url)
+        user.set_password(new_password)
         db.session.commit()
         flash("Password updated")
         return redirect("/users")
@@ -2337,12 +3687,22 @@ def export_medicines():
 
     data = []
     for m in medicines:
+        pack_display = ""
+        if m.pack_type and m.pack_qty:
+            pack_display = f"{m.pack_type} of {m.pack_qty}"
+        elif m.pack_type:
+            pack_display = m.pack_type
+        elif m.pack_qty:
+            pack_display = str(m.pack_qty)
         data.append({
             "Medicine Name": m.name,
             "Batch": m.batch,
             "Expiry (MM/YYYY)": f"{m.expiry[5:7]}/{m.expiry[0:4]}",
             "MRP": m.mrp,
-            "Stock": m.qty
+            "Stock": m.qty,
+            "Pack Type": m.pack_type,
+            "Pack Qty": m.pack_qty,
+            "Pack": pack_display
         })
 
     df = pd.DataFrame(data)
@@ -2357,19 +3717,18 @@ def export_low_stock():
     import pandas as pd
     from flask import send_file
 
-    LOW_STOCK_LIMIT = 5   # 🔴 yaha se control hoga
-
-    meds = Medicine.query.filter(Medicine.qty <= LOW_STOCK_LIMIT).all()
+    meds = get_low_stock_items(limit=LOW_STOCK_LIMIT)
 
     data = []
     for m in meds:
+        mrp_value = m["mrp"] if m["mrp"] is not None else "Multiple"
         data.append({
-            "Medicine Name": m.name,
-            "Batch": m.batch,
-            "Current Stock": m.qty,
-            "MRP": m.mrp,
-            "Expiry": m.expiry,
-            "Suggested Order Qty": max(10 - m.qty, 0)
+            "Medicine Name": m["name"],
+            "Batch": m["batch"],
+            "Current Stock": m["stock"],
+            "MRP": mrp_value,
+            "Expiry": m["expiry"],
+            "Suggested Order Qty": m["suggested"]
         })
 
     df = pd.DataFrame(data)
@@ -2471,4 +3830,3 @@ def delete_stock_history(id):
 # ---------------- RUN ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-

@@ -46,6 +46,7 @@ class Medicine(db.Model):
     composition = db.Column(db.String(255))
     company = db.Column(db.String(150))
     pack_type = db.Column(db.String(50))
+    pack_qty = db.Column(db.Integer)
     batch = db.Column(db.String(50), nullable=False)
     expiry = db.Column(db.String(10), nullable=False)
     mrp = db.Column(db.Float, nullable=False)
@@ -158,6 +159,34 @@ class HoldBill(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+# ================= APPOINTMENT =================
+class Appointment(db.Model):
+    __tablename__ = "appointment"
+
+    id = db.Column(db.Integer, primary_key=True)
+    appointment_no = db.Column(db.String(30), unique=True, index=True)
+
+    patient_name = db.Column(db.String(120), nullable=False)
+    mobile = db.Column(db.String(20))
+    doctor_name = db.Column(db.String(120), nullable=False)
+
+    appointment_date = db.Column(db.Date, nullable=False, index=True)
+    appointment_time = db.Column(db.Time, nullable=False)
+    payment_mode = db.Column(db.String(20), default="CASH")
+    doctor_discount = db.Column(db.Float, default=0)
+    consultation_fee = db.Column(db.Float, default=0)
+
+    status = db.Column(db.String(20), default="BOOKED", index=True)
+    reason = db.Column(db.String(255))
+    notes = db.Column(db.Text)
+
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    checked_in_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    cancelled_at = db.Column(db.DateTime)
+
+
 # ================= STOCK HISTORY =================
 class StockHistory(db.Model):
     __tablename__ = "stock_history"
@@ -177,6 +206,8 @@ class StockHistory(db.Model):
 
     remark = db.Column(db.String(255))
     user = db.Column(db.String(50))
+    ref_table = db.Column(db.String(50))
+    ref_id = db.Column(db.Integer)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -236,6 +267,7 @@ class VendorPurchase(db.Model):
     purchase_date = db.Column(db.DateTime, default=datetime.utcnow)
     payment_mode = db.Column(db.String(30))
     payment_status = db.Column(db.String(30))
+    paid_amount = db.Column(db.Float, default=0)
     subtotal = db.Column(db.Float, default=0)
     gst_total = db.Column(db.Float, default=0)
     discount_total = db.Column(db.Float, default=0)
@@ -256,6 +288,7 @@ class VendorPurchaseItem(db.Model):
     company = db.Column(db.String(150))
     distributor_name = db.Column(db.String(150))
     pack_type = db.Column(db.String(50))
+    pack_qty = db.Column(db.Integer)
     batch = db.Column(db.String(50))
     expiry = db.Column(db.String(10))
     qty = db.Column(db.Integer, default=0)
@@ -267,6 +300,76 @@ class VendorPurchaseItem(db.Model):
     discount_percent = db.Column(db.Float, default=0)
     total_value = db.Column(db.Float, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ================= VENDOR NOTES (DEBIT/CREDIT) =================
+class VendorNote(db.Model):
+    __tablename__ = "vendor_notes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_no = db.Column(db.String(40), unique=True, nullable=False)
+    note_type = db.Column(db.String(10), nullable=False)  # DEBIT / CREDIT
+    vendor_id = db.Column(db.Integer, db.ForeignKey("vendor.id"), nullable=False, index=True)
+    reference_purchase_id = db.Column(db.Integer, db.ForeignKey("vendor_purchase.id"), index=True)
+    supplier_bill_no = db.Column(db.String(60))
+    note_date = db.Column(db.Date, nullable=False, index=True)
+    status = db.Column(db.String(20), default="DRAFT")
+    reason_code = db.Column(db.String(30))
+    reason_text = db.Column(db.String(255))
+    subtotal = db.Column(db.Numeric(12, 4), default=0)
+    gst_total = db.Column(db.Numeric(12, 4), default=0)
+    round_off = db.Column(db.Numeric(12, 4), default=0)
+    grand_total = db.Column(db.Numeric(12, 4), default=0)
+    remarks = db.Column(db.Text)
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    posted_at = db.Column(db.DateTime)
+    cancelled_at = db.Column(db.DateTime)
+    cancel_reason = db.Column(db.Text)
+
+
+class VendorNoteItem(db.Model):
+    __tablename__ = "vendor_note_items"
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.Integer, db.ForeignKey("vendor_notes.id"), nullable=False, index=True)
+    medicine_id = db.Column(db.Integer, db.ForeignKey("medicine.id"), index=True)
+    batch_no = db.Column(db.String(50))
+    expiry = db.Column(db.String(10))
+    qty = db.Column(db.Integer)
+    free_qty = db.Column(db.Integer, default=0)
+    purchase_rate = db.Column(db.Numeric(12, 4), default=0)
+    mrp = db.Column(db.Numeric(12, 4))
+    gst_percent = db.Column(db.Numeric(5, 2))
+    disc_percent = db.Column(db.Numeric(5, 2))
+    line_total = db.Column(db.Numeric(12, 4), default=0)
+    hsn = db.Column(db.String(30))
+
+
+class VendorNoteAllocation(db.Model):
+    __tablename__ = "vendor_note_allocations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.Integer, db.ForeignKey("vendor_notes.id"), nullable=False, index=True)
+    note_item_id = db.Column(db.Integer, db.ForeignKey("vendor_note_items.id"), nullable=False, index=True)
+    purchase_item_id = db.Column(db.Integer, db.ForeignKey("vendor_purchase_item.id"), nullable=False, index=True)
+    qty = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class VendorLedgerEntry(db.Model):
+    __tablename__ = "vendor_ledger"
+
+    id = db.Column(db.Integer, primary_key=True)
+    vendor_id = db.Column(db.Integer, db.ForeignKey("vendor.id"), nullable=False, index=True)
+    txn_date = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    txn_type = db.Column(db.String(30))  # PURCHASE / PAYMENT / DEBIT_NOTE / CREDIT_NOTE / REVERSAL
+    ref_table = db.Column(db.String(50))
+    ref_id = db.Column(db.Integer)
+    debit = db.Column(db.Numeric(12, 4), default=0)
+    credit = db.Column(db.Numeric(12, 4), default=0)
+    running_balance = db.Column(db.Numeric(12, 4))
+    notes = db.Column(db.Text)
 
 
 # ================= FIFO SALES ALLOCATION =================

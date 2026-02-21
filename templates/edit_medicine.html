@@ -16,6 +16,11 @@ input {
     padding: 8px;
     margin-bottom: 10px;
 }
+select {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+}
 button {
     background: #0d6efd;
     color: white;
@@ -32,6 +37,18 @@ button {
         <input type="text" name="name" value="{{ med.name }}" required>
         <input type="text" name="batch" value="{{ med.batch }}" required>
         <input type="date" name="expiry" value="{{ med.expiry }}" required>
+        <select name="pack_type" id="packType">
+            <option value="" {% if not med.pack_type %}selected{% endif %}>Select Pack Type</option>
+            <option {% if med.pack_type == 'Strip' %}selected{% endif %}>Strip</option>
+            <option {% if med.pack_type == 'Box' %}selected{% endif %}>Box</option>
+            <option {% if med.pack_type == 'Bottle' %}selected{% endif %}>Bottle</option>
+            <option {% if med.pack_type == 'Sachet' %}selected{% endif %}>Sachet</option>
+            <option {% if med.pack_type == 'Tube' %}selected{% endif %}>Tube</option>
+            <option {% if med.pack_type == 'Vial' %}selected{% endif %}>Vial</option>
+            <option {% if med.pack_type == 'Unit' %}selected{% endif %}>Unit</option>
+        </select>
+        <label id="packQtyLabel">Units per Pack</label>
+        <input type="number" name="pack_qty" min="1" step="1" value="{{ med.pack_qty or '' }}">
         <input type="number" name="mrp" value="{{ med.mrp }}" required>
        <label>Discount (%)</label>
 <input type="number"
@@ -47,5 +64,26 @@ button {
         <button type="submit">Update Medicine</button>
     </form>
 </div>
+
+<script>
+function updatePackQtyLabel() {
+    let select = document.getElementById("packType");
+    let label = document.getElementById("packQtyLabel");
+    if (!select || !label) return;
+    if ((select.value || "").toLowerCase() === "strip") {
+        label.textContent = "Tablets per Strip";
+    } else {
+        label.textContent = "Units per Pack";
+    }
+}
+
+document.addEventListener("change", function (e) {
+    if (e.target && e.target.id === "packType") {
+        updatePackQtyLabel();
+    }
+});
+
+window.addEventListener("load", updatePackQtyLabel);
+</script>
 
 {% endblock %}

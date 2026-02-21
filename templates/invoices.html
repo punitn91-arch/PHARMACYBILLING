@@ -83,7 +83,7 @@
         <button type="submit">Filter</button>
     </form>
     <input type="text" id="invoiceSearch"
-       placeholder="Search by patient or mobile"
+       placeholder="Search by invoice / patient / mobile"
        style="padding:8px; width:220px;">
 </div>
 
@@ -133,10 +133,11 @@ document.getElementById("invoiceSearch").addEventListener("keyup", function () {
     rows.forEach((row, index) => {
         if (index === 0) return; // header skip
 
+        let invoice = row.children[0].innerText.toLowerCase();
         let patient = row.children[1].innerText.toLowerCase();
         let mobile  = row.children[2].innerText.toLowerCase();
 
-        if (patient.includes(value) || mobile.includes(value)) {
+        if (invoice.includes(value) || patient.includes(value) || mobile.includes(value)) {
             row.style.display = "";
             row.style.background = "#e7f1ff";   // light blue highlight
         } else {

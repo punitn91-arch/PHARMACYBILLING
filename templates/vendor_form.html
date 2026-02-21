@@ -4,10 +4,10 @@
 {% block body %}
 
 <style>
-.card {
+.content .card {
     background: white;
     padding: 18px;
-    border-radius: 6px;
+    border-radius: 12px;
     box-shadow: 0 0 6px #cfd8e3;
 }
 
@@ -24,11 +24,13 @@ label {
     margin-bottom: 6px;
 }
 
-input, select, textarea {
+.content input:not([type="checkbox"]):not([type="radio"]),
+.content select,
+.content textarea {
     width: 100%;
     padding: 8px;
     border: 1px solid #ccc;
-    border-radius: 4px;
+    border-radius: 10px;
     font-size: 14px;
 }
 
@@ -45,12 +47,17 @@ textarea {
     color: white;
     padding: 8px 14px;
     border: none;
-    border-radius: 4px;
+    border-radius: 10px;
     cursor: pointer;
 }
 
 .btn-secondary {
     background: #6c757d;
+    color: white;
+}
+
+.btn-danger {
+    background: #dc3545;
     color: white;
 }
 
@@ -75,9 +82,9 @@ table {
 
 .table-wrap {
     width: 100%;
-    overflow-x: auto;
+    overflow: auto;
     border: 1px solid #e0e6ef;
-    border-radius: 6px;
+    border-radius: 12px;
 }
 
 #purchaseTable th,
@@ -90,6 +97,17 @@ table {
 #purchaseTable input,
 #purchaseTable select {
     min-width: 70px;
+}
+
+.pack-cell {
+    display: grid;
+    gap: 4px;
+}
+
+.pack-qty-label {
+    font-size: 11px;
+    color: #6c757d;
+    text-align: left;
 }
 
 th {
@@ -129,10 +147,27 @@ td {
     color: #0d47a1;
 }
 
+.total-box-wrap {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
 .total-box {
     text-align: right;
     font-weight: 700;
-    margin-top: 8px;
+    padding: 8px 12px;
+    border: 1px solid #d9e2ef;
+    border-radius: 10px;
+    background: #f8fbff;
+    box-shadow: 0 2px 6px rgba(13, 110, 253, 0.08);
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+}
+
+.total-box .rounded-row {
+    color: #0d6efd;
 }
 </style>
 
@@ -312,7 +347,7 @@ td {
             </div>
             <div>
                 <label>Paid Amount (for Partial)</label>
-                <input type="number" step="0.01" name="paid_amount" value="0">
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="paid_amount" value="0">
             </div>
         </div>
 
@@ -349,23 +384,28 @@ td {
                     <td><input type="text" name="composition"></td>
                     <td><input type="text" name="company"></td>
                     <td><input type="text" name="distributor_name" value="{{ vendor.name }}"></td>
-                    <td>
-                        <select name="pack_type">
+                    <td class="pack-cell">
+                        <select name="pack_type" class="pack-type">
                             <option>Strip</option>
                             <option>Box</option>
                             <option>Bottle</option>
+                            <option>Sachet</option>
+                            <option>Tube</option>
+                            <option>Vial</option>
                             <option>Unit</option>
                         </select>
+                        <div class="pack-qty-label">Units per Pack</div>
+                        <input type="number" name="pack_qty" min="1" step="1" class="pack-qty" placeholder="e.g. 10">
                     </td>
                     <td><input type="text" name="batch" required></td>
                     <td><input type="text" name="expiry" placeholder="MM/YYYY" required></td>
                     <td><input type="number" name="qty" min="0" value="0"></td>
                     <td><input type="number" name="free_qty" min="0" value="0"></td>
-                    <td><input type="number" step="0.01" name="purchase_rate" value="0"></td>
-                    <td><input type="number" step="0.01" name="mrp" value="0"></td>
-                    <td><input type="number" step="0.01" name="gst_percent" value="0"></td>
-                    <td><input type="number" step="0.01" name="discount_percent" value="0"></td>
-                    <td><input type="number" step="0.01" name="total_value" readonly></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="purchase_rate" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="mrp" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="gst_percent" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="discount_percent" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="total_value" readonly></td>
                 </tr>
             </tbody>
         </table>
@@ -378,7 +418,12 @@ td {
             </div>
             <button class="btn" type="submit">Save Purchase</button>
         </div>
-        <div class="total-box">Grand Total: <span id="grandTotal">0.00</span></div>
+        <div class="total-box-wrap">
+            <div class="total-box">
+                <div>Grand Total: <span id="grandTotal">0.00</span></div>
+                <div class="rounded-row">Rounded Amt: <span id="roundedTotal">0</span></div>
+            </div>
+        </div>
     </form>
 </div>
 
@@ -398,12 +443,17 @@ td {
         <tr>
             <td>{{ b.invoice_no if b.invoice_no else b.purchase_no }}</td>
             <td>{{ b.purchase_date.strftime('%d-%m-%Y') if b.purchase_date else '-' }}</td>
-            <td>{{ "%.2f"|format(b.total_amount or 0) }}</td>
+            <td>{{ b.total_amount or 0 }}</td>
             <td><span class="badge">{{ b.payment_status or '-' }}</span></td>
             <td>
                 <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}">View</a>
                 <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=edit">Edit</a>
                 <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=return">Return</a>
+                <a class="btn btn-sm btn-danger"
+                   href="/vendor/purchase/delete/{{ b.id }}"
+                   onclick="return confirm('Delete this bill? This will remove stock and all linked purchase entries from this bill.');">
+                   Delete
+                </a>
             </td>
         </tr>
         {% endfor %}
@@ -422,6 +472,7 @@ td {
         <tr>
             <th>Medicine</th>
             <th>Batch</th>
+            <th>Pack</th>
             <th>Expiry</th>
             <th>Qty</th>
             <th>Free</th>
@@ -437,6 +488,17 @@ td {
         <tr {% if p.is_expired %}style="background:#f8d7da;"{% endif %}>
             <td>{{ p.medicine_name }}</td>
             <td>{{ p.batch }}</td>
+            <td>
+                {% if p.pack_type and p.pack_qty %}
+                    {{ p.pack_type }} of {{ p.pack_qty }}
+                {% elif p.pack_type %}
+                    {{ p.pack_type }}
+                {% elif p.pack_qty %}
+                    {{ p.pack_qty }}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
             <td>{{ p.expiry }}{% if p.is_expired %} (Expired){% endif %}</td>
             <td>{{ p.qty }}</td>
             <td>{{ p.free_qty }}</td>
@@ -460,17 +522,61 @@ td {
 {% endif %}
 
 <script>
+function sanitizeDecimalInput(input) {
+    if (!input) return;
+    let val = input.value || "";
+    let cleaned = "";
+    let dotSeen = false;
+    for (let i = 0; i < val.length; i++) {
+        let ch = val[i];
+        if (ch >= "0" && ch <= "9") {
+            cleaned += ch;
+        } else if (ch === "." && !dotSeen) {
+            cleaned += ch;
+            dotSeen = true;
+        }
+    }
+    if (cleaned !== val) input.value = cleaned;
+}
+
+function getPackQtyLabel(packType) {
+    if ((packType || "").toLowerCase() === "strip") {
+        return "Tablets per Strip";
+    }
+    return "Units per Pack";
+}
+
+function updatePackLabel(target) {
+    let row = target ? target.closest(".purchase-row") : null;
+    if (!row) return;
+    let select = row.querySelector(".pack-type");
+    let label = row.querySelector(".pack-qty-label");
+    if (!select || !label) return;
+    label.textContent = getPackQtyLabel(select.value);
+}
+
+function parseDecimal(val) {
+    if (val === "" || val === "." || val == null) return 0;
+    let num = Number(val);
+    return Number.isFinite(num) ? num : 0;
+}
+
+function formatDecimal(val) {
+    if (!Number.isFinite(val)) return "";
+    return String(val);
+}
+
 function calculateRowTotal(row) {
-    let qty = parseFloat(row.querySelector("input[name='qty']").value || 0);
-    let rate = parseFloat(row.querySelector("input[name='purchase_rate']").value || 0);
-    let gst = parseFloat(row.querySelector("input[name='gst_percent']").value || 0);
-    let disc = parseFloat(row.querySelector("input[name='discount_percent']").value || 0);
+    let qty = parseDecimal(row.querySelector("input[name='qty']").value || 0);
+    let rate = parseDecimal(row.querySelector("input[name='purchase_rate']").value || 0);
+    let gst = parseDecimal(row.querySelector("input[name='gst_percent']").value || 0);
+    let disc = parseDecimal(row.querySelector("input[name='discount_percent']").value || 0);
     let base = qty * rate;
     let discAmt = base * disc / 100;
     let taxable = base - discAmt;
     let gstAmt = taxable * gst / 100;
     let total = taxable + gstAmt;
-    row.querySelector("input[name='total_value']").value = total.toFixed(2);
+    row.querySelector("input[name='total_value']").value = formatDecimal(total);
     return total;
 }
 
@@ -479,12 +585,26 @@ function updateGrandTotal() {
     document.querySelectorAll("#purchaseTable .purchase-row").forEach(row => {
         total += calculateRowTotal(row);
     });
-    document.getElementById("grandTotal").innerText = total.toFixed(2);
+    document.getElementById("grandTotal").innerText = formatDecimal(total);
+    let roundedEl = document.getElementById("roundedTotal");
+    if (roundedEl) {
+        let rounded = Math.round(total);
+        roundedEl.innerText = String(rounded);
+    }
 }
 
 document.addEventListener("input", function (e) {
+    if (e.target.classList && e.target.classList.contains("decimal-input")) {
+        sanitizeDecimalInput(e.target);
+    }
     if (e.target.closest("#purchaseTable")) {
         updateGrandTotal();
+    }
+});
+
+document.addEventListener("change", function (e) {
+    if (e.target.classList && e.target.classList.contains("pack-type")) {
+        updatePackLabel(e.target);
     }
 });
 
@@ -495,11 +615,25 @@ if (addBtn) {
         let first = tbody.querySelector(".purchase-row");
         if (!first) return;
         let clone = first.cloneNode(true);
-        clone.querySelectorAll("input").forEach(i => i.value = i.name === "total_value" ? "" : "0");
-        clone.querySelectorAll("input[type='text']").forEach(i => i.value = "");
+        clone.querySelectorAll("input").forEach(i => {
+            if (i.name === "total_value") {
+                i.value = "";
+                return;
+            }
+            if (i.name === "pack_qty") {
+                i.value = "";
+                return;
+            }
+            if (i.type === "number" || (i.classList && i.classList.contains("decimal-input"))) {
+                i.value = "0";
+                return;
+            }
+            i.value = "";
+        });
         let selects = clone.querySelectorAll("select");
         selects.forEach(s => s.selectedIndex = 0);
         tbody.appendChild(clone);
+        updatePackLabel(clone.querySelector(".pack-type"));
     });
 }
 
@@ -509,13 +643,18 @@ function clearPurchaseRow(row) {
             i.value = "";
             return;
         }
-        if (i.type === "number") {
+        if (i.name === "pack_qty") {
+            i.value = "";
+            return;
+        }
+        if (i.type === "number" || (i.classList && i.classList.contains("decimal-input"))) {
             i.value = "0";
             return;
         }
         i.value = "";
     });
     row.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
+    updatePackLabel(row.querySelector(".pack-type"));
 }
 
 function setTodayIfEmpty() {
@@ -553,12 +692,18 @@ if (newBillBtn) {
             });
         }
         updateGrandTotal();
+        document.querySelectorAll("#purchaseTable .purchase-row .pack-type").forEach(select => {
+            updatePackLabel(select);
+        });
     });
 }
 
 window.addEventListener("load", function () {
     setTodayIfEmpty();
     updateGrandTotal();
+    document.querySelectorAll("#purchaseTable .purchase-row .pack-type").forEach(select => {
+        updatePackLabel(select);
+    });
 });
 </script>
 

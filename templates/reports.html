@@ -53,13 +53,14 @@
 <table>
     <tr><th>From</th><td>{{ profit_summary.from_date }}</td></tr>
     <tr><th>To</th><td>{{ profit_summary.to_date }}</td></tr>
-    <tr><th>Gross Sales</th><td>Rs {{ profit_summary.sales_total }}</td></tr>
-    <tr><th>Returns</th><td>Rs {{ profit_summary.returns_total }}</td></tr>
-    <tr><th>Net Sales</th><td>Rs {{ profit_summary.net_sales }}</td></tr>
+    <tr><th>Sales (ex GST)</th><td>Rs {{ profit_summary.sales_total }}</td></tr>
+    <tr><th>Returns (ex GST)</th><td>Rs {{ profit_summary.returns_total }}</td></tr>
+    <tr><th>Net Sales (ex GST)</th><td>Rs {{ profit_summary.net_sales }}</td></tr>
     <tr><th>COGS (FIFO)</th><td>Rs {{ profit_summary.cogs }}</td></tr>
     <tr><th>Return COGS</th><td>Rs {{ profit_summary.return_cogs }}</td></tr>
     <tr><th>Net COGS</th><td>Rs {{ profit_summary.net_cogs }}</td></tr>
     <tr><th>Gross Profit</th><td>Rs {{ profit_summary.gross_profit }}</td></tr>
+    <tr><th>Gross Profit %</th><td>{{ profit_summary.gross_profit_percentage }}%</td></tr>
 </table>
 
 {% elif invoices %}

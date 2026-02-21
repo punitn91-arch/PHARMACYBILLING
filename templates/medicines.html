@@ -41,9 +41,6 @@ td {
     <h2>💊 Medicine Master</h2>
 
     <div style="text-align:right; margin-bottom:10px;">
-        {% if session.get("role") == "admin" or session.get("can_add_medicine") %}
-<a href="/medicines/add" class="add-btn">➕ Add Medicine</a>
-{% endif %}
         {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
 <a href="/medicines/export" class="add-btn-success" style="margin-left:10px;">
     📥 Export Excel
@@ -64,6 +61,7 @@ td {
             <th>#</th>
             <th>Medicine Name</th>
             <th>Batch</th>
+            <th>Pack</th>
             <th>Expiry</th>
             <th>MRP</th>
             <th>Stock</th>
@@ -75,6 +73,17 @@ td {
             <td>{{ loop.index }}</td>
             <td>{{ m.name }}</td>
             <td>{{ m.batch }}</td>
+            <td>
+                {% if m.pack_type and m.pack_qty %}
+                    {{ m.pack_type }} of {{ m.pack_qty }}
+                {% elif m.pack_type %}
+                    {{ m.pack_type }}
+                {% elif m.pack_qty %}
+                    {{ m.pack_qty }}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
             <td>{{ m.expiry[5:7] }}/{{ m.expiry[0:4] }}</td>
             <td>₹{{ m.mrp }}</td>
             <td>{{ m.qty }}</td>
@@ -105,8 +114,11 @@ function searchMedicine() {
 
     rows.forEach(row => {
         let name = row.children[1].innerText.toLowerCase();
+        let batch = row.children[2].innerText.toLowerCase();
+        let pack = row.children[3].innerText.toLowerCase();
+        let haystack = `${name} ${batch} ${pack}`;
 
-        if (name.includes(input) && input !== "") {
+        if (haystack.includes(input) && input !== "") {
             row.style.display = "";
             row.style.backgroundColor = "#cfe2ff";   // BLUE highlight
             row.style.fontWeight = "bold";

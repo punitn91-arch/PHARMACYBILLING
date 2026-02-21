@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}Appointments{% endblock %}
+
+{% block body %}
+<style>
+.card {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 0 8px #dce4ef;
+    padding: 16px;
+}
+
+.toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+
+.toolbar h2 {
+    margin: 0;
+}
+
+.add-btn,
+.filter-btn,
+.delete-btn {
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+    padding: 8px 12px;
+    text-decoration: none;
+}
+
+.add-btn,
+.filter-btn {
+    background: #0d6efd;
+}
+
+.delete-btn {
+    background: #dc3545;
+}
+
+.filters {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.filters input,
+.filters select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccd7e3;
+    border-radius: 6px;
+}
+
+.filters .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.stat-box {
+    background: #f4f8ff;
+    border: 1px solid #d8e6ff;
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+}
+
+.stat-count {
+    font-size: 20px;
+    font-weight: 700;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    border-bottom: 1px solid #e4ebf3;
+    padding: 10px 8px;
+    text-align: center;
+    font-size: 14px;
+}
+
+th {
+    background: #0d6efd;
+    color: #fff;
+}
+
+.status-badge {
+    border-radius: 999px;
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 4px 10px;
+}
+
+.status-booked { background: #dbeafe; color: #1d4ed8; }
+.status-checked_in { background: #fff3cd; color: #856404; }
+.status-completed { background: #d1e7dd; color: #0f5132; }
+.status-cancelled { background: #f8d7da; color: #842029; }
+
+.row-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.row-actions form {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    margin: 0;
+}
+
+.row-actions select {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid #ccd7e3;
+}
+
+@media (max-width: 900px) {
+    .filters {
+        grid-template-columns: repeat(2, minmax(140px, 1fr));
+    }
+    .stats {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .filters {
+        grid-template-columns: 1fr;
+    }
+    .stats {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+</style>
+
+<div class="card">
+    <div class="toolbar">
+        <h2>Doctor Appointments</h2>
+        <a href="{{ url_for('add_appointment') }}" class="add-btn">Add Appointment</a>
+    </div>
+
+    <form method="GET" class="filters">
+        <input type="date" name="date" value="{{ selected_date }}">
+
+        <select name="status">
+            <option value="ALL" {% if selected_status == "ALL" %}selected{% endif %}>All Status</option>
+            {% for status in all_statuses %}
+            <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}>
+                {{ status.replace("_", " ") }}
+            </option>
+            {% endfor %}
+        </select>
+
+        <input type="text" name="q" value="{{ q }}" placeholder="Search patient/mobile/doctor/no">
+
+        <div class="actions">
+            <button type="submit" class="filter-btn">Apply</button>
+            <a href="{{ url_for('appointments') }}" class="filter-btn">Today</a>
+        </div>
+    </form>
+
+    <div class="stats">
+        <div class="stat-box">
+            <div>Booked</div>
+            <div class="stat-count">{{ status_counts["BOOKED"] }}</div>
+        </div>
+        <div class="stat-box">
+            <div>Checked In</div>
+            <div class="stat-count">{{ status_counts["CHECKED_IN"] }}</div>
+        </div>
+        <div class="stat-box">
+            <div>Completed</div>
+            <div class="stat-count">{{ status_counts["COMPLETED"] }}</div>
+        </div>
+        <div class="stat-box">
+            <div>Cancelled</div>
+            <div class="stat-count">{{ status_counts["CANCELLED"] }}</div>
+        </div>
+    </div>
+
+    <table>
+        <tr>
+            <th>#</th>
+            <th>Appt No</th>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Patient</th>
+            <th>Mobile</th>
+            <th>Doctor</th>
+            <th>Payment</th>
+            <th>Dr Discount</th>
+            <th>Consultation Fee</th>
+            <th>Reason</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+
+        {% for a in appointments %}
+        <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ a.appointment_no }}</td>
+            <td>{{ a.appointment_date.strftime("%d-%m-%Y") if a.appointment_date else "-" }}</td>
+            <td>{{ a.appointment_time.strftime("%I:%M %p") if a.appointment_time else "-" }}</td>
+            <td>{{ a.patient_name }}</td>
+            <td>{{ a.mobile or "-" }}</td>
+            <td>{{ a.doctor_name }}</td>
+            <td>{{ a.payment_mode or "-" }}</td>
+            <td>Rs {{ "%.2f"|format((a.doctor_discount or 0)|float) }}</td>
+            <td>Rs {{ "%.2f"|format((a.consultation_fee or 0)|float) }}</td>
+            <td>{{ a.reason or "-" }}</td>
+            <td>
+                <span class="status-badge status-{{ (a.status or '').lower() }}">
+                    {{ (a.status or "").replace("_", " ") }}
+                </span>
+            </td>
+            <td>
+                <div class="row-actions">
+                    <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}">
+                        <select name="status">
+                            {% for status in all_statuses %}
+                            <option value="{{ status }}" {% if a.status == status %}selected{% endif %}>
+                                {{ status.replace("_", " ") }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="filter-btn">Update</button>
+                    </form>
+
+                    <form method="POST" action="{{ url_for('delete_appointment', id=a.id) }}" onsubmit="return confirm('Delete this appointment?')">
+                        <button type="submit" class="delete-btn">Delete</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="13">No appointments found for this filter.</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+{% endblock %}

@@ -333,6 +333,80 @@
         .mb-2 { margin-bottom: 8px; }
         .mb-3 { margin-bottom: 12px; }
 
+        /* Compact typography mode for denser screens */
+        .topbar .title {
+            font-size: 18px !important;
+        }
+
+        .topbar .right,
+        .topbar .right a {
+            font-size: 13px !important;
+        }
+
+        .sidebar h4 {
+            font-size: 12px !important;
+            padding: 10px 16px !important;
+        }
+
+        .sidebar a {
+            font-size: 13px !important;
+            padding: 10px 16px !important;
+        }
+
+        .content h1 { font-size: 22px !important; }
+        .content h2 { font-size: 18px !important; }
+        .content h3 { font-size: 16px !important; }
+        .content h4 { font-size: 14px !important; }
+        .content h5,
+        .content h6 { font-size: 13px !important; }
+
+        .content p,
+        .content li,
+        .content label,
+        .content span,
+        .content a,
+        .content td,
+        .content th,
+        .content small,
+        .content strong,
+        .content b,
+        .content input:not([type="checkbox"]):not([type="radio"]),
+        .content select,
+        .content textarea,
+        .content button,
+        .content .btn,
+        .content .add-btn,
+        .content .btn-add,
+        .content .btn-edit,
+        .content .btn-pass,
+        .content .btn-del,
+        .content .filter-btn,
+        .content .delete-btn {
+            font-size: 12px !important;
+        }
+
+        .content th,
+        .content td {
+            padding: 7px 8px !important;
+        }
+
+        .content input:not([type="checkbox"]):not([type="radio"]),
+        .content select,
+        .content textarea,
+        .content button,
+        .content .btn {
+            padding: 6px 8px !important;
+        }
+
+        .content .card,
+        .content .form-card {
+            padding: 14px !important;
+        }
+
+        .app-footer {
+            font-size: 11px !important;
+        }
+
         @media (max-width: 1100px) {
             .sidebar {
                 width: 210px;
@@ -389,6 +463,7 @@
 
         <a href="/" class="{% if request.path == '/' %}active{% endif %}">🏠 Dashboard</a>
 
+        <a href="/appointments" class="{% if request.path.startswith('/appointments') %}active{% endif %}">Appointments</a>
         <h4>Invoice</h4>
         <a href="/billing">🧾 POS Invoice</a>
         <a href="/invoices">📄 Manage Invoice</a>

@@ -6,35 +6,94 @@
 <style>
 body {
     font-family: Arial;
-    margin: 25px;
-    font-size: 14px;
+    margin: 0;
+    font-size: 10px;
     color: #000;
+    background: #fff;
 }
 
 @media print {
     .action-btns { display:none !important; }
-    body { margin: 10px; }
+    body { margin: 0; }
+    .invoice-sheet {
+        margin: 0;
+        width: 100%;
+        max-width: none;
+        min-height: auto;
+        padding: 4mm;
+        box-shadow: none;
+    }
+    body, .invoice-sheet {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+
+@page {
+    size: A5 portrait;
+    margin: 8mm;
+}
+
+.invoice-sheet {
+    width: 100%;
+    max-width: 148mm;
+    min-height: auto;
+    margin: 10px auto;
+    padding: 6mm;
+    box-sizing: border-box;
+    background: #fff;
+    border: 1px solid #000;
+    position: relative;
+    overflow: visible;
+}
+
+.invoice-sheet::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: url("/static/logo.png") no-repeat center center;
+    background-size: 60% auto;
+    opacity: 0.30;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.invoice-sheet > * {
+    position: relative;
+    z-index: 1;
 }
 
 .header {
     text-align:center;
     line-height:1.4;
-    margin-bottom:20px;
+    margin-bottom:6px;
 }
 
-.info-table, .bill-table, .totals-table {
+.bill-table, .totals-table {
     width: 100%;
     border-collapse: collapse;
 }
 
-.info-table td {
-    padding: 4px 0;
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 10px;
+    font-size: 9px;
+    margin-bottom: 4px;
+}
+
+.info-grid .right {
+    text-align: right;
 }
 
 .bill-table th, .bill-table td {
     border:1px solid #000;
-    padding:6px;
+    padding:2px;
     text-align:center;
+    font-size: 9px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .bill-table th {
@@ -42,21 +101,36 @@ body {
     font-weight:bold;
 }
 
+.bill-table {
+    table-layout: fixed;
+}
+
+.bill-table th:nth-child(1), .bill-table td:nth-child(1) { width: 18%; }
+.bill-table th:nth-child(2), .bill-table td:nth-child(2) { width: 6%; }
+.bill-table th:nth-child(3), .bill-table td:nth-child(3) { width: 14%; }
+.bill-table th:nth-child(4), .bill-table td:nth-child(4) { width: 10%; }
+.bill-table th:nth-child(5), .bill-table td:nth-child(5) { width: 8%; }
+.bill-table th:nth-child(6), .bill-table td:nth-child(6) { width: 8%; }
+.bill-table th:nth-child(7), .bill-table td:nth-child(7) { width: 8%; }
+.bill-table th:nth-child(8), .bill-table td:nth-child(8) { width: 10%; }
+.bill-table th:nth-child(9), .bill-table td:nth-child(9) { width: 6%; }
+.bill-table th:nth-child(10), .bill-table td:nth-child(10) { width: 12%; }
+
 .totals-table {
-    margin-top:20px;
+    margin-top:10px;
     float:right;
-    width:320px;
+    width: 55%;
 }
 
 .totals-table td {
-    padding:6px;
-    font-size:15px;
+    padding:3px;
+    font-size:10px;
 }
 
 .btn {
     margin-top:15px;
-    padding:10px 25px;
-    font-size:16px;
+    padding:8px 18px;
+    font-size:13px;
     cursor:pointer;
     border:none;
     border-radius:5px;
@@ -71,33 +145,28 @@ body {
 </head>
 
 <body>
+<div class="invoice-sheet">
 
 <!-- HEADER -->
 <div class="header">
-    <div style="font-size:22px; font-weight:bold;">DR. ABHISHEK PRAKASH</div>
-    <div style="font-size:17px; font-weight:bold;">THE ENDO CLINIC & HEALTH CENTRE</div>
+    <div style="font-size:18px; font-weight:bold;">DR. ABHISHEK PRAKASH</div>
+    <div style="font-size:13px; font-weight:bold;">THE ENDO CLINIC & HEALTH CENTRE</div>
     <div>FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER</div>
     <div>JAIPUR, RAJASTHAN</div>
     <div style="font-weight:bold;">MOBILE : 9024648186</div>
 </div>
 
 <!-- INFO -->
-<table class="info-table">
-<tr>
-    <td><b>GST No:</b> A8BPWPP5023C1ZP</td>
-    <td style="text-align:right;"><b>Date:</b> {{ date }}</td>
-</tr>
-<p><b>Payment Mode:</b> {{ inv.payment_mode }}</p>
-<tr>
-    <td><b>Invoice No:</b> {{ invoice_no }}</td>
-    <td style="text-align:right;"><b>Ref. By:</b> {{ doctor }}</td>
-</tr>
-<tr><td><b>Patient:</b> {{ customer }}</td></tr>
-<tr><td><b>Gender:</b> {{ gender }}</td></tr>
-<tr><td><b>Mobile:</b> {{ mobile }}</td></tr>
-</table>
-
-<br>
+<div class="info-grid">
+    <div><b>Invoice No:</b> {{ invoice_no }}</div>
+    <div class="right"><b>GST No:</b> A8BPWPP5023C1ZP</div>
+    <div><b>Patient:</b> {{ customer }}</div>
+    <div class="right"><b>Date:</b> {{ date }}</div>
+    <div><b>Gender:</b> {{ gender }}</div>
+    <div class="right"><b>Payment Mode:</b> {{ inv.payment_mode }}</div>
+    <div><b>Mobile:</b> {{ mobile }}</div>
+    <div class="right"><b>Ref. By:</b> {{ doctor }}</div>
+</div>
 
 <!-- ITEMS -->
 <table class="bill-table">
@@ -125,14 +194,14 @@ body {
     <td>{{ item.qty }}</td>
     <td>{{ item.batch }}</td>
     <td>{{ item.expiry }}</td>
-    <td>{{ item.price }}</td>
+    <td>{{ "%.2f"|format((item.price or 0)|float) }}</td>
 
-    <td>₹{{ (item.amount * 0.025) | round(2) }}</td>
-    <td>₹{{ (item.amount * 0.025) | round(2) }}</td>
+    <td>₹{{ "%.2f"|format(((item.amount or 0)|float) * 0.025) }}</td>
+    <td>₹{{ "%.2f"|format(((item.amount or 0)|float) * 0.025) }}</td>
 
-    <td>₹{{ item.amount }}</td>
+    <td>₹{{ "%.1f"|format((item.amount or 0)|float) }}</td>
     <td>{{ item.discount_percent }}%</td>
-    <td><b>₹{{ item.net_amount }}</b></td>
+    <td><b>₹{{ "%.2f"|format((item.net_amount or 0)|float) }}</b></td>
 
 </tr>
 {% endfor %}
@@ -142,12 +211,17 @@ body {
 <table class="totals-table">
     <tr>
         <td><b>Total Discount</b></td>
-        <td>₹{{ discount }}</td>
+        <td>₹{{ "%.2f"|format((discount or 0)|float) }}</td>
     </tr>
 
     <tr>
         <td><b>NET TOTAL</b></td>
-        <td><b>₹{{ total }}</b></td>
+        <td><b>₹{{ "%.2f"|format((total or 0)|float) }}</b></td>
+    </tr>
+
+    <tr>
+        <td><b>ROUNDED AMT</b></td>
+        <td><b>₹{{ "%.2f"|format(rounded_total or total) }}</b></td>
     </tr>
     
 </table>
@@ -155,8 +229,8 @@ body {
 <div class="clearfix"></div>
 <div style="
     text-align:center;
-    margin-top:40px;
-    font-size:20px;
+    margin-top:16px;
+    font-size:11px;
     font-weight:600;
     border-top:1px solid #000;
     padding-top:6px;
@@ -190,5 +264,6 @@ function sendWhatsApp() {
 }
 </script>
 
+</div>
 </body>
 </html>

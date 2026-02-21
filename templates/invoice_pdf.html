@@ -1,6 +1,23 @@
 <!doctype html>
 <html>
 <head><meta charset="utf-8"><title>{{ invoice_no }}</title></head>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    margin: 10px;
+}
+h2 {
+    font-size: 16px;
+    margin-bottom: 8px;
+}
+p,
+table,
+th,
+td {
+    font-size: 11px;
+}
+</style>
 <body>
 <h2>DR. ABHISHEK'S PHARMACY</h2>
 <p>Invoice: {{ invoice_no }} | Date: {{ date }}</p>

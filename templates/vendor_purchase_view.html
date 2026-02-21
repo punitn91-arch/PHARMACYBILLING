@@ -118,6 +118,7 @@ td {
         <tr>
             <th>Medicine</th>
             <th>Batch</th>
+            <th>Pack</th>
             <th>Expiry</th>
             <th>Qty</th>
             <th>Free</th>
@@ -134,6 +135,17 @@ td {
         <tr>
             <td>{{ it.medicine_name }}</td>
             <td>{{ it.batch }}</td>
+            <td>
+                {% if it.pack_type and it.pack_qty %}
+                    {{ it.pack_type }} of {{ it.pack_qty }}
+                {% elif it.pack_type %}
+                    {{ it.pack_type }}
+                {% elif it.pack_qty %}
+                    {{ it.pack_qty }}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
             <td>{{ it.expiry }}</td>
             <td>{{ it.qty }}</td>
             <td>{{ it.free_qty }}</td>
@@ -154,10 +166,10 @@ td {
     {% endif %}
 
     <div class="totals">
-        Subtotal: {{ "%.2f"|format(purchase.subtotal or 0) }} |
-        GST: {{ "%.2f"|format(purchase.gst_total or 0) }} |
-        Discount: {{ "%.2f"|format(purchase.discount_total or 0) }} |
-        Total: {{ "%.2f"|format(purchase.total_amount or 0) }}
+        Subtotal: {{ purchase.subtotal or 0 }} |
+        GST: {{ purchase.gst_total or 0 }} |
+        Discount: {{ purchase.discount_total or 0 }} |
+        Total: {{ purchase.total_amount or 0 }}
     </div>
 </div>
 {% endblock %}

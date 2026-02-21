@@ -84,12 +84,20 @@ input, select, textarea {
             </div>
             <div>
                 <label>Pack</label>
-                <select name="pack_type">
+                <select name="pack_type" class="pack-type">
+                    <option value="" {% if not item.pack_type %}selected{% endif %}>Select</option>
                     <option {% if item.pack_type == 'Strip' %}selected{% endif %}>Strip</option>
                     <option {% if item.pack_type == 'Box' %}selected{% endif %}>Box</option>
                     <option {% if item.pack_type == 'Bottle' %}selected{% endif %}>Bottle</option>
+                    <option {% if item.pack_type == 'Sachet' %}selected{% endif %}>Sachet</option>
+                    <option {% if item.pack_type == 'Tube' %}selected{% endif %}>Tube</option>
+                    <option {% if item.pack_type == 'Vial' %}selected{% endif %}>Vial</option>
                     <option {% if item.pack_type == 'Unit' %}selected{% endif %}>Unit</option>
                 </select>
+            </div>
+            <div>
+                <label id="packQtyLabel">Units per Pack</label>
+                <input type="number" name="pack_qty" min="1" step="1" value="{{ item.pack_qty or '' }}">
             </div>
             <div>
                 <label>Batch</label>
@@ -109,23 +117,23 @@ input, select, textarea {
             </div>
             <div>
                 <label>Purchase Rate</label>
-                <input type="number" step="0.01" name="purchase_rate" value="{{ item.purchase_rate or 0 }}">
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="purchase_rate" value="{{ item.purchase_rate or 0 }}">
             </div>
             <div>
                 <label>MRP</label>
-                <input type="number" step="0.01" name="mrp" value="{{ item.mrp or 0 }}">
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="mrp" value="{{ item.mrp or 0 }}">
             </div>
             <div>
                 <label>GST %</label>
-                <input type="number" step="0.01" name="gst_percent" value="{{ item.gst_percent or 0 }}">
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="gst_percent" value="{{ item.gst_percent or 0 }}">
             </div>
             <div>
                 <label>Disc %</label>
-                <input type="number" step="0.01" name="discount_percent" value="{{ item.discount_percent or 0 }}">
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="discount_percent" value="{{ item.discount_percent or 0 }}">
             </div>
             <div>
                 <label>Total</label>
-                <input type="number" step="0.01" name="total_value" readonly value="{{ item.total_value or 0 }}">
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="total_value" readonly value="{{ item.total_value or 0 }}">
             </div>
         </div>
 
@@ -141,28 +149,82 @@ input, select, textarea {
 </div>
 
 <script>
+function sanitizeDecimalInput(input) {
+    if (!input) return;
+    let val = input.value || "";
+    let cleaned = "";
+    let dotSeen = false;
+    for (let i = 0; i < val.length; i++) {
+        let ch = val[i];
+        if (ch >= "0" && ch <= "9") {
+            cleaned += ch;
+        } else if (ch === "." && !dotSeen) {
+            cleaned += ch;
+            dotSeen = true;
+        }
+    }
+    if (cleaned !== val) input.value = cleaned;
+}
+
+function getPackQtyLabel(packType) {
+    if ((packType || "").toLowerCase() === "strip") {
+        return "Tablets per Strip";
+    }
+    return "Units per Pack";
+}
+
+function updatePackQtyLabel() {
+    let select = document.querySelector(".pack-type");
+    let label = document.getElementById("packQtyLabel");
+    if (!select || !label) return;
+    label.textContent = getPackQtyLabel(select.value);
+}
+
+function parseDecimal(val) {
+    if (val === "" || val === "." || val == null) return 0;
+    let num = Number(val);
+    return Number.isFinite(num) ? num : 0;
+}
+
+function formatDecimal(val) {
+    if (!Number.isFinite(val)) return "";
+    return String(val);
+}
+
 function calculateTotal() {
     let form = document.getElementById("editPurchaseForm");
     if (!form) return;
-    let qty = parseFloat(form.querySelector("input[name='qty']").value || 0);
-    let rate = parseFloat(form.querySelector("input[name='purchase_rate']").value || 0);
-    let gst = parseFloat(form.querySelector("input[name='gst_percent']").value || 0);
-    let disc = parseFloat(form.querySelector("input[name='discount_percent']").value || 0);
+    let qty = parseDecimal(form.querySelector("input[name='qty']").value || 0);
+    let rate = parseDecimal(form.querySelector("input[name='purchase_rate']").value || 0);
+    let gst = parseDecimal(form.querySelector("input[name='gst_percent']").value || 0);
+    let disc = parseDecimal(form.querySelector("input[name='discount_percent']").value || 0);
     let base = qty * rate;
     let discAmt = base * disc / 100;
     let taxable = base - discAmt;
     let gstAmt = taxable * gst / 100;
     let total = taxable + gstAmt;
-    form.querySelector("input[name='total_value']").value = total.toFixed(2);
+    form.querySelector("input[name='total_value']").value = formatDecimal(total);
 }
 
 document.addEventListener("input", function (e) {
+    if (e.target.classList && e.target.classList.contains("decimal-input")) {
+        sanitizeDecimalInput(e.target);
+    }
     if (e.target.closest("#editPurchaseForm")) {
         calculateTotal();
     }
 });
 
-window.addEventListener("load", calculateTotal);
+document.addEventListener("change", function (e) {
+    if (e.target.classList && e.target.classList.contains("pack-type")) {
+        updatePackQtyLabel();
+    }
+});
+
+window.addEventListener("load", function () {
+    updatePackQtyLabel();
+    calculateTotal();
+});
 </script>
 
 {% endblock %}

@@ -24,6 +24,8 @@ th { background:#0d6efd; color:#fff; }
             <th>Purchases</th>
             <th>Total Purchase</th>
             <th>Outstanding</th>
+            <th>Margin</th>
+            <th>Margin %</th>
         </tr>
         {% for r in purchase_summary %}
         <tr>
@@ -31,6 +33,8 @@ th { background:#0d6efd; color:#fff; }
             <td>{{ r.count }}</td>
             <td>Rs {{ "%.2f"|format(r.total) }}</td>
             <td>Rs {{ "%.2f"|format(r.outstanding) }}</td>
+            <td style="color:#198754;font-weight:700;">Rs {{ "%.2f"|format(r.margin_amount) }}</td>
+            <td style="font-weight:700;">{{ "%.2f"|format(r.margin_percent) }}%</td>
         </tr>
         {% endfor %}
     </table>
