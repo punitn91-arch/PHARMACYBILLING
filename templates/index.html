@@ -16,6 +16,11 @@
     box-shadow: 0 6px 18px rgba(0,0,0,0.08);
 }
 
+.card-link {
+    text-decoration: none;
+    color: inherit;
+}
+
 .card-title {
     font-size: 12px;
     color: #777;
@@ -39,7 +44,7 @@
     box-shadow: 0 8px 22px rgba(0,0,0,0.12);
     text-align: center;
 }
- 
+
 .center-logo img {
     width: 24%;
     max-width: 520px;
@@ -47,7 +52,7 @@
 
 </style>
 
-<!-- 🔹 TOP DASHBOARD CARDS -->
+<!-- TOP DASHBOARD CARDS -->
 <div class="dashboard-grid">
 
     <div class="card-box">
@@ -56,30 +61,30 @@
         <small>Bills Today: {{ bills_today }}</small>
     </div>
 
-    <a href="/low-stock" style="text-decoration:none;color:inherit">
-    <div class="card-box">
-        <div class="card-title">Low Stock Items</div>
-        <div class="card-value orange">{{ low_stock }}</div>
-        <small>Require attention</small>
-    </div>
-
-    <a href="/expiring-soon" style="text-decoration:none;color:inherit">
-    <div class="card-box">
-
-        <div class="card-title">Expiring Soon</div>
-        <div class="card-value red">{{ expiring_soon }}</div>
-        <small>Next 30 days</small>
+    <a href="/low-stock" class="card-link">
+        <div class="card-box">
+            <div class="card-title">Low Stock Items</div>
+            <div class="card-value orange">{{ low_stock }}</div>
+            <small>Require attention</small>
         </div>
-</a>
+    </a>
+
+    <a href="/expiring-soon" class="card-link">
+        <div class="card-box">
+            <div class="card-title">Expiring Soon</div>
+            <div class="card-value red">{{ expiring_soon }}</div>
+            <small>Next 30 days</small>
+        </div>
+    </a>
 
 </div>
 
-<!-- 🔹 CENTER LOGO -->
+<!-- CENTER LOGO -->
 <div class="center-logo">
     <img src="{{ url_for('static', filename='logo.png') }}">
 </div>
 
-<!-- 🔹 BOTTOM DASHBOARD CARDS -->
+<!-- BOTTOM DASHBOARD CARDS -->
 <div class="dashboard-grid mt-4">
 
     <div class="card-box">
@@ -93,6 +98,14 @@
         <div class="card-value blue">₹ {{ gst_collected }}</div>
         <small>For reporting only</small>
     </div>
+
+    <a href="/appointments?date={{ today_date }}&status=BOOKED&view=list" class="card-link">
+        <div class="card-box">
+            <div class="card-title">Booked Appointments</div>
+            <div class="card-value blue">{{ appointment_booked_today }}</div>
+            <small>Today Total: {{ appointment_total_today }}</small>
+        </div>
+    </a>
 
 </div>
 

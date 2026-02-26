@@ -25,7 +25,9 @@
 
 .add-btn,
 .filter-btn,
-.delete-btn {
+.delete-btn,
+.paid-btn,
+.edit-btn {
     border: none;
     border-radius: 6px;
     color: #fff;
@@ -38,6 +40,19 @@
 .add-btn,
 .filter-btn {
     background: #0d6efd;
+}
+
+.edit-btn {
+    background: #6c757d;
+}
+
+.paid-btn {
+    background: #198754;
+}
+
+.paid-btn:disabled {
+    background: #6c757d;
+    cursor: not-allowed;
 }
 
 .delete-btn {
@@ -157,6 +172,7 @@ th {
 </style>
 
 <div class="card">
+    {% if not list_only %}
     <div class="toolbar">
         <h2>Doctor Appointments</h2>
         <a href="{{ url_for('add_appointment') }}" class="add-btn">Add Appointment</a>
@@ -174,7 +190,7 @@ th {
             {% endfor %}
         </select>
 
-        <input type="text" name="q" value="{{ q }}" placeholder="Search patient/mobile/doctor/no">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search patient/mobile/payment/no">
 
         <div class="actions">
             <button type="submit" class="filter-btn">Apply</button>
@@ -200,6 +216,7 @@ th {
             <div class="stat-count">{{ status_counts["CANCELLED"] }}</div>
         </div>
     </div>
+    {% endif %}
 
     <table>
         <tr>
@@ -209,11 +226,10 @@ th {
             <th>Time</th>
             <th>Patient</th>
             <th>Mobile</th>
-            <th>Doctor</th>
-            <th>Payment</th>
+            <th>Payment Mode</th>
+            <th>Payment Status</th>
             <th>Dr Discount</th>
             <th>Consultation Fee</th>
-            <th>Reason</th>
             <th>Status</th>
             <th>Actions</th>
         </tr>
@@ -226,11 +242,11 @@ th {
             <td>{{ a.appointment_time.strftime("%I:%M %p") if a.appointment_time else "-" }}</td>
             <td>{{ a.patient_name }}</td>
             <td>{{ a.mobile or "-" }}</td>
-            <td>{{ a.doctor_name }}</td>
             <td>{{ a.payment_mode or "-" }}</td>
+            {% set pay_status = (a.payment_status or ('PAID' if (a.payment_mode or '')|upper == 'PAID' else 'UNPAID'))|upper %}
+            <td>{{ pay_status }}</td>
             <td>Rs {{ "%.2f"|format((a.doctor_discount or 0)|float) }}</td>
             <td>Rs {{ "%.2f"|format((a.consultation_fee or 0)|float) }}</td>
-            <td>{{ a.reason or "-" }}</td>
             <td>
                 <span class="status-badge status-{{ (a.status or '').lower() }}">
                     {{ (a.status or "").replace("_", " ") }}
@@ -249,6 +265,14 @@ th {
                         <button type="submit" class="filter-btn">Update</button>
                     </form>
 
+                    <a href="{{ url_for('edit_appointment', id=a.id) }}" class="edit-btn">Edit</a>
+
+                    <form method="POST" action="{{ url_for('mark_appointment_paid', id=a.id) }}">
+                        <button type="submit" class="paid-btn" {% if pay_status == 'PAID' %}disabled{% endif %}>
+                            {% if pay_status == 'PAID' %}Paid{% else %}Mark Paid{% endif %}
+                        </button>
+                    </form>
+
                     <form method="POST" action="{{ url_for('delete_appointment', id=a.id) }}" onsubmit="return confirm('Delete this appointment?')">
                         <button type="submit" class="delete-btn">Delete</button>
                     </form>
@@ -257,7 +281,7 @@ th {
         </tr>
         {% else %}
         <tr>
-            <td colspan="13">No appointments found for this filter.</td>
+            <td colspan="12">No appointments found for this filter.</td>
         </tr>
         {% endfor %}
     </table>

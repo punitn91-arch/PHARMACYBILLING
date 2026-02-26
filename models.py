@@ -173,6 +173,7 @@ class Appointment(db.Model):
     appointment_date = db.Column(db.Date, nullable=False, index=True)
     appointment_time = db.Column(db.Time, nullable=False)
     payment_mode = db.Column(db.String(20), default="CASH")
+    payment_status = db.Column(db.String(20), default="UNPAID")
     doctor_discount = db.Column(db.Float, default=0)
     consultation_fee = db.Column(db.Float, default=0)
 

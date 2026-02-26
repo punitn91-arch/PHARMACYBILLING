@@ -85,6 +85,23 @@
             font-weight: bold;
         }
 
+        .topbar .right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            white-space: nowrap;
+        }
+
+        .topbar .right a {
+            margin-left: 0;
+        }
+
+        .topbar .right .divider {
+            opacity: 0.7;
+            font-weight: 600;
+        }
+
         /* ================= SIDEBAR ================= */
         .sidebar {
             position: fixed;
@@ -489,14 +506,45 @@
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
-                max-width: 58vw;
+                max-width: 52vw;
             }
 
             .topbar .right {
-                font-size: 12px;
+                font-size: 11px;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
+                gap: 6px;
+            }
+
+            .topbar .right a {
+                font-size: 11px !important;
+            }
+
+            .topbar .right .welcome-text,
+            .topbar .right .divider {
+                display: none;
+            }
+
+            .content .card,
+            .content .form-card {
+                padding: 12px !important;
+            }
+
+            .content table {
+                min-width: 640px;
+            }
+
+            .content .table-wrap table {
+                min-width: 640px;
+            }
+
+            .content .grid {
+                grid-template-columns: 1fr !important;
+            }
+
+            body.sidebar-open {
+                overflow: hidden;
             }
 
             .sidebar-backdrop {
@@ -516,6 +564,32 @@
             body.sidebar-open .sidebar-backdrop {
                 display: block;
             }
+
+            .app-footer {
+                position: static;
+                text-align: center;
+                margin: 10px 0 6px;
+                padding-bottom: 8px;
+            }
+        }
+
+        @media (max-width: 520px) {
+            .topbar {
+                padding: 0 10px;
+            }
+
+            .topbar .title {
+                font-size: 14px !important;
+                max-width: 50vw;
+            }
+
+            .topbar .right a {
+                font-size: 10px !important;
+            }
+
+            .content {
+                padding: 12px;
+            }
         }
     </style>
 </head>
@@ -530,8 +604,10 @@
         </div>
 
         <div class="right">
-            Welcome <b>{{ session.get("username") }}</b> |
-            <a href="/change-password">Change Password</a> |
+            <span class="welcome-text">Welcome <b>{{ session.get("username") }}</b></span>
+            <span class="divider">|</span>
+            <a href="/change-password">Change Password</a>
+            <span class="divider">|</span>
             <a href="/logout">Logout</a>
         </div>
     </div>

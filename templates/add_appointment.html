@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Add Appointment{% endblock %}
+{% block title %}{% if edit_mode %}Edit Appointment{% else %}Add Appointment{% endif %}{% endblock %}
 
 {% block body %}
 <style>
@@ -41,6 +41,12 @@ textarea {
     padding: 9px 10px;
 }
 
+.time-row {
+    display: grid;
+    grid-template-columns: 1fr 110px;
+    gap: 8px;
+}
+
 textarea {
     min-height: 90px;
     resize: vertical;
@@ -74,11 +80,15 @@ textarea {
     .grid {
         grid-template-columns: 1fr;
     }
+
+    .time-row {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 
 <div class="form-card">
-    <h2>Add Doctor Appointment</h2>
+    <h2>{% if edit_mode %}Edit Appointment{% else %}Add Appointment{% endif %}</h2>
     <form method="POST">
         <div class="grid">
             <div>
@@ -91,16 +101,6 @@ textarea {
                 <input type="text" name="mobile" value="{{ form_data.mobile }}" maxlength="15">
             </div>
 
-            <div class="full">
-                <label>Doctor Name</label>
-                <input type="text" name="doctor_name" value="{{ form_data.doctor_name }}" list="doctor-list" required>
-                <datalist id="doctor-list">
-                    {% for d in doctor_names %}
-                    <option value="{{ d }}"></option>
-                    {% endfor %}
-                </datalist>
-            </div>
-
             <div>
                 <label>Appointment Date</label>
                 <input type="date" name="appointment_date" value="{{ form_data.appointment_date }}" required>
@@ -108,7 +108,13 @@ textarea {
 
             <div>
                 <label>Appointment Time</label>
-                <input type="time" name="appointment_time" value="{{ form_data.appointment_time }}" required>
+                <div class="time-row">
+                    <input type="time" name="appointment_time" value="{{ form_data.appointment_time }}" required>
+                    <select name="appointment_period" required>
+                        <option value="AM" {% if form_data.appointment_period == "AM" %}selected{% endif %}>AM</option>
+                        <option value="PM" {% if form_data.appointment_period == "PM" %}selected{% endif %}>PM</option>
+                    </select>
+                </div>
             </div>
 
             <div>
@@ -131,18 +137,13 @@ textarea {
             </div>
 
             <div class="full">
-                <label>Reason</label>
-                <input type="text" name="reason" value="{{ form_data.reason }}" placeholder="Follow-up, fever, BP, etc.">
-            </div>
-
-            <div class="full">
                 <label>Notes</label>
                 <textarea name="notes" placeholder="Additional notes">{{ form_data.notes }}</textarea>
             </div>
         </div>
 
         <div class="actions">
-            <button type="submit" class="btn btn-primary">Save Appointment</button>
+            <button type="submit" class="btn btn-primary">{% if edit_mode %}Update Appointment{% else %}Save Appointment{% endif %}</button>
             <a href="{{ url_for('appointments') }}" class="btn btn-secondary">Back to List</a>
         </div>
     </form>

@@ -487,11 +487,49 @@ def parse_time_value(val):
     if not val:
         return None
     raw = str(val).strip()
-    for fmt in ("%H:%M", "%H:%M:%S"):
+    normalized = raw.upper().replace(".", "")
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p", "%I:%M:%S %p", "%I:%M:%S%p"):
         try:
-            return datetime.strptime(raw, fmt).time()
+            time_source = normalized if "%p" in fmt else raw
+            return datetime.strptime(time_source, fmt).time()
         except ValueError:
             continue
+    return None
+
+def parse_compact_time_input(val, period="AM"):
+    if not val:
+        return None
+    raw = str(val).strip()
+    direct = parse_time_value(raw)
+    if direct:
+        return direct
+
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return None
+
+    hour = None
+    minute = 0
+    if len(digits) <= 2:
+        hour = int(digits)
+    elif len(digits) == 3:
+        hour = int(digits[0])
+        minute = int(digits[1:])
+    elif len(digits) == 4:
+        hour = int(digits[:2])
+        minute = int(digits[2:])
+    else:
+        return None
+
+    if minute < 0 or minute > 59:
+        return None
+
+    if 1 <= hour <= 12:
+        return parse_time_value(f"{hour:02d}:{minute:02d} {period}")
+
+    if 0 <= hour <= 23:
+        return time(hour, minute)
+
     return None
 
 def generate_appointment_no():
@@ -523,6 +561,8 @@ def get_doctor_suggestions():
 
 APPOINTMENT_STATUSES = ("BOOKED", "CHECKED_IN", "COMPLETED", "CANCELLED")
 APPOINTMENT_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD")
+APPOINTMENT_PAYMENT_STATUSES = ("PAID", "UNPAID")
+APPOINTMENT_DEFAULT_DOCTOR = "GENERAL"
 
 def find_medicine_by_name_batch(name, batch):
     n = (name or "").strip()
@@ -751,12 +791,22 @@ with app.app_context():
         ensure_column("stock_history", "ref_table", "TEXT")
         ensure_column("stock_history", "ref_id", "INTEGER")
         ensure_column("appointment", "payment_mode", "TEXT")
+        ensure_column("appointment", "payment_status", "TEXT")
         ensure_column("appointment", "doctor_discount", "REAL")
         ensure_column("appointment", "consultation_fee", "REAL")
         db.session.execute(text(
             'UPDATE "appointment" '
-            "SET \"payment_mode\" = 'CASH' "
-            'WHERE "payment_mode" IS NULL OR "payment_mode" = \'\''
+            'SET "payment_status" = CASE '
+            'WHEN "payment_status" IS NULL OR "payment_status" = \'\' THEN '
+            'CASE WHEN UPPER(COALESCE("payment_mode", \'\')) IN (\'PAID\', \'UNPAID\') '
+            'THEN UPPER("payment_mode") ELSE \'UNPAID\' END '
+            'ELSE UPPER("payment_status") END'
+        ))
+        db.session.execute(text(
+            'UPDATE "appointment" '
+            'SET "payment_mode" = CASE '
+            'WHEN UPPER(COALESCE("payment_mode", \'\')) IN (\'CASH\', \'ONLINE\', \'UPI\', \'CARD\') '
+            'THEN UPPER("payment_mode") ELSE \'CASH\' END'
         ))
         db.session.execute(text(
             'UPDATE "appointment" '
@@ -899,6 +949,7 @@ def index():
 
     # ---------- TODAY SALE ----------
     today = date.today()
+    today_iso = today.isoformat()
     today_invoices = Invoice.query.filter(
         db.func.date(Invoice.created_at) == today
     ).all()
@@ -934,6 +985,15 @@ def index():
         (i.cgst + i.sgst) for i in today_invoices
     )
 
+    # ---------- APPOINTMENTS (TODAY) ----------
+    appointments_today = Appointment.query.filter(
+        Appointment.appointment_date == today
+    )
+    appointment_total_today = appointments_today.count()
+    appointment_booked_today = appointments_today.filter(
+        Appointment.status == "BOOKED"
+    ).count()
+
     return render_template(
         "index.html",
         today_sale=today_sale,
@@ -941,7 +1001,10 @@ def index():
         low_stock=low_stock_count,
         expiring_soon=expiring_soon,
         inventory_value=inventory_value,
-        gst_collected=gst_collected
+        gst_collected=gst_collected,
+        appointment_total_today=appointment_total_today,
+        appointment_booked_today=appointment_booked_today,
+        today_date=today_iso
     )
 @app.route("/low-stock")
 @login_required
@@ -3275,6 +3338,7 @@ def appointments():
     selected_date = parse_date(request.args.get("date")) or date.today()
     selected_status = (request.args.get("status") or "ALL").strip().upper()
     q = (request.args.get("q") or "").strip()
+    list_only = (request.args.get("view") or "").strip().lower() == "list"
 
     query = Appointment.query.filter(Appointment.appointment_date == selected_date)
     if selected_status and selected_status != "ALL":
@@ -3285,7 +3349,8 @@ def appointments():
             Appointment.appointment_no.ilike(like),
             Appointment.patient_name.ilike(like),
             Appointment.mobile.ilike(like),
-            Appointment.doctor_name.ilike(like)
+            Appointment.payment_mode.ilike(like),
+            Appointment.payment_status.ilike(like)
         ))
 
     appointments = query.order_by(Appointment.appointment_time.asc(), Appointment.id.asc()).all()
@@ -3305,118 +3370,134 @@ def appointments():
         selected_status=selected_status,
         q=q,
         status_counts=status_counts,
-        all_statuses=APPOINTMENT_STATUSES
+        all_statuses=APPOINTMENT_STATUSES,
+        list_only=list_only
     )
+
+def build_appointment_form_data(appt=None):
+    form_data = {
+        "patient_name": "",
+        "mobile": "",
+        "appointment_date": date.today().isoformat(),
+        "appointment_time": "",
+        "appointment_period": "AM",
+        "payment_mode": "CASH",
+        "doctor_discount": "0",
+        "consultation_fee": "0",
+        "notes": ""
+    }
+    if appt:
+        time_part = ""
+        time_period = "AM"
+        if appt.appointment_time:
+            hour = appt.appointment_time.hour
+            minute = appt.appointment_time.minute
+            time_period = "PM" if hour >= 12 else "AM"
+            hour12 = hour % 12
+            if hour12 == 0:
+                hour12 = 12
+            time_part = f"{hour12:02d}:{minute:02d}"
+        form_data.update({
+            "patient_name": appt.patient_name or "",
+            "mobile": appt.mobile or "",
+            "appointment_date": appt.appointment_date.isoformat() if appt.appointment_date else date.today().isoformat(),
+            "appointment_time": time_part,
+            "appointment_period": time_period,
+            "payment_mode": (appt.payment_mode or "CASH").strip().upper(),
+            "doctor_discount": str(appt.doctor_discount or 0),
+            "consultation_fee": str(appt.consultation_fee or 0),
+            "notes": appt.notes or ""
+        })
+    if form_data["payment_mode"] not in APPOINTMENT_PAYMENT_MODES:
+        form_data["payment_mode"] = "CASH"
+    return form_data
+
+def read_appointment_form_data(form_data):
+    form_data["patient_name"] = (request.form.get("patient_name") or "").strip()
+    form_data["mobile"] = (request.form.get("mobile") or "").strip()
+    form_data["appointment_date"] = (request.form.get("appointment_date") or "").strip()
+    form_data["appointment_time"] = (request.form.get("appointment_time") or "").strip()
+    form_data["appointment_period"] = (request.form.get("appointment_period") or "AM").strip().upper()
+    form_data["payment_mode"] = (request.form.get("payment_mode") or "CASH").strip().upper()
+    form_data["doctor_discount"] = (request.form.get("doctor_discount") or "0").strip()
+    form_data["consultation_fee"] = (request.form.get("consultation_fee") or "0").strip()
+    form_data["notes"] = (request.form.get("notes") or "").strip()
+    return form_data
+
+def validate_appointment_form(form_data):
+    appt_date = parse_date(form_data["appointment_date"])
+    period = form_data.get("appointment_period", "AM").strip().upper()
+    if period not in ("AM", "PM"):
+        return None, None, None, None, "Please select valid AM/PM."
+
+    base_time = parse_time_value(form_data["appointment_time"])
+    appt_time = None
+    if base_time:
+        hour = base_time.hour
+        minute = base_time.minute
+        if hour <= 12:
+            if period == "AM":
+                if hour == 12:
+                    hour = 0
+            else:
+                if hour < 12:
+                    hour += 12
+        appt_time = time(hour, minute)
+
+    if not form_data["patient_name"] or not appt_date or not appt_time:
+        return None, None, None, None, "Patient, appointment date and valid time are required."
+
+    if form_data["mobile"] and not form_data["mobile"].isdigit():
+        return None, None, None, None, "Mobile number should contain digits only."
+
+    if form_data["payment_mode"] not in APPOINTMENT_PAYMENT_MODES:
+        return None, None, None, None, "Invalid payment mode selected."
+
+    try:
+        doctor_discount = float(form_data["doctor_discount"] or 0)
+    except ValueError:
+        return None, None, None, None, "Doctor discount amount should be a valid number."
+    if doctor_discount < 0:
+        return None, None, None, None, "Doctor discount amount cannot be negative."
+
+    try:
+        consultation_fee = float(form_data["consultation_fee"] or 0)
+    except ValueError:
+        return None, None, None, None, "Consultation fee should be a valid number."
+    if consultation_fee < 0:
+        return None, None, None, None, "Consultation fee cannot be negative."
+
+    return appt_date, appt_time, doctor_discount, consultation_fee, None
 
 @app.route("/appointments/add", methods=["GET", "POST"])
 @login_required
 def add_appointment():
-    doctor_names = get_doctor_suggestions()
-    form_data = {
-        "patient_name": "",
-        "mobile": "",
-        "doctor_name": "",
-        "appointment_date": date.today().isoformat(),
-        "appointment_time": "",
-        "payment_mode": "CASH",
-        "doctor_discount": "0",
-        "consultation_fee": "0",
-        "reason": "",
-        "notes": ""
-    }
+    form_data = build_appointment_form_data()
 
     if request.method == "POST":
-        form_data["patient_name"] = (request.form.get("patient_name") or "").strip()
-        form_data["mobile"] = (request.form.get("mobile") or "").strip()
-        form_data["doctor_name"] = (request.form.get("doctor_name") or "").strip()
-        form_data["appointment_date"] = (request.form.get("appointment_date") or "").strip()
-        form_data["appointment_time"] = (request.form.get("appointment_time") or "").strip()
-        form_data["payment_mode"] = (request.form.get("payment_mode") or "CASH").strip().upper()
-        form_data["doctor_discount"] = (request.form.get("doctor_discount") or "0").strip()
-        form_data["consultation_fee"] = (request.form.get("consultation_fee") or "0").strip()
-        form_data["reason"] = (request.form.get("reason") or "").strip()
-        form_data["notes"] = (request.form.get("notes") or "").strip()
-
-        appt_date = parse_date(form_data["appointment_date"])
-        appt_time = parse_time_value(form_data["appointment_time"])
-
-        if not form_data["patient_name"] or not form_data["doctor_name"] or not appt_date or not appt_time:
-            flash("Patient, doctor, appointment date and time are required.", "danger")
+        form_data = read_appointment_form_data(form_data)
+        appt_date, appt_time, doctor_discount, consultation_fee, error_msg = validate_appointment_form(form_data)
+        if error_msg:
+            flash(error_msg, "danger")
             return render_template(
                 "add_appointment.html",
-                doctor_names=doctor_names,
                 form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
-            )
-
-        if form_data["mobile"] and not form_data["mobile"].isdigit():
-            flash("Mobile number should contain digits only.", "danger")
-            return render_template(
-                "add_appointment.html",
-                doctor_names=doctor_names,
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
-            )
-
-        if form_data["payment_mode"] not in APPOINTMENT_PAYMENT_MODES:
-            flash("Invalid payment mode selected.", "danger")
-            return render_template(
-                "add_appointment.html",
-                doctor_names=doctor_names,
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
-            )
-
-        try:
-            doctor_discount = float(form_data["doctor_discount"] or 0)
-        except ValueError:
-            flash("Doctor discount amount should be a valid number.", "danger")
-            return render_template(
-                "add_appointment.html",
-                doctor_names=doctor_names,
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
-            )
-        if doctor_discount < 0:
-            flash("Doctor discount amount cannot be negative.", "danger")
-            return render_template(
-                "add_appointment.html",
-                doctor_names=doctor_names,
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
-            )
-
-        try:
-            consultation_fee = float(form_data["consultation_fee"] or 0)
-        except ValueError:
-            flash("Consultation fee should be a valid number.", "danger")
-            return render_template(
-                "add_appointment.html",
-                doctor_names=doctor_names,
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
-            )
-        if consultation_fee < 0:
-            flash("Consultation fee cannot be negative.", "danger")
-            return render_template(
-                "add_appointment.html",
-                doctor_names=doctor_names,
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                edit_mode=False
             )
 
         appointment = Appointment(
             appointment_no=generate_appointment_no(),
             patient_name=form_data["patient_name"],
             mobile=form_data["mobile"],
-            doctor_name=form_data["doctor_name"],
+            doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
             appointment_date=appt_date,
             appointment_time=appt_time,
             payment_mode=form_data["payment_mode"],
+            payment_status="UNPAID",
             doctor_discount=doctor_discount,
             consultation_fee=consultation_fee,
             status="BOOKED",
-            reason=form_data["reason"],
             notes=form_data["notes"],
             created_by=session.get("username")
         )
@@ -3428,9 +3509,52 @@ def add_appointment():
 
     return render_template(
         "add_appointment.html",
-        doctor_names=doctor_names,
         form_data=form_data,
-        payment_modes=APPOINTMENT_PAYMENT_MODES
+        payment_modes=APPOINTMENT_PAYMENT_MODES,
+        edit_mode=False
+    )
+
+@app.route("/appointments/<int:id>/edit", methods=["GET", "POST"])
+@login_required
+def edit_appointment(id):
+    appointment = Appointment.query.get_or_404(id)
+    form_data = build_appointment_form_data(appointment)
+
+    if request.method == "POST":
+        form_data = read_appointment_form_data(form_data)
+        appt_date, appt_time, doctor_discount, consultation_fee, error_msg = validate_appointment_form(form_data)
+        if error_msg:
+            flash(error_msg, "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                edit_mode=True,
+                appt_id=appointment.id
+            )
+
+        appointment.patient_name = form_data["patient_name"]
+        appointment.mobile = form_data["mobile"]
+        appointment.doctor_name = APPOINTMENT_DEFAULT_DOCTOR
+        appointment.appointment_date = appt_date
+        appointment.appointment_time = appt_time
+        appointment.payment_mode = form_data["payment_mode"]
+        appointment.doctor_discount = doctor_discount
+        appointment.consultation_fee = consultation_fee
+        appointment.notes = form_data["notes"]
+        if (appointment.payment_status or "").strip().upper() not in APPOINTMENT_PAYMENT_STATUSES:
+            appointment.payment_status = "UNPAID"
+
+        db.session.commit()
+        flash("Appointment updated successfully.", "success")
+        return redirect(url_for("appointments", date=appt_date.isoformat()))
+
+    return render_template(
+        "add_appointment.html",
+        form_data=form_data,
+        payment_modes=APPOINTMENT_PAYMENT_MODES,
+        edit_mode=True,
+        appt_id=appointment.id
     )
 
 @app.route("/appointments/<int:id>/status", methods=["POST"])
@@ -3461,6 +3585,19 @@ def update_appointment_status(id):
             date=(appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat())
         )
     )
+
+@app.route("/appointments/<int:id>/payment/paid", methods=["POST"])
+@login_required
+def mark_appointment_paid(id):
+    appointment = Appointment.query.get_or_404(id)
+    selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
+    if (appointment.payment_status or "").strip().upper() == "PAID":
+        flash("Appointment is already marked as paid.", "info")
+        return redirect(request.referrer or url_for("appointments", date=selected_date))
+    appointment.payment_status = "PAID"
+    db.session.commit()
+    flash("Appointment marked as paid.", "success")
+    return redirect(request.referrer or url_for("appointments", date=selected_date))
 
 @app.route("/appointments/delete/<int:id>", methods=["POST"])
 @login_required
