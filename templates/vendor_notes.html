@@ -1,0 +1,693 @@
+{% extends "base.html" %}
+{% block title %}Vendor Notes{% endblock %}
+
+{% block body %}
+<style>
+.notes-wrap {
+    display: grid;
+    gap: 14px;
+    font-size: 10px;
+}
+
+.card {
+    background: #fff;
+    padding: 16px;
+    border-radius: 8px;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.08);
+}
+
+.card h2,
+.card h3 {
+    margin: 0 0 10px;
+}
+
+.sub {
+    margin: 0 0 12px;
+    color: #5f6b7a;
+    font-size: 9px;
+}
+
+.grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(4, minmax(150px, 220px));
+    justify-content: start;
+}
+
+.field label {
+    display: block;
+    font-size: 9px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: #2b3c50;
+}
+
+.field input,
+.field select,
+.field textarea {
+    width: 100%;
+    padding: 4px 6px;
+    height: 30px;
+    border: 1px solid #cfd8e3;
+    border-radius: 6px;
+    font-size: 9px;
+    box-sizing: border-box;
+}
+
+.field textarea {
+    min-height: 48px;
+    height: 48px;
+    resize: vertical;
+}
+
+.full {
+    grid-column: span 2;
+}
+
+.field.full input,
+.field.full textarea {
+    max-width: 100%;
+}
+
+.toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.btn {
+    border: 1px solid #0d6efd;
+    background: #0d6efd;
+    color: #fff;
+    border-radius: 6px;
+    padding: 5px 9px;
+    cursor: pointer;
+    font-size: 9px;
+}
+
+.btn.alt {
+    border-color: #6c757d;
+    background: #6c757d;
+}
+
+.btn.warn {
+    border-color: #dc3545;
+    background: #dc3545;
+}
+
+.btn.ghost {
+    border-color: #0d6efd;
+    background: #fff;
+    color: #0d6efd;
+}
+
+.msg {
+    margin-top: 8px;
+    font-size: 9px;
+    color: #0a7b34;
+}
+
+.msg.error {
+    color: #b42318;
+}
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.item-list {
+    display: grid;
+    gap: 10px;
+}
+
+.item-row {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(110px, 170px));
+    gap: 8px;
+    justify-content: start;
+    border: 1px solid #d9e2ef;
+    border-radius: 8px;
+    padding: 8px;
+    background: #f8fbff;
+}
+
+.item-field {
+    min-width: 0;
+}
+
+.item-field label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 8px;
+    font-weight: 700;
+    color: #2b3c50;
+}
+
+.item-field input,
+.item-field select {
+    width: 100%;
+    padding: 4px 6px;
+    height: 28px;
+    border: 1px solid #cfd8e3;
+    border-radius: 6px;
+    font-size: 9px;
+    background: #fff;
+    box-sizing: border-box;
+}
+
+.item-field.medicine {
+    grid-column: span 2;
+}
+
+.item-field.action {
+    display: flex;
+    align-items: end;
+    justify-content: flex-end;
+}
+
+th,
+td {
+    border: 1px solid #e1e8f0;
+    padding: 5px;
+    font-size: 9px;
+    text-align: center;
+}
+
+th {
+    background: #0d6efd;
+    color: #fff;
+}
+
+.status {
+    font-weight: 600;
+}
+
+.status.draft {
+    color: #b54708;
+}
+
+.status.posted {
+    color: #0a7b34;
+}
+
+.status.cancelled {
+    color: #b42318;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 10px;
+    border-radius: 6px;
+    max-height: 300px;
+    overflow: auto;
+    font-size: 9px;
+}
+
+@media (max-width: 900px) {
+    .grid {
+        grid-template-columns: repeat(2, minmax(150px, 220px));
+    }
+
+    .item-row {
+        grid-template-columns: repeat(3, minmax(110px, 170px));
+    }
+}
+
+@media (max-width: 620px) {
+    .grid {
+        grid-template-columns: 1fr;
+        justify-content: stretch;
+    }
+
+    .item-row {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+        justify-content: stretch;
+    }
+
+    .full {
+        grid-column: 1 / -1;
+    }
+
+    .item-field.medicine {
+        grid-column: 1 / -1;
+    }
+
+    .item-field.action {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
+}
+</style>
+
+<div class="notes-wrap">
+    <div class="card">
+        <h2>Vendor Debit/Credit Notes</h2>
+        <p class="sub">Create draft note, add lines, and post directly from this screen.</p>
+
+        <div class="grid" id="noteForm">
+            <div class="field">
+                <label>Vendor</label>
+                <select id="vendor_id" required>
+                    <option value="">Select Vendor</option>
+                    {% for v in vendors %}
+                    <option value="{{ v.id }}">{{ v.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Note Type</label>
+                <select id="note_type">
+                    <option value="DEBIT">Debit Note</option>
+                    <option value="CREDIT">Credit Note</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Mode</label>
+                <select id="note_mode">
+                    <option value="ITEMIZED">Itemized</option>
+                    <option value="AMOUNT_ONLY">Amount Only (Credit)</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Note Date</label>
+                <input id="note_date" type="date" value="{{ today }}" required>
+            </div>
+            <div class="field">
+                <label>Reference Purchase Bill</label>
+                <select id="reference_purchase_id">
+                    <option value="">None</option>
+                    {% for p in purchases %}
+                    <option value="{{ p.id }}" data-vendor-id="{{ p.vendor_id }}">
+                        {{ p.invoice_no if p.invoice_no else p.purchase_no }} (ID {{ p.id }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Supplier Bill No</label>
+                <input id="supplier_bill_no" type="text" placeholder="Optional">
+            </div>
+            <div class="field">
+                <label>Reason Code</label>
+                <input id="reason_code" type="text" placeholder="DAMAGED / EXPIRY / RATE_DIFF">
+            </div>
+            <div class="field">
+                <label>Round Off</label>
+                <input id="round_off" type="number" step="any" value="0">
+            </div>
+            <div class="field full">
+                <label>Reason Text</label>
+                <input id="reason_text" type="text" placeholder="Optional reason details">
+            </div>
+            <div class="field full">
+                <label>Remarks</label>
+                <textarea id="remarks" placeholder="Optional remarks"></textarea>
+            </div>
+            <div class="field" id="amountOnlyWrap" style="display:none;">
+                <label>Amount (Credit Amount Only)</label>
+                <input id="amount_only_total" type="number" step="any" value="0">
+            </div>
+        </div>
+
+        <div id="itemsSection" style="margin-top:12px;">
+            <div id="itemsBody" class="item-list">
+                <div class="item-row">
+                    <div class="item-field medicine">
+                        <label>Medicine</label>
+                        <select name="medicine_id" class="medicine-select">
+                            <option value="">Select</option>
+                            {% for m in medicines %}
+                            <option value="{{ m.id }}" data-batch="{{ m.batch }}" data-expiry="{{ m.expiry }}">
+                                {{ m.name }} | {{ m.batch }} | {{ m.expiry }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="item-field">
+                        <label>Batch</label>
+                        <input name="batch_no" type="text">
+                    </div>
+                    <div class="item-field">
+                        <label>Expiry</label>
+                        <input name="expiry" type="text" placeholder="MM/YYYY or YYYY-MM-DD">
+                    </div>
+                    <div class="item-field">
+                        <label>Qty</label>
+                        <input name="qty" type="number" min="0" value="0">
+                    </div>
+                    <div class="item-field">
+                        <label>Free</label>
+                        <input name="free_qty" type="number" min="0" value="0">
+                    </div>
+                    <div class="item-field">
+                        <label>Rate</label>
+                        <input name="purchase_rate" type="number" step="any" value="0">
+                    </div>
+                    <div class="item-field">
+                        <label>MRP</label>
+                        <input name="mrp" type="number" step="any" value="0">
+                    </div>
+                    <div class="item-field">
+                        <label>GST%</label>
+                        <input name="gst_percent" type="number" step="any" value="0">
+                    </div>
+                    <div class="item-field">
+                        <label>Disc%</label>
+                        <input name="disc_percent" type="number" step="any" value="0">
+                    </div>
+                    <div class="item-field">
+                        <label>HSN</label>
+                        <input name="hsn" type="text">
+                    </div>
+                    <div class="item-field action">
+                        <button type="button" class="btn warn remove-row">Remove</button>
+                    </div>
+                </div>
+            </div>
+            <div class="toolbar">
+                <button type="button" class="btn ghost" id="addRowBtn">Add Row</button>
+            </div>
+        </div>
+
+        <div class="toolbar">
+            <button type="button" class="btn alt" id="saveDraftBtn">Save Draft</button>
+            <button type="button" class="btn" id="savePostBtn">Save and Post</button>
+            <button type="button" class="btn ghost" id="resetBtn">Reset Form</button>
+        </div>
+        <div id="formMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+        <h3>Latest Vendor Notes</h3>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Note No</th>
+                        <th>Type</th>
+                        <th>Vendor</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                        <th>Grand Total</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if notes %}
+                        {% for n in notes %}
+                        <tr>
+                            <td>{{ n.note_no }}</td>
+                            <td>{{ n.note_type }}</td>
+                            <td>{{ vendor_map.get(n.vendor_id, "-") }}</td>
+                            <td>{{ n.note_date.strftime('%d-%m-%Y') if n.note_date else '-' }}</td>
+                            <td>
+                                <span class="status {{ n.status|lower }}">{{ n.status }}</span>
+                            </td>
+                            <td>{{ n.grand_total or 0 }}</td>
+                            <td>
+                                <button type="button" class="btn ghost note-action" data-action="view" data-note-id="{{ n.id }}">View</button>
+                                {% if n.status == "DRAFT" %}
+                                <button type="button" class="btn note-action" data-action="post" data-note-id="{{ n.id }}">Post</button>
+                                {% elif n.status == "POSTED" %}
+                                <button type="button" class="btn warn note-action" data-action="cancel" data-note-id="{{ n.id }}">Cancel</button>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="7">No vendor notes found.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+        <div style="margin-top:10px;">
+            <pre id="noteJson">Select "View" to see note details.</pre>
+        </div>
+    </div>
+</div>
+
+<script>
+function toNumber(val, fallback = 0) {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function setMessage(text, isError) {
+    const box = document.getElementById("formMsg");
+    box.textContent = text || "";
+    box.classList.toggle("error", !!isError);
+}
+
+async function apiRequest(url, method, payload) {
+    const res = await fetch(url, {
+        method: method,
+        headers: { "Content-Type": "application/json" },
+        body: payload ? JSON.stringify(payload) : undefined
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.error || "Request failed");
+    }
+    return data;
+}
+
+function syncModeUI() {
+    const noteType = document.getElementById("note_type").value;
+    const mode = document.getElementById("note_mode").value;
+    const amountOnly = noteType === "CREDIT" && mode === "AMOUNT_ONLY";
+    document.getElementById("amountOnlyWrap").style.display = amountOnly ? "" : "none";
+    document.getElementById("itemsSection").style.display = amountOnly ? "none" : "";
+}
+
+function filterPurchaseByVendor() {
+    const vendorId = document.getElementById("vendor_id").value;
+    const ref = document.getElementById("reference_purchase_id");
+    for (const opt of ref.options) {
+        if (!opt.value) {
+            opt.hidden = false;
+            continue;
+        }
+        const optionVendor = opt.getAttribute("data-vendor-id") || "";
+        opt.hidden = !!vendorId && optionVendor !== vendorId;
+    }
+    if (ref.selectedOptions.length && ref.selectedOptions[0].hidden) {
+        ref.value = "";
+    }
+}
+
+function addItemRow() {
+    const body = document.getElementById("itemsBody");
+    const first = body.querySelector(".item-row");
+    const row = first.cloneNode(true);
+    row.querySelectorAll("input").forEach((el) => { el.value = ""; });
+    row.querySelectorAll("select").forEach((el) => { el.selectedIndex = 0; });
+    row.querySelector("input[name='qty']").value = "0";
+    row.querySelector("input[name='free_qty']").value = "0";
+    row.querySelector("input[name='purchase_rate']").value = "0";
+    row.querySelector("input[name='mrp']").value = "0";
+    row.querySelector("input[name='gst_percent']").value = "0";
+    row.querySelector("input[name='disc_percent']").value = "0";
+    body.appendChild(row);
+}
+
+function collectItems() {
+    const rows = Array.from(document.querySelectorAll("#itemsBody .item-row"));
+    const items = [];
+    rows.forEach((row) => {
+        const medicineId = row.querySelector("select[name='medicine_id']").value;
+        const qty = toNumber(row.querySelector("input[name='qty']").value, 0);
+        if (!medicineId || qty <= 0) return;
+        items.push({
+            medicine_id: toNumber(medicineId, 0),
+            batch_no: (row.querySelector("input[name='batch_no']").value || "").trim(),
+            expiry: (row.querySelector("input[name='expiry']").value || "").trim(),
+            qty: qty,
+            free_qty: toNumber(row.querySelector("input[name='free_qty']").value, 0),
+            purchase_rate: toNumber(row.querySelector("input[name='purchase_rate']").value, 0),
+            mrp: toNumber(row.querySelector("input[name='mrp']").value, 0),
+            gst_percent: toNumber(row.querySelector("input[name='gst_percent']").value, 0),
+            disc_percent: toNumber(row.querySelector("input[name='disc_percent']").value, 0),
+            hsn: (row.querySelector("input[name='hsn']").value || "").trim()
+        });
+    });
+    return items;
+}
+
+function resetForm() {
+    document.getElementById("vendor_id").value = "";
+    document.getElementById("note_type").value = "DEBIT";
+    document.getElementById("note_mode").value = "ITEMIZED";
+    document.getElementById("note_date").value = "{{ today }}";
+    document.getElementById("reference_purchase_id").value = "";
+    document.getElementById("supplier_bill_no").value = "";
+    document.getElementById("reason_code").value = "";
+    document.getElementById("reason_text").value = "";
+    document.getElementById("remarks").value = "";
+    document.getElementById("round_off").value = "0";
+    document.getElementById("amount_only_total").value = "0";
+    const body = document.getElementById("itemsBody");
+    const first = body.querySelector(".item-row");
+    body.innerHTML = "";
+    body.appendChild(first);
+    first.querySelectorAll("input").forEach((el) => { el.value = ""; });
+    first.querySelectorAll("select").forEach((el) => { el.selectedIndex = 0; });
+    first.querySelector("input[name='qty']").value = "0";
+    first.querySelector("input[name='free_qty']").value = "0";
+    first.querySelector("input[name='purchase_rate']").value = "0";
+    first.querySelector("input[name='mrp']").value = "0";
+    first.querySelector("input[name='gst_percent']").value = "0";
+    first.querySelector("input[name='disc_percent']").value = "0";
+    syncModeUI();
+    filterPurchaseByVendor();
+    setMessage("");
+}
+
+async function createNote(postAfter) {
+    setMessage("");
+    const noteType = document.getElementById("note_type").value;
+    const mode = document.getElementById("note_mode").value;
+    const amountOnly = noteType === "CREDIT" && mode === "AMOUNT_ONLY";
+    const vendorId = document.getElementById("vendor_id").value;
+    const noteDate = document.getElementById("note_date").value;
+    if (!vendorId || !noteDate) {
+        setMessage("Vendor and note date are required.", true);
+        return;
+    }
+
+    const payload = {
+        note_type: noteType,
+        vendor_id: toNumber(vendorId, 0),
+        note_date: noteDate,
+        supplier_bill_no: (document.getElementById("supplier_bill_no").value || "").trim(),
+        reason_code: (document.getElementById("reason_code").value || "").trim(),
+        reason_text: (document.getElementById("reason_text").value || "").trim(),
+        remarks: (document.getElementById("remarks").value || "").trim()
+    };
+    const refPurchase = document.getElementById("reference_purchase_id").value;
+    if (refPurchase) payload.reference_purchase_id = toNumber(refPurchase, 0);
+    const items = amountOnly ? [] : collectItems();
+    if (!amountOnly && items.length === 0) {
+        setMessage("Add at least one item with quantity > 0.", true);
+        return;
+    }
+    const amountOnlyTotal = toNumber(document.getElementById("amount_only_total").value, 0);
+    if (amountOnly && amountOnlyTotal <= 0) {
+        setMessage("Amount must be greater than 0 for amount-only credit note.", true);
+        return;
+    }
+
+    try {
+        if (amountOnly) {
+            payload.mode = "AMOUNT_ONLY";
+            payload.grand_total = amountOnlyTotal;
+            payload.round_off = toNumber(document.getElementById("round_off").value, 0);
+        }
+
+        const created = await apiRequest("/api/vendor-notes", "POST", payload);
+        const noteId = created.id;
+
+        if (!amountOnly) {
+            await apiRequest(`/api/vendor-notes/${noteId}/items`, "PUT", {
+                items: items,
+                round_off: toNumber(document.getElementById("round_off").value, 0)
+            });
+        }
+
+        if (postAfter) {
+            await apiRequest(`/api/vendor-notes/${noteId}/post`, "POST", {});
+            setMessage("Vendor note posted successfully.");
+        } else {
+            setMessage("Vendor note saved as draft.");
+        }
+        window.location.reload();
+    } catch (err) {
+        setMessage(err.message || "Failed to save note.", true);
+    }
+}
+
+async function handleNoteAction(action, noteId) {
+    const out = document.getElementById("noteJson");
+    try {
+        if (action === "view") {
+            const data = await apiRequest(`/api/vendor-notes/${noteId}`, "GET");
+            out.textContent = JSON.stringify(data, null, 2);
+            return;
+        }
+        if (action === "post") {
+            if (!confirm("Post this draft note?")) return;
+            await apiRequest(`/api/vendor-notes/${noteId}/post`, "POST", {});
+            window.location.reload();
+            return;
+        }
+        if (action === "cancel") {
+            const reason = prompt("Cancel reason (optional):") || "";
+            await apiRequest(`/api/vendor-notes/${noteId}/cancel`, "POST", { cancel_reason: reason });
+            window.location.reload();
+        }
+    } catch (err) {
+        out.textContent = err.message || "Action failed";
+    }
+}
+
+document.addEventListener("change", function (e) {
+    if (e.target.id === "vendor_id") {
+        filterPurchaseByVendor();
+    }
+    if (e.target.id === "note_type" || e.target.id === "note_mode") {
+        if (document.getElementById("note_type").value === "DEBIT") {
+            document.getElementById("note_mode").value = "ITEMIZED";
+        }
+        syncModeUI();
+    }
+    if (e.target.classList.contains("medicine-select")) {
+        const row = e.target.closest(".item-row");
+        const selected = e.target.selectedOptions[0];
+        if (!row || !selected) return;
+        const batch = selected.getAttribute("data-batch") || "";
+        const expiry = selected.getAttribute("data-expiry") || "";
+        row.querySelector("input[name='batch_no']").value = batch;
+        row.querySelector("input[name='expiry']").value = expiry;
+    }
+});
+
+document.addEventListener("click", function (e) {
+    if (e.target.id === "addRowBtn") {
+        addItemRow();
+    }
+    if (e.target.id === "saveDraftBtn") {
+        createNote(false);
+    }
+    if (e.target.id === "savePostBtn") {
+        createNote(true);
+    }
+    if (e.target.id === "resetBtn") {
+        resetForm();
+    }
+    if (e.target.classList.contains("remove-row")) {
+        const rows = document.querySelectorAll("#itemsBody .item-row");
+        if (rows.length <= 1) return;
+        e.target.closest(".item-row").remove();
+    }
+    if (e.target.classList.contains("note-action")) {
+        const noteId = e.target.getAttribute("data-note-id");
+        const action = e.target.getAttribute("data-action");
+        if (!noteId || !action) return;
+        handleNoteAction(action, noteId);
+    }
+});
+
+syncModeUI();
+filterPurchaseByVendor();
+</script>
+{% endblock %}

@@ -461,6 +461,20 @@ def get_purchase_items_for_return(med, batch_no=None, reference_purchase_id=None
         query = query.filter(VendorPurchaseItem.batch == batch_no)
     return query.order_by(VendorPurchaseItem.created_at.asc(), VendorPurchaseItem.id.asc()).all()
 
+def adjust_vendor_outstanding(vendor_id, delta):
+    vendor = Vendor.query.get(vendor_id) if vendor_id else None
+    if not vendor:
+        return
+    balance = to_decimal(vendor.outstanding_balance or 0) + to_decimal(delta or 0)
+    if balance < Decimal("0"):
+        balance = Decimal("0")
+    vendor.outstanding_balance = float(quantize_decimal(balance, "0.01"))
+    if vendor.outstanding_balance <= 0:
+        vendor.payment_status = "Paid"
+    elif (vendor.payment_status or "").strip().lower() == "paid":
+        vendor.payment_status = "Unpaid"
+    db.session.add(vendor)
+
 def parse_date(val):
     if not val:
         return None
@@ -862,6 +876,21 @@ def admin_required(f):
             return redirect("/")
         return f(*args, **kwargs)
     return w
+
+def vendor_note_access_required(api=False):
+    def decorator(f):
+        @wraps(f)
+        def w(*args, **kwargs):
+            user = User.query.get(session.get("user_id"))
+            allowed = bool(user and (user.role == "admin" or user.can_invoice_action))
+            if allowed:
+                return f(*args, **kwargs)
+            if api:
+                return jsonify({"error": "Access denied"}), 403
+            flash("Access denied", "danger")
+            return redirect("/")
+        return w
+    return decorator
 # ---------------- DASHBOARD (DAILY LIVE SALE) ----------------
 @app.route("/")
 @login_required
@@ -1494,7 +1523,10 @@ def return_medicine():
         returned_map = dict(
             db.session.query(ReturnItem.invoice_item_id, db.func.sum(ReturnItem.qty))
             .join(Return, Return.id == ReturnItem.return_id)
-            .filter(Return.invoice_id == invoice.id)
+            .filter(
+                Return.invoice_id == invoice.id,
+                Return.is_cancelled == False
+            )
             .group_by(ReturnItem.invoice_item_id)
             .all()
         )
@@ -1618,7 +1650,10 @@ def return_medicine():
             returned_map = dict(
                 db.session.query(ReturnItem.invoice_item_id, db.func.sum(ReturnItem.qty))
                 .join(Return, Return.id == ReturnItem.return_id)
-                .filter(Return.invoice_id == invoice.id)
+                .filter(
+                    Return.invoice_id == invoice.id,
+                    Return.is_cancelled == False
+                )
                 .group_by(ReturnItem.invoice_item_id)
                 .all()
             )
@@ -2076,6 +2111,35 @@ def salt():
 def vendor():
     vendors = Vendor.query.order_by(Vendor.name).all()
     return render_template("vendor.html", vendors=vendors)
+
+@app.route("/vendor-notes")
+@login_required
+@vendor_note_access_required()
+def vendor_notes():
+    vendors = Vendor.query.order_by(Vendor.name.asc()).all()
+    medicines = Medicine.query.order_by(
+        db.func.lower(Medicine.name).asc(),
+        Medicine.batch.asc(),
+        Medicine.id.asc()
+    ).all()
+    purchases = VendorPurchase.query.order_by(
+        VendorPurchase.purchase_date.desc(),
+        VendorPurchase.id.desc()
+    ).limit(300).all()
+    notes = VendorNote.query.order_by(
+        VendorNote.note_date.desc(),
+        VendorNote.id.desc()
+    ).limit(200).all()
+    vendor_map = {v.id: v.name for v in vendors}
+    return render_template(
+        "vendor_notes.html",
+        vendors=vendors,
+        medicines=medicines,
+        purchases=purchases,
+        notes=notes,
+        vendor_map=vendor_map,
+        today=date.today().isoformat()
+    )
 
 @app.route("/vendor/reports")
 @login_required
@@ -2798,10 +2862,10 @@ def edit_vendor_purchase_item(item_id):
         sold_qty=sold_qty
     )
 
-
 # ---------------- VENDOR NOTES (DEBIT/CREDIT) ----------------
 @app.route("/api/vendor-notes", methods=["POST"])
 @login_required
+@vendor_note_access_required(api=True)
 def api_create_vendor_note():
     data = request.get_json(silent=True) or {}
     note_type = (data.get("note_type") or "").strip().upper()
@@ -2822,6 +2886,8 @@ def api_create_vendor_note():
         purchase = VendorPurchase.query.get(reference_purchase_id)
         if not purchase:
             return jsonify({"error": "Invalid reference_purchase_id"}), 400
+        if purchase.vendor_id != vendor.id:
+            return jsonify({"error": "reference_purchase_id does not belong to vendor_id"}), 400
 
     note = VendorNote(
         note_no=generate_vendor_note_no(note_type),
@@ -2854,6 +2920,7 @@ def api_create_vendor_note():
 
 @app.route("/api/vendor-notes/<int:note_id>/items", methods=["PUT"])
 @login_required
+@vendor_note_access_required(api=True)
 def api_update_vendor_note_items(note_id):
     note = VendorNote.query.get_or_404(note_id)
     if note.status != "DRAFT":
@@ -2922,10 +2989,17 @@ def api_update_vendor_note_items(note_id):
 
 @app.route("/api/vendor-notes/<int:note_id>/post", methods=["POST"])
 @login_required
+@vendor_note_access_required(api=True)
 def api_post_vendor_note(note_id):
     note = VendorNote.query.get_or_404(note_id)
     if note.status != "DRAFT":
         return jsonify({"error": "Only DRAFT notes can be posted"}), 400
+    if note.reference_purchase_id:
+        purchase = VendorPurchase.query.get(note.reference_purchase_id)
+        if not purchase:
+            return jsonify({"error": "Invalid reference_purchase_id"}), 400
+        if purchase.vendor_id != note.vendor_id:
+            return jsonify({"error": "reference_purchase_id does not belong to note vendor"}), 400
 
     items = VendorNoteItem.query.filter_by(note_id=note.id).all()
 
@@ -3005,6 +3079,7 @@ def api_post_vendor_note(note_id):
                 credit=quantize_decimal(0, "0.0001"),
                 notes=f"Vendor debit note {note.note_no}"
             ))
+            adjust_vendor_outstanding(note.vendor_id, -to_decimal(note.grand_total or 0))
 
             note.status = "POSTED"
             note.posted_at = datetime.utcnow()
@@ -3020,10 +3095,11 @@ def api_post_vendor_note(note_id):
                 txn_type="CREDIT_NOTE",
                 ref_table="vendor_notes",
                 ref_id=note.id,
-                debit=quantize_decimal(note.grand_total or 0, "0.0001"),
-                credit=quantize_decimal(0, "0.0001"),
+                debit=quantize_decimal(0, "0.0001"),
+                credit=quantize_decimal(note.grand_total or 0, "0.0001"),
                 notes=f"Vendor credit note {note.note_no}"
             ))
+            adjust_vendor_outstanding(note.vendor_id, to_decimal(note.grand_total or 0))
 
             note.status = "POSTED"
             note.posted_at = datetime.utcnow()
@@ -3035,6 +3111,7 @@ def api_post_vendor_note(note_id):
 
 @app.route("/api/vendor-notes/<int:note_id>/cancel", methods=["POST"])
 @login_required
+@vendor_note_access_required(api=True)
 def api_cancel_vendor_note(note_id):
     note = VendorNote.query.get_or_404(note_id)
     if note.status != "POSTED":
@@ -3047,6 +3124,8 @@ def api_cancel_vendor_note(note_id):
     allocations = VendorNoteAllocation.query.filter_by(note_id=note.id).all()
 
     with db.session.begin():
+        reversal_debit = quantize_decimal(0, "0.0001")
+        reversal_credit = quantize_decimal(0, "0.0001")
         if note.note_type == "DEBIT":
             for it in items:
                 total_qty = to_int(it.qty) + to_int(it.free_qty)
@@ -3098,6 +3177,11 @@ def api_cancel_vendor_note(note_id):
                         take = remaining
                         pi.remaining_qty = to_int(pi.remaining_qty) + take
                         remaining -= take
+            reversal_credit = quantize_decimal(note.grand_total or 0, "0.0001")
+            adjust_vendor_outstanding(note.vendor_id, to_decimal(note.grand_total or 0))
+        elif note.note_type == "CREDIT":
+            reversal_debit = quantize_decimal(note.grand_total or 0, "0.0001")
+            adjust_vendor_outstanding(note.vendor_id, -to_decimal(note.grand_total or 0))
 
         db.session.add(VendorLedgerEntry(
             vendor_id=note.vendor_id,
@@ -3105,8 +3189,8 @@ def api_cancel_vendor_note(note_id):
             txn_type="REVERSAL",
             ref_table="vendor_notes",
             ref_id=note.id,
-            debit=quantize_decimal(0, "0.0001"),
-            credit=quantize_decimal(note.grand_total or 0, "0.0001"),
+            debit=reversal_debit,
+            credit=reversal_credit,
             notes=f"Reversal of {note.note_no}"
         ))
 
@@ -3121,6 +3205,7 @@ def api_cancel_vendor_note(note_id):
 
 @app.route("/api/vendor-notes", methods=["GET"])
 @login_required
+@vendor_note_access_required(api=True)
 def api_list_vendor_notes():
     vendor_id = request.args.get("vendor_id")
     note_type = (request.args.get("type") or "").strip().upper()
@@ -3161,6 +3246,7 @@ def api_list_vendor_notes():
 
 @app.route("/api/vendor-notes/<int:note_id>", methods=["GET"])
 @login_required
+@vendor_note_access_required(api=True)
 def api_view_vendor_note(note_id):
     note = VendorNote.query.get_or_404(note_id)
     return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
@@ -3399,9 +3485,26 @@ def reports():
     invoices = []
     total = 0
     profit_summary = None
+    medicine_summary = []
+    fast_movers = []
+    medicine_totals = None
+    report_filters = {
+        "month": "",
+        "year": "",
+        "from_date": "",
+        "to_date": "",
+        "patient": "",
+        "mobile": "",
+        "medicine_query": "",
+        "top_n": "10"
+    }
 
     report_type = request.form.get("report_type")
     if request.method == "POST":
+        for key in report_filters.keys():
+            report_filters[key] = (request.form.get(key) or "").strip()
+        if not report_filters["top_n"]:
+            report_filters["top_n"] = "10"
 
         # DAILY
         if report_type == "daily":
@@ -3501,6 +3604,153 @@ def reports():
                     "gross_profit_percentage": round(gross_profit_percentage, 2)
                 }
 
+        # MEDICINE SUMMARY / FAST MOVERS
+        elif report_type == "medicine":
+            from_date = report_filters["from_date"]
+            to_date = report_filters["to_date"]
+            q = report_filters["medicine_query"].lower()
+            top_n = to_int_safe(report_filters["top_n"], 10)
+            if top_n < 1:
+                top_n = 10
+            if top_n > 100:
+                top_n = 100
+            report_filters["top_n"] = str(top_n)
+
+            start = None
+            end = None
+            if from_date:
+                try:
+                    start = datetime.strptime(from_date, "%Y-%m-%d")
+                except ValueError:
+                    flash("Invalid from date", "danger")
+            if to_date:
+                try:
+                    end = datetime.strptime(to_date, "%Y-%m-%d")
+                except ValueError:
+                    flash("Invalid to date", "danger")
+
+            if start and end and end < start:
+                flash("To date must be greater than or equal to from date", "danger")
+            else:
+                end_exclusive = (end + timedelta(days=1)) if end else None
+                period_days = 0
+                if start and end:
+                    period_days = (end.date() - start.date()).days + 1
+                elif start and not end:
+                    period_days = (datetime.now().date() - start.date()).days + 1
+                elif end and not start:
+                    period_days = 1
+
+                rows = {}
+                med_name_by_id = {m.id: (m.name or "").strip() for m in Medicine.query.all()}
+
+                def get_row(name):
+                    key = (name or "").strip().upper()
+                    if not key:
+                        return None
+                    if key not in rows:
+                        rows[key] = {
+                            "medicine": key,
+                            "purchase_qty": 0,
+                            "free_qty": 0,
+                            "inward_qty": 0,
+                            "sold_qty": 0,
+                            "return_qty": 0,
+                            "net_sold_qty": 0,
+                            "current_stock": 0,
+                            "purchase_value": 0.0,
+                            "sales_value": 0.0,
+                            "avg_daily_sale": 0.0
+                        }
+                    return rows[key]
+
+                for med in Medicine.query.all():
+                    row = get_row(med.name)
+                    if not row:
+                        continue
+                    row["current_stock"] += to_int(med.qty)
+
+                purchase_query = VendorPurchaseItem.query
+                if start:
+                    purchase_query = purchase_query.filter(VendorPurchaseItem.created_at >= start)
+                if end_exclusive:
+                    purchase_query = purchase_query.filter(VendorPurchaseItem.created_at < end_exclusive)
+                for item in purchase_query.all():
+                    med_name = (item.medicine_name or med_name_by_id.get(item.medicine_id) or "").strip()
+                    row = get_row(med_name)
+                    if not row:
+                        continue
+                    qty = to_int(item.qty)
+                    free_qty = to_int(item.free_qty)
+                    row["purchase_qty"] += qty
+                    row["free_qty"] += free_qty
+                    row["inward_qty"] += qty + free_qty
+                    row["purchase_value"] += to_float(item.total_value)
+
+                sales_query = InvoiceItem.query.join(Invoice, InvoiceItem.invoice_id == Invoice.id)
+                if start:
+                    sales_query = sales_query.filter(Invoice.created_at >= start)
+                if end_exclusive:
+                    sales_query = sales_query.filter(Invoice.created_at < end_exclusive)
+                for item in sales_query.all():
+                    row = get_row(item.name)
+                    if not row:
+                        continue
+                    row["sold_qty"] += to_int(item.qty)
+                    sales_value = item.net_amount if item.net_amount not in (None, 0) else item.amount
+                    row["sales_value"] += to_float(sales_value)
+
+                return_query = ReturnItem.query.join(Return, ReturnItem.return_id == Return.id).filter(
+                    Return.is_cancelled == False
+                )
+                if start:
+                    return_query = return_query.filter(Return.created_at >= start)
+                if end_exclusive:
+                    return_query = return_query.filter(Return.created_at < end_exclusive)
+                for item in return_query.all():
+                    row = get_row(item.medicine_name)
+                    if not row:
+                        continue
+                    row["return_qty"] += to_int(item.qty)
+
+                for row in rows.values():
+                    row["net_sold_qty"] = row["sold_qty"] - row["return_qty"]
+                    if period_days > 0:
+                        row["avg_daily_sale"] = round(row["net_sold_qty"] / period_days, 2)
+                    else:
+                        row["avg_daily_sale"] = round(float(row["net_sold_qty"]), 2)
+                    row["purchase_value"] = round(row["purchase_value"], 2)
+                    row["sales_value"] = round(row["sales_value"], 2)
+
+                medicine_summary = list(rows.values())
+                if q:
+                    medicine_summary = [
+                        r for r in medicine_summary
+                        if q in (r["medicine"] or "").lower()
+                    ]
+                medicine_summary.sort(key=lambda x: (x["medicine"] or "").lower())
+
+                movers = [r for r in medicine_summary if r["net_sold_qty"] > 0]
+                movers.sort(
+                    key=lambda x: (x["avg_daily_sale"], x["net_sold_qty"], x["sales_value"]),
+                    reverse=True
+                )
+                fast_movers = movers[:top_n]
+
+                medicine_totals = {
+                    "count": len(medicine_summary),
+                    "purchase_qty": sum(r["purchase_qty"] for r in medicine_summary),
+                    "free_qty": sum(r["free_qty"] for r in medicine_summary),
+                    "inward_qty": sum(r["inward_qty"] for r in medicine_summary),
+                    "sold_qty": sum(r["sold_qty"] for r in medicine_summary),
+                    "return_qty": sum(r["return_qty"] for r in medicine_summary),
+                    "net_sold_qty": sum(r["net_sold_qty"] for r in medicine_summary),
+                    "current_stock": sum(r["current_stock"] for r in medicine_summary),
+                    "purchase_value": round(sum(r["purchase_value"] for r in medicine_summary), 2),
+                    "sales_value": round(sum(r["sales_value"] for r in medicine_summary), 2),
+                    "period_days": period_days
+                }
+
         total = sum(i.total for i in invoices)
 
     return render_template(
@@ -3508,7 +3758,11 @@ def reports():
         invoices=invoices,
         total=round(total, 2),
         report_type=report_type,
-        profit_summary=profit_summary
+        profit_summary=profit_summary,
+        medicine_summary=medicine_summary,
+        fast_movers=fast_movers,
+        medicine_totals=medicine_totals,
+        report_filters=report_filters
     )
 
 

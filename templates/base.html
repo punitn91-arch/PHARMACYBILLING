@@ -52,6 +52,32 @@
             letter-spacing: 0.5px;
         }
 
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .menu-toggle {
+            width: 36px;
+            height: 36px;
+            border: 1px solid rgba(255,255,255,0.35);
+            background: transparent;
+            color: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 22px;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .menu-toggle:hover {
+            background: rgba(255,255,255,0.15);
+        }
+
         .topbar .right a {
             color: #fff;
             text-decoration: none;
@@ -68,6 +94,11 @@
             height: calc(100vh - 60px);
             background: #0d6efd;
             overflow-y: auto;
+            transition: transform 0.2s ease-in-out;
+        }
+
+        .sidebar-backdrop {
+            display: none;
         }
 
         .sidebar h4 {
@@ -100,6 +131,14 @@
             padding: 25px;
             min-height: calc(100vh - 60px);
             transition: all 0.2s ease-in-out;
+        }
+
+        body.sidebar-collapsed .sidebar {
+            transform: translateX(-100%);
+        }
+
+        body.sidebar-collapsed .content {
+            margin-left: 0;
         }
 
         /* ================= FLASH ================= */
@@ -428,18 +467,54 @@
 
         @media (max-width: 860px) {
             .sidebar {
-                width: 190px;
+                width: 240px;
+                transform: translateX(-100%);
+                z-index: 1200;
+                box-shadow: 6px 0 20px rgba(0,0,0,0.25);
             }
 
             .content {
-                margin-left: 190px;
+                margin-left: 0;
                 padding: 16px;
             }
 
             .topbar {
-                height: auto;
-                padding: 10px 16px;
-                flex-wrap: wrap;
+                height: 60px;
+                padding: 0 12px;
+                flex-wrap: nowrap;
+            }
+
+            .topbar .title {
+                font-size: 16px !important;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 58vw;
+            }
+
+            .topbar .right {
+                font-size: 12px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            .sidebar-backdrop {
+                position: fixed;
+                top: 60px;
+                left: 0;
+                width: 100%;
+                height: calc(100vh - 60px);
+                background: rgba(0,0,0,0.35);
+                z-index: 1100;
+            }
+
+            body.sidebar-open .sidebar {
+                transform: translateX(0);
+            }
+
+            body.sidebar-open .sidebar-backdrop {
+                display: block;
             }
         }
     </style>
@@ -449,7 +524,10 @@
 
     <!-- TOP BAR -->
     <div class="topbar">
-        <div class="title">DR. ABHISHEK'S PHARMACY – BILLING</div>
+        <div class="topbar-left">
+            <button id="sidebarToggle" class="menu-toggle" type="button" aria-label="Toggle menu" aria-expanded="true">&#9776;</button>
+            <div class="title">DR. ABHISHEK'S PHARMACY – BILLING</div>
+        </div>
 
         <div class="right">
             Welcome <b>{{ session.get("username") }}</b> |
@@ -463,12 +541,12 @@
 
         <a href="/" class="{% if request.path == '/' %}active{% endif %}">🏠 Dashboard</a>
 
-        <a href="/appointments" class="{% if request.path.startswith('/appointments') %}active{% endif %}">Appointments</a>
+        <a href="/appointments" class="{% if request.path.startswith('/appointments') %}active{% endif %}">&#128197; Appointments</a>
         <h4>Invoice</h4>
         <a href="/billing">🧾 POS Invoice</a>
         <a href="/invoices">📄 Manage Invoice</a>
-        <a href="/return-bills">Return Bills</a>
-        <a href="/pending-bills">⏸ Pending Bills</a>
+        <a href="/return-bills">&#8617; Return Bills</a>
+        <a href="/pending-bills">&#9203; Pending Bills</a>
        
         <h4>Master</h4>
         {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
@@ -485,6 +563,9 @@
         <a href="/category">📦 Category Master</a>
         <a href="/salt">🧪 Salt Master</a>
         <a href="/vendor">🚚 Vendor Master</a>
+        {% if session.get("role") == "admin" or session.get("can_invoice_action") %}
+        <a href="/vendor-notes">&#128221; Vendor Notes</a>
+        {% endif %}
         <a href="/customer">👤 Customer Master</a>
 
         <h4>Reports</h4>
@@ -496,6 +577,7 @@
 <a href="/users">Users</a>
 {% endif %}
     </div>
+    <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 
     <!-- MAIN CONTENT -->
     <div class="content dashboard-container">
@@ -517,5 +599,65 @@
 <div class="app-footer">
     © GAYATRI VENTURES SOFTWARE LTD. 2025
 </div>
+<script>
+(function () {
+    const body = document.body;
+    const toggleBtn = document.getElementById("sidebarToggle");
+    const backdrop = document.getElementById("sidebarBackdrop");
+    const sidebar = document.querySelector(".sidebar");
+
+    if (!toggleBtn || !sidebar) return;
+
+    function isMobile() {
+        return window.matchMedia("(max-width: 860px)").matches;
+    }
+
+    function updateAria() {
+        const expanded = isMobile()
+            ? body.classList.contains("sidebar-open")
+            : !body.classList.contains("sidebar-collapsed");
+        toggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+
+    function closeMobileSidebar() {
+        body.classList.remove("sidebar-open");
+        updateAria();
+    }
+
+    toggleBtn.addEventListener("click", function () {
+        if (isMobile()) {
+            body.classList.toggle("sidebar-open");
+        } else {
+            body.classList.toggle("sidebar-collapsed");
+        }
+        updateAria();
+    });
+
+    if (backdrop) {
+        backdrop.addEventListener("click", closeMobileSidebar);
+    }
+
+    sidebar.addEventListener("click", function (e) {
+        if (!isMobile()) return;
+        const link = e.target.closest("a");
+        if (link) closeMobileSidebar();
+    });
+
+    window.addEventListener("resize", function () {
+        if (!isMobile()) {
+            body.classList.remove("sidebar-open");
+        }
+        updateAria();
+    });
+
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+            closeMobileSidebar();
+        }
+    });
+
+    updateAria();
+})();
+</script>
 </body>
 </html>

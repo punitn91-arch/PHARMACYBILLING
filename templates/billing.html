@@ -421,7 +421,7 @@ tr.item-row {
                 <td class="exp">-</td>
                 <td class="qoh">0</td>
                 <td>
-                    <input type="number" name="qty[]" value="1" min="1" class="qty-input" oninput="updateRow(this)">
+                    <input type="number" name="qty[]" min="1" class="qty-input" oninput="updateRow(this)">
                 </td>
                 <td class="price">0</td>
                 <td class="disc">0</td>
@@ -528,7 +528,7 @@ function addRow() {
     let row = document.querySelector(".item").cloneNode(true);
 
     // reset qty
-    row.querySelector(".qty-input").value = 1;
+    row.querySelector(".qty-input").value = "";
     let medDisplay = row.querySelector(".medicine-display");
     if (medDisplay) medDisplay.value = "";
     let medHidden = row.querySelector("input[type='hidden'][name='medicine_name']");
@@ -571,8 +571,8 @@ function updateRow(el) {
     let row = el.closest("tr");
     row.dataset.restoredSnapshot = "";
     let qtyInput = row.querySelector(".qty-input");
-    let qty = parseInt(qtyInput.value || 1);
-    if (!qty || qty < 1) qty = 1;
+    let qty = parseInt(qtyInput.value || "", 10);
+    if (isNaN(qty) || qty < 1) qty = 0;
 
     let batchSelect = row.querySelector(".batch-select");
     let name = row.dataset.medicineName || "";
@@ -587,7 +587,7 @@ function updateRow(el) {
     if (qty > qtyInput.max) {
         qty = qtyInput.max;
     }
-    qtyInput.value = qty;
+    qtyInput.value = qty > 0 ? qty : "";
     let qohCell = row.querySelector(".qoh");
     if (qohCell) {
         let qohVal = autoMode ? totalStock : toNum(row.dataset.stock || 0, 0);
@@ -611,8 +611,8 @@ function updateRow(el) {
             if (remaining === 0) break;
         }
         net = amountTotal - discountTotal;
-        let avgPrice = qty ? amountTotal / qty : 0;
-        let avgDisc = amountTotal ? (discountTotal / amountTotal) * 100 : 0;
+        let avgPrice = qty > 0 ? (amountTotal / qty) : (batches.length ? toNum(batches[0].mrp, 0) : 0);
+        let avgDisc = qty > 0 ? (amountTotal ? (discountTotal / amountTotal) * 100 : 0) : (batches.length ? toNum(batches[0].discount, 0) : 0);
 
         row.dataset.price = avgPrice;
         row.dataset.discount = avgDisc;
@@ -698,7 +698,7 @@ function resetBillUI() {
         first.dataset.discountAmount = "";
         first.dataset.restoredSnapshot = "";
         let qtyInput = first.querySelector(".qty-input");
-        if (qtyInput) qtyInput.value = 1;
+        if (qtyInput) qtyInput.value = "";
         first.querySelector(".exp").innerText = "-";
         let qohCell = first.querySelector(".qoh");
         if (qohCell) qohCell.innerText = "0";
@@ -946,7 +946,7 @@ function populateRestoredRow(row, rawItem) {
     let expiry = (item.expiry || "-").trim() || "-";
     let qoh = toNum(item.qoh, 0);
     let qty = parseInt(item.qty || 0, 10);
-    if (!qty || qty < 1) qty = 1;
+    if (!qty || qty < 1) qty = 0;
     let mrp = toNum(item.mrp, 0);
     let disc = toNum(item.discount_percent, 0);
     let net = toNum(item.net_amount, 0);
@@ -985,7 +985,7 @@ function populateRestoredRow(row, rawItem) {
 
     let qtyInput = row.querySelector(".qty-input");
     if (qtyInput) {
-        qtyInput.value = qty;
+        qtyInput.value = qty > 0 ? qty : "";
         qtyInput.max = qoh > 0 ? qoh : qty;
     }
 
