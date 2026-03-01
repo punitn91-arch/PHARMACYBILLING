@@ -326,7 +326,7 @@ pre {
                         <select name="medicine_id" class="medicine-select">
                             <option value="">Select</option>
                             {% for m in medicines %}
-                            <option value="{{ m.id }}" data-batch="{{ m.batch }}" data-expiry="{{ m.expiry }}">
+                            <option value="{{ m.id }}" data-name="{{ m.name }}" data-batch="{{ m.batch }}" data-expiry="{{ m.expiry }}" data-qoh="{{ m.qty or 0 }}">
                                 {{ m.name }} | {{ m.batch }} | {{ m.expiry }}
                             </option>
                             {% endfor %}
@@ -341,12 +341,12 @@ pre {
                         <input name="expiry" type="text" placeholder="MM/YYYY or YYYY-MM-DD">
                     </div>
                     <div class="item-field">
-                        <label>Qty</label>
-                        <input name="qty" type="number" min="0" value="0">
+                        <label>QOH Qty</label>
+                        <input name="qoh_qty" type="number" min="0" value="0" readonly>
                     </div>
                     <div class="item-field">
-                        <label>Free</label>
-                        <input name="free_qty" type="number" min="0" value="0">
+                        <label>Return Qty</label>
+                        <input name="return_qty" type="number" min="0" value="0">
                     </div>
                     <div class="item-field">
                         <label>Rate</label>
@@ -363,10 +363,6 @@ pre {
                     <div class="item-field">
                         <label>Disc%</label>
                         <input name="disc_percent" type="number" step="any" value="0">
-                    </div>
-                    <div class="item-field">
-                        <label>HSN</label>
-                        <input name="hsn" type="text">
                     </div>
                     <div class="item-field action">
                         <button type="button" class="btn warn remove-row">Remove</button>
@@ -490,15 +486,135 @@ function addItemRow() {
     const body = document.getElementById("itemsBody");
     const first = body.querySelector(".item-row");
     const row = first.cloneNode(true);
+    resetItemRowFields(row);
+    body.appendChild(row);
+    return row;
+}
+
+function resetItemRowFields(row) {
+    if (!row) return;
     row.querySelectorAll("input").forEach((el) => { el.value = ""; });
     row.querySelectorAll("select").forEach((el) => { el.selectedIndex = 0; });
-    row.querySelector("input[name='qty']").value = "0";
-    row.querySelector("input[name='free_qty']").value = "0";
+    row.querySelector("input[name='qoh_qty']").value = "0";
+    row.querySelector("input[name='return_qty']").value = "0";
     row.querySelector("input[name='purchase_rate']").value = "0";
     row.querySelector("input[name='mrp']").value = "0";
     row.querySelector("input[name='gst_percent']").value = "0";
     row.querySelector("input[name='disc_percent']").value = "0";
-    body.appendChild(row);
+}
+
+function resetItemRows() {
+    const body = document.getElementById("itemsBody");
+    const first = body.querySelector(".item-row");
+    if (!first) return null;
+    body.innerHTML = "";
+    body.appendChild(first);
+    resetItemRowFields(first);
+    return first;
+}
+
+function hasItemData() {
+    const rows = Array.from(document.querySelectorAll("#itemsBody .item-row"));
+    return rows.some((row) => {
+        const medicineId = row.querySelector("select[name='medicine_id']").value;
+        const batchNo = (row.querySelector("input[name='batch_no']").value || "").trim();
+        const expiry = (row.querySelector("input[name='expiry']").value || "").trim();
+        const returnQty = toNumber(row.querySelector("input[name='return_qty']").value, 0);
+        const rate = toNumber(row.querySelector("input[name='purchase_rate']").value, 0);
+        const mrp = toNumber(row.querySelector("input[name='mrp']").value, 0);
+        const gst = toNumber(row.querySelector("input[name='gst_percent']").value, 0);
+        const disc = toNumber(row.querySelector("input[name='disc_percent']").value, 0);
+        return !!medicineId || !!batchNo || !!expiry || returnQty > 0 || rate > 0 || mrp > 0 || gst > 0 || disc > 0;
+    });
+}
+
+function medicineMatchKey(name, batch) {
+    return `${String(name || "").trim().toLowerCase()}|${String(batch || "").trim().toLowerCase()}`;
+}
+
+function findMedicineOption(selectEl, item) {
+    if (!selectEl) return null;
+    const directId = String(item.medicine_id || "").trim();
+    if (directId) {
+        const direct = selectEl.querySelector(`option[value="${directId}"]`);
+        if (direct) return direct;
+    }
+    const target = medicineMatchKey(item.medicine_name, item.batch);
+    if (!target || target === "|") return null;
+    for (const opt of selectEl.options) {
+        if (!opt.value) continue;
+        const optKey = medicineMatchKey(opt.getAttribute("data-name"), opt.getAttribute("data-batch"));
+        if (optKey === target) return opt;
+    }
+    return null;
+}
+
+function fillItemRowFromPurchase(row, item) {
+    const medicineSelect = row.querySelector("select[name='medicine_id']");
+    const matchedOption = findMedicineOption(medicineSelect, item);
+    medicineSelect.value = matchedOption ? matchedOption.value : "";
+
+    const matchedBatch = matchedOption ? (matchedOption.getAttribute("data-batch") || "") : "";
+    const matchedExpiry = matchedOption ? (matchedOption.getAttribute("data-expiry") || "") : "";
+    const matchedQoh = matchedOption ? toNumber(matchedOption.getAttribute("data-qoh"), 0) : 0;
+    row.querySelector("input[name='batch_no']").value = String(item.batch || matchedBatch || "").trim();
+    row.querySelector("input[name='expiry']").value = String(item.expiry || matchedExpiry || "").trim();
+    row.querySelector("input[name='qoh_qty']").value = String(matchedQoh);
+    row.querySelector("input[name='return_qty']").value = String(toNumber(item.qty, 0) + toNumber(item.free_qty, 0));
+    row.querySelector("input[name='purchase_rate']").value = String(toNumber(item.purchase_rate, 0));
+    row.querySelector("input[name='mrp']").value = String(toNumber(item.mrp, 0));
+    row.querySelector("input[name='gst_percent']").value = String(toNumber(item.gst_percent, 0));
+    row.querySelector("input[name='disc_percent']").value = String(toNumber(item.disc_percent, 0));
+    return !!matchedOption;
+}
+
+function loadPurchaseItemsIntoRows(items) {
+    const first = resetItemRows();
+    if (!first) return { total: 0, unmatched: 0 };
+    if (!items.length) return { total: 0, unmatched: 0 };
+
+    let unmatched = 0;
+    items.forEach((item, idx) => {
+        const row = idx === 0 ? first : addItemRow();
+        const matched = fillItemRowFromPurchase(row, item);
+        if (!matched) unmatched += 1;
+    });
+    return { total: items.length, unmatched: unmatched };
+}
+
+async function loadPurchaseItems() {
+    const refSelect = document.getElementById("reference_purchase_id");
+    const purchaseId = refSelect.value;
+    if (!purchaseId) return;
+
+    if (hasItemData()) {
+        const ok = confirm("Selected purchase bill items will replace current item rows. Continue?");
+        if (!ok) return;
+    }
+
+    try {
+        const data = await apiRequest(`/api/vendor-purchases/${purchaseId}/items`, "GET");
+        const vendorId = String(data.vendor_id || "");
+        if (vendorId) {
+            document.getElementById("vendor_id").value = vendorId;
+            filterPurchaseByVendor();
+            refSelect.value = String(purchaseId);
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+        const stats = loadPurchaseItemsIntoRows(items);
+        if (stats.total === 0) {
+            setMessage("Selected purchase bill has no medicine items.", true);
+            return;
+        }
+        if (stats.unmatched > 0) {
+            setMessage(`${stats.total} items loaded. ${stats.unmatched} medicine match nahi hua, manually select karein.`, true);
+            return;
+        }
+        setMessage(`${stats.total} medicines loaded from selected purchase bill.`);
+    } catch (err) {
+        setMessage(err.message || "Failed to load selected purchase bill items.", true);
+    }
 }
 
 function collectItems() {
@@ -506,19 +622,19 @@ function collectItems() {
     const items = [];
     rows.forEach((row) => {
         const medicineId = row.querySelector("select[name='medicine_id']").value;
-        const qty = toNumber(row.querySelector("input[name='qty']").value, 0);
-        if (!medicineId || qty <= 0) return;
+        const returnQty = toNumber(row.querySelector("input[name='return_qty']").value, 0);
+        if (!medicineId || returnQty <= 0) return;
         items.push({
             medicine_id: toNumber(medicineId, 0),
             batch_no: (row.querySelector("input[name='batch_no']").value || "").trim(),
             expiry: (row.querySelector("input[name='expiry']").value || "").trim(),
-            qty: qty,
-            free_qty: toNumber(row.querySelector("input[name='free_qty']").value, 0),
+            qty: returnQty,
+            free_qty: 0,
             purchase_rate: toNumber(row.querySelector("input[name='purchase_rate']").value, 0),
             mrp: toNumber(row.querySelector("input[name='mrp']").value, 0),
             gst_percent: toNumber(row.querySelector("input[name='gst_percent']").value, 0),
             disc_percent: toNumber(row.querySelector("input[name='disc_percent']").value, 0),
-            hsn: (row.querySelector("input[name='hsn']").value || "").trim()
+            hsn: ""
         });
     });
     return items;
@@ -536,18 +652,7 @@ function resetForm() {
     document.getElementById("remarks").value = "";
     document.getElementById("round_off").value = "0";
     document.getElementById("amount_only_total").value = "0";
-    const body = document.getElementById("itemsBody");
-    const first = body.querySelector(".item-row");
-    body.innerHTML = "";
-    body.appendChild(first);
-    first.querySelectorAll("input").forEach((el) => { el.value = ""; });
-    first.querySelectorAll("select").forEach((el) => { el.selectedIndex = 0; });
-    first.querySelector("input[name='qty']").value = "0";
-    first.querySelector("input[name='free_qty']").value = "0";
-    first.querySelector("input[name='purchase_rate']").value = "0";
-    first.querySelector("input[name='mrp']").value = "0";
-    first.querySelector("input[name='gst_percent']").value = "0";
-    first.querySelector("input[name='disc_percent']").value = "0";
+    resetItemRows();
     syncModeUI();
     filterPurchaseByVendor();
     setMessage("");
@@ -578,7 +683,7 @@ async function createNote(postAfter) {
     if (refPurchase) payload.reference_purchase_id = toNumber(refPurchase, 0);
     const items = amountOnly ? [] : collectItems();
     if (!amountOnly && items.length === 0) {
-        setMessage("Add at least one item with quantity > 0.", true);
+        setMessage("Add at least one item with return qty > 0.", true);
         return;
     }
     const amountOnlyTotal = toNumber(document.getElementById("amount_only_total").value, 0);
@@ -644,6 +749,9 @@ document.addEventListener("change", function (e) {
     if (e.target.id === "vendor_id") {
         filterPurchaseByVendor();
     }
+    if (e.target.id === "reference_purchase_id") {
+        loadPurchaseItems();
+    }
     if (e.target.id === "note_type" || e.target.id === "note_mode") {
         if (document.getElementById("note_type").value === "DEBIT") {
             document.getElementById("note_mode").value = "ITEMIZED";
@@ -656,8 +764,10 @@ document.addEventListener("change", function (e) {
         if (!row || !selected) return;
         const batch = selected.getAttribute("data-batch") || "";
         const expiry = selected.getAttribute("data-expiry") || "";
+        const qoh = toNumber(selected.getAttribute("data-qoh"), 0);
         row.querySelector("input[name='batch_no']").value = batch;
         row.querySelector("input[name='expiry']").value = expiry;
+        row.querySelector("input[name='qoh_qty']").value = String(qoh);
     }
 });
 

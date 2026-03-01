@@ -2925,6 +2925,38 @@ def edit_vendor_purchase_item(item_id):
         sold_qty=sold_qty
     )
 
+@app.route("/api/vendor-purchases/<int:purchase_id>/items", methods=["GET"])
+@login_required
+@vendor_note_access_required(api=True)
+def api_vendor_purchase_items(purchase_id):
+    purchase = VendorPurchase.query.get_or_404(purchase_id)
+    items = VendorPurchaseItem.query.filter_by(purchase_id=purchase.id).order_by(VendorPurchaseItem.id.asc()).all()
+
+    payload_items = []
+    for it in items:
+        payload_items.append({
+            "id": it.id,
+            "medicine_id": it.medicine_id,
+            "medicine_name": it.medicine_name,
+            "batch": it.batch,
+            "expiry": it.expiry,
+            "qty": to_int(it.qty),
+            "free_qty": to_int(it.free_qty),
+            "purchase_rate": to_float(it.purchase_rate),
+            "mrp": to_float(it.mrp),
+            "gst_percent": to_float(it.gst_percent),
+            "disc_percent": to_float(it.discount_percent),
+            "hsn": ""
+        })
+
+    return jsonify({
+        "purchase_id": purchase.id,
+        "vendor_id": purchase.vendor_id,
+        "invoice_no": purchase.invoice_no,
+        "purchase_no": purchase.purchase_no,
+        "items": payload_items
+    }), 200
+
 # ---------------- VENDOR NOTES (DEBIT/CREDIT) ----------------
 @app.route("/api/vendor-notes", methods=["POST"])
 @login_required
