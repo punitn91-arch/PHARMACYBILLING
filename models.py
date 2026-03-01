@@ -321,6 +321,7 @@ class VendorNote(db.Model):
     gst_total = db.Column(db.Numeric(12, 4), default=0)
     round_off = db.Column(db.Numeric(12, 4), default=0)
     grand_total = db.Column(db.Numeric(12, 4), default=0)
+    outstanding_impact = db.Column(db.Numeric(12, 4), default=0)
     remarks = db.Column(db.Text)
     created_by = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

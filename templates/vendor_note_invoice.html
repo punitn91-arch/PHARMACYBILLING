@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Vendor Note Invoice</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    color: #111827;
+    font-size: 12px;
+}
+
+.sheet {
+    max-width: 980px;
+    margin: 0 auto;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 12px;
+    line-height: 1.4;
+}
+
+.title {
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.subtitle {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 20px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+.meta-item {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: #f9fafb;
+}
+
+.meta-item b {
+    color: #0f172a;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    border: 1px solid #cbd5e1;
+    padding: 6px;
+    text-align: center;
+    font-size: 12px;
+}
+
+th {
+    background: #0d6efd;
+    color: #fff;
+}
+
+.left {
+    text-align: left;
+}
+
+.note-block {
+    margin-top: 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 8px;
+    background: #f8fafc;
+}
+
+.totals {
+    width: 320px;
+    margin-top: 12px;
+    margin-left: auto;
+}
+
+.totals td {
+    text-align: right;
+}
+
+.totals td:first-child {
+    text-align: left;
+}
+
+.actions {
+    margin-top: 18px;
+    text-align: center;
+}
+
+.btn {
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 12px;
+    margin: 0 4px;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn.print { background: #0d6efd; }
+.btn.pdf { background: #198754; }
+.btn.back { background: #6b7280; }
+
+@media print {
+    body {
+        margin: 0;
+        font-size: 11px;
+    }
+    .sheet {
+        max-width: 100%;
+        border: none;
+        border-radius: 0;
+        padding: 8px;
+    }
+    .actions {
+        display: none !important;
+    }
+}
+</style>
+</head>
+<body>
+<div class="sheet">
+    <div class="header">
+        <div class="title">DR. ABHISHEK'S PHARMACY - BILLING</div>
+        <div class="subtitle">VENDOR {{ note.note_type }} NOTE INVOICE</div>
+    </div>
+
+    <div class="meta-grid">
+        <div class="meta-item"><b>Note No:</b> {{ note.note_no }}</div>
+        <div class="meta-item"><b>Status:</b> {{ note.status }}</div>
+        <div class="meta-item"><b>Note Date:</b> {{ note_date }}</div>
+        <div class="meta-item"><b>Created At:</b> {{ created_at }}</div>
+        <div class="meta-item"><b>Vendor:</b> {{ vendor.name if vendor else "-" }}</div>
+        <div class="meta-item"><b>Reference Bill:</b> {{ ref_bill_no if ref_bill_no else "-" }}</div>
+        <div class="meta-item"><b>Supplier Bill No:</b> {{ note.supplier_bill_no if note.supplier_bill_no else "-" }}</div>
+        <div class="meta-item"><b>Printed At:</b> {{ printed_at }}</div>
+    </div>
+
+    <div class="note-block">
+        <div><b>Reason Code:</b> {{ note.reason_code if note.reason_code else "-" }}</div>
+        <div><b>Reason Text:</b> {{ note.reason_text if note.reason_text else "-" }}</div>
+        <div><b>Remarks:</b> {{ note.remarks if note.remarks else "-" }}</div>
+    </div>
+
+    {% if items and items|length > 0 %}
+    <table style="margin-top:10px;">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th class="left">Medicine</th>
+                <th>Batch</th>
+                <th>Expiry</th>
+                <th>Qty</th>
+                <th>Free</th>
+                <th>Rate</th>
+                <th>MRP</th>
+                <th>GST%</th>
+                <th>Disc%</th>
+                <th>Line Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for it in items %}
+            <tr>
+                <td>{{ it.sr_no }}</td>
+                <td class="left">{{ it.medicine_name }}</td>
+                <td>{{ it.batch_no }}</td>
+                <td>{{ it.expiry }}</td>
+                <td>{{ it.qty }}</td>
+                <td>{{ it.free_qty }}</td>
+                <td>{{ "%.4f"|format(it.purchase_rate) }}</td>
+                <td>{{ "%.4f"|format(it.mrp) }}</td>
+                <td>{{ "%.2f"|format(it.gst_percent) }}</td>
+                <td>{{ "%.2f"|format(it.disc_percent) }}</td>
+                <td>{{ "%.4f"|format(it.line_total) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="note-block" style="margin-top:10px;">
+        No item lines found for this note.
+    </div>
+    {% endif %}
+
+    <table class="totals">
+        <tr>
+            <td><b>Subtotal</b></td>
+            <td><b>{{ "%.4f"|format((note.subtotal or 0)|float) }}</b></td>
+        </tr>
+        <tr>
+            <td><b>GST Total</b></td>
+            <td><b>{{ "%.4f"|format((note.gst_total or 0)|float) }}</b></td>
+        </tr>
+        <tr>
+            <td><b>Round Off</b></td>
+            <td><b>{{ "%.4f"|format((note.round_off or 0)|float) }}</b></td>
+        </tr>
+        <tr>
+            <td><b>Grand Total</b></td>
+            <td><b>{{ "%.4f"|format((note.grand_total or 0)|float) }}</b></td>
+        </tr>
+    </table>
+
+    <div class="actions">
+        <button class="btn print" onclick="window.print()">Print</button>
+        <button class="btn pdf" onclick="window.print()">Download PDF</button>
+        <a class="btn back" href="/vendor-notes">Back</a>
+    </div>
+</div>
+
+{% if auto_print %}
+<script>
+window.addEventListener("load", function () {
+    window.print();
+});
+</script>
+{% endif %}
+
+</body>
+</html>

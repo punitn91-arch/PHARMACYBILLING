@@ -410,11 +410,18 @@ pre {
                             </td>
                             <td>{{ n.grand_total or 0 }}</td>
                             <td>
+                                {% if session.get("role") == "admin" %}
                                 <button type="button" class="btn ghost note-action" data-action="view" data-note-id="{{ n.id }}">View</button>
+                                <a class="btn ghost" href="/vendor-note-invoice/{{ n.id }}" target="_blank">Invoice</a>
+                                <a class="btn ghost" href="/vendor-note-invoice/{{ n.id }}?print=1" target="_blank">Print</a>
                                 {% if n.status == "DRAFT" %}
                                 <button type="button" class="btn note-action" data-action="post" data-note-id="{{ n.id }}">Post</button>
                                 {% elif n.status == "POSTED" %}
                                 <button type="button" class="btn warn note-action" data-action="cancel" data-note-id="{{ n.id }}">Cancel</button>
+                                {% endif %}
+                                <button type="button" class="btn warn note-action" data-action="delete" data-note-id="{{ n.id }}">Delete</button>
+                                {% else %}
+                                -
                                 {% endif %}
                             </td>
                         </tr>
@@ -451,9 +458,16 @@ async function apiRequest(url, method, payload) {
         headers: { "Content-Type": "application/json" },
         body: payload ? JSON.stringify(payload) : undefined
     });
-    const data = await res.json().catch(() => ({}));
+    const raw = await res.text();
+    let data = {};
+    try {
+        data = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        data = {};
+    }
     if (!res.ok) {
-        throw new Error(data.error || "Request failed");
+        const fallback = raw ? raw.slice(0, 300) : `Request failed (${res.status})`;
+        throw new Error(data.error || fallback);
     }
     return data;
 }
@@ -750,6 +764,13 @@ async function handleNoteAction(action, noteId) {
         if (action === "cancel") {
             const reason = prompt("Cancel reason (optional):") || "";
             await apiRequest(`/api/vendor-notes/${noteId}/cancel`, "POST", { cancel_reason: reason });
+            window.location.reload();
+            return;
+        }
+        if (action === "delete") {
+            const ok = confirm("Delete this note permanently? Posted note delete will restore stock and vendor balance.");
+            if (!ok) return;
+            await apiRequest(`/api/vendor-notes/${noteId}`, "DELETE");
             window.location.reload();
         }
     } catch (err) {

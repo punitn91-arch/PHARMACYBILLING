@@ -406,6 +406,7 @@ def vendor_note_to_dict(note, include_items=False, include_ledger=False):
         "gst_total": decimal_str(note.gst_total),
         "round_off": decimal_str(note.round_off),
         "grand_total": decimal_str(note.grand_total),
+        "outstanding_impact": decimal_str(note.outstanding_impact),
         "remarks": note.remarks,
         "created_by": note.created_by,
         "created_at": note.created_at.isoformat() if note.created_at else None,
@@ -461,19 +462,37 @@ def get_purchase_items_for_return(med, batch_no=None, reference_purchase_id=None
         query = query.filter(VendorPurchaseItem.batch == batch_no)
     return query.order_by(VendorPurchaseItem.created_at.asc(), VendorPurchaseItem.id.asc()).all()
 
-def adjust_vendor_outstanding(vendor_id, delta):
+def adjust_vendor_outstanding(vendor_id, delta, return_applied=False):
     vendor = Vendor.query.get(vendor_id) if vendor_id else None
     if not vendor:
-        return
-    balance = to_decimal(vendor.outstanding_balance or 0) + to_decimal(delta or 0)
+        return Decimal("0")
+    before = to_decimal(vendor.outstanding_balance or 0)
+    balance = before + to_decimal(delta or 0)
     if balance < Decimal("0"):
         balance = Decimal("0")
-    vendor.outstanding_balance = float(quantize_decimal(balance, "0.01"))
+    after = quantize_decimal(balance, "0.01")
+    vendor.outstanding_balance = float(after)
     if vendor.outstanding_balance <= 0:
         vendor.payment_status = "Paid"
     elif (vendor.payment_status or "").strip().lower() == "paid":
         vendor.payment_status = "Unpaid"
     db.session.add(vendor)
+    applied = quantize_decimal(after - before, "0.0001")
+    if return_applied:
+        return applied
+    return Decimal("0")
+
+
+def get_note_outstanding_impact(note):
+    if note is None:
+        return Decimal("0")
+    impact = getattr(note, "outstanding_impact", None)
+    if impact not in (None, "", " "):
+        return to_decimal(impact)
+    grand_total = to_decimal(getattr(note, "grand_total", 0) or 0)
+    if (getattr(note, "note_type", "") or "").upper() == "DEBIT":
+        return -grand_total
+    return grand_total
 
 def parse_date(val):
     if not val:
@@ -788,6 +807,7 @@ with app.app_context():
         ensure_column("vendor_purchase_item", "remaining_qty", "INTEGER")
         ensure_column("vendor_purchase_item", "pack_type", "TEXT")
         ensure_column("vendor_purchase_item", "pack_qty", "INTEGER")
+        ensure_column("vendor_notes", "outstanding_impact", "NUMERIC(12,4)")
         ensure_column("stock_history", "ref_table", "TEXT")
         ensure_column("stock_history", "ref_id", "INTEGER")
         ensure_column("appointment", "payment_mode", "TEXT")
@@ -2204,6 +2224,54 @@ def vendor_notes():
         today=date.today().isoformat()
     )
 
+
+@app.route("/vendor-note-invoice/<int:note_id>")
+@login_required
+@vendor_note_access_required()
+def vendor_note_invoice(note_id):
+    note = VendorNote.query.get_or_404(note_id)
+    vendor = Vendor.query.get(note.vendor_id) if note.vendor_id else None
+    ref_purchase = VendorPurchase.query.get(note.reference_purchase_id) if note.reference_purchase_id else None
+    ref_bill_no = None
+    if ref_purchase:
+        ref_bill_no = ref_purchase.invoice_no if ref_purchase.invoice_no else (ref_purchase.purchase_no or f"PB-{ref_purchase.id:06d}")
+
+    note_items = VendorNoteItem.query.filter_by(note_id=note.id).order_by(VendorNoteItem.id.asc()).all()
+    med_ids = [it.medicine_id for it in note_items if it.medicine_id]
+    med_map = {}
+    if med_ids:
+        meds = Medicine.query.filter(Medicine.id.in_(med_ids)).all()
+        med_map = {m.id: m.name for m in meds}
+
+    items = []
+    for idx, it in enumerate(note_items, start=1):
+        items.append({
+            "sr_no": idx,
+            "medicine_name": med_map.get(it.medicine_id) or "-",
+            "batch_no": it.batch_no or "-",
+            "expiry": it.expiry or "-",
+            "qty": to_int(it.qty),
+            "free_qty": to_int(it.free_qty),
+            "purchase_rate": to_float(it.purchase_rate),
+            "mrp": to_float(it.mrp),
+            "gst_percent": to_float(it.gst_percent),
+            "disc_percent": to_float(it.disc_percent),
+            "line_total": to_float(it.line_total)
+        })
+
+    auto_print = (request.args.get("print") or "").strip() == "1"
+    return render_template(
+        "vendor_note_invoice.html",
+        note=note,
+        vendor=vendor,
+        ref_bill_no=ref_bill_no,
+        items=items,
+        note_date=note.note_date.strftime("%d-%m-%Y") if note.note_date else "-",
+        created_at=note.created_at.strftime("%d-%m-%Y %I:%M %p") if note.created_at else "-",
+        printed_at=datetime.now().strftime("%d-%m-%Y %I:%M %p"),
+        auto_print=auto_print
+    )
+
 @app.route("/vendor/reports")
 @login_required
 def vendor_reports():
@@ -3040,44 +3108,42 @@ def api_update_vendor_note_items(note_id):
                 return jsonify({"error": f"qty must be > 0 at item {idx+1}"}), 400
 
         subtotal, gst_total, prepared = compute_vendor_note_totals(items)
-        with db.session.begin():
-            VendorNoteItem.query.filter_by(note_id=note.id).delete()
-            for idx, raw in enumerate(items):
-                prepared_item = prepared[idx]
-                item = VendorNoteItem(
-                    note_id=note.id,
-                    medicine_id=raw.get("medicine_id"),
-                    batch_no=(raw.get("batch_no") or "").strip() or None,
-                    expiry=(raw.get("expiry") or "").strip() or None,
-                    qty=prepared_item["qty"],
-                    free_qty=prepared_item["free_qty"],
-                    purchase_rate=prepared_item["purchase_rate"],
-                    mrp=quantize_decimal(raw.get("mrp") or 0, "0.0001"),
-                    gst_percent=prepared_item["gst_percent"],
-                    disc_percent=prepared_item["disc_percent"],
-                    line_total=prepared_item["line_total"],
-                    hsn=(raw.get("hsn") or "").strip() or None
-                )
-                db.session.add(item)
+        VendorNoteItem.query.filter_by(note_id=note.id).delete()
+        for idx, raw in enumerate(items):
+            prepared_item = prepared[idx]
+            item = VendorNoteItem(
+                note_id=note.id,
+                medicine_id=raw.get("medicine_id"),
+                batch_no=(raw.get("batch_no") or "").strip() or None,
+                expiry=(raw.get("expiry") or "").strip() or None,
+                qty=prepared_item["qty"],
+                free_qty=prepared_item["free_qty"],
+                purchase_rate=prepared_item["purchase_rate"],
+                mrp=quantize_decimal(raw.get("mrp") or 0, "0.0001"),
+                gst_percent=prepared_item["gst_percent"],
+                disc_percent=prepared_item["disc_percent"],
+                line_total=prepared_item["line_total"],
+                hsn=(raw.get("hsn") or "").strip() or None
+            )
+            db.session.add(item)
 
-            note.subtotal = subtotal
-            note.gst_total = gst_total
-            if "round_off" in data:
-                note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
-            note.grand_total = quantize_decimal(note.subtotal + note.gst_total + to_decimal(note.round_off), "0.0001")
-            db.session.add(note)
+        note.subtotal = subtotal
+        note.gst_total = gst_total
+        if "round_off" in data:
+            note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
+        note.grand_total = quantize_decimal(note.subtotal + note.gst_total + to_decimal(note.round_off), "0.0001")
+        db.session.add(note)
     else:
         # Amount-only credit note
         amount = data.get("grand_total") if "grand_total" in data else data.get("amount")
         amount_dec = quantize_decimal(amount or 0, "0.0001")
-        with db.session.begin():
-            VendorNoteItem.query.filter_by(note_id=note.id).delete()
-            note.subtotal = amount_dec
-            note.gst_total = quantize_decimal(0, "0.0001")
-            if "round_off" in data:
-                note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
-            note.grand_total = quantize_decimal(note.subtotal + to_decimal(note.round_off), "0.0001")
-            db.session.add(note)
+        VendorNoteItem.query.filter_by(note_id=note.id).delete()
+        note.subtotal = amount_dec
+        note.gst_total = quantize_decimal(0, "0.0001")
+        if "round_off" in data:
+            note.round_off = quantize_decimal(data.get("round_off") or 0, "0.0001")
+        note.grand_total = quantize_decimal(note.subtotal + to_decimal(note.round_off), "0.0001")
+        db.session.add(note)
 
     db.session.commit()
     return jsonify(vendor_note_to_dict(note, include_items=True)), 200
@@ -3137,69 +3203,69 @@ def api_post_vendor_note(note_id):
                 remaining -= take
             adjustments.append((med, total_qty))
 
-        with db.session.begin():
-            for med, total_qty in adjustments:
-                old_qty = med.qty
-                med.qty = to_int(med.qty) - total_qty
-                history = StockHistory(
-                    medicine_id=med.id,
-                    medicine_name=med.name,
-                    batch=med.batch,
-                    action="V_DEBIT_NOTE",
-                    stock_before=old_qty,
-                    qty_change=-total_qty,
-                    stock_after=med.qty,
-                    user=session.get("username"),
-                    remark=f"Vendor debit note {note.note_no}",
-                    ref_table="vendor_notes",
-                    ref_id=note.id
-                )
-                db.session.add(history)
-
-            for it, pi, take in allocations:
-                pi.remaining_qty = to_int(pi.remaining_qty) - take
-                db.session.add(VendorNoteAllocation(
-                    note_id=note.id,
-                    note_item_id=it.id,
-                    purchase_item_id=pi.id,
-                    qty=take
-                ))
-
-            db.session.add(VendorLedgerEntry(
-                vendor_id=note.vendor_id,
-                txn_date=datetime.utcnow(),
-                txn_type="DEBIT_NOTE",
+        for med, total_qty in adjustments:
+            old_qty = med.qty
+            med.qty = to_int(med.qty) - total_qty
+            history = StockHistory(
+                medicine_id=med.id,
+                medicine_name=med.name,
+                batch=med.batch,
+                action="V_DEBIT_NOTE",
+                stock_before=old_qty,
+                qty_change=-total_qty,
+                stock_after=med.qty,
+                user=session.get("username"),
+                remark=f"Vendor debit note {note.note_no}",
                 ref_table="vendor_notes",
-                ref_id=note.id,
-                debit=quantize_decimal(note.grand_total or 0, "0.0001"),
-                credit=quantize_decimal(0, "0.0001"),
-                notes=f"Vendor debit note {note.note_no}"
-            ))
-            adjust_vendor_outstanding(note.vendor_id, -to_decimal(note.grand_total or 0))
+                ref_id=note.id
+            )
+            db.session.add(history)
 
-            note.status = "POSTED"
-            note.posted_at = datetime.utcnow()
-            db.session.add(note)
+        for it, pi, take in allocations:
+            pi.remaining_qty = to_int(pi.remaining_qty) - take
+            db.session.add(VendorNoteAllocation(
+                note_id=note.id,
+                note_item_id=it.id,
+                purchase_item_id=pi.id,
+                qty=take
+            ))
+
+        db.session.add(VendorLedgerEntry(
+            vendor_id=note.vendor_id,
+            txn_date=datetime.utcnow(),
+            txn_type="DEBIT_NOTE",
+            ref_table="vendor_notes",
+            ref_id=note.id,
+            debit=quantize_decimal(note.grand_total or 0, "0.0001"),
+            credit=quantize_decimal(0, "0.0001"),
+            notes=f"Vendor debit note {note.note_no}"
+        ))
+        applied = adjust_vendor_outstanding(note.vendor_id, -to_decimal(note.grand_total or 0), return_applied=True)
+        note.outstanding_impact = quantize_decimal(applied, "0.0001")
+
+        note.status = "POSTED"
+        note.posted_at = datetime.utcnow()
+        db.session.add(note)
 
     elif note.note_type == "CREDIT":
         if to_decimal(note.grand_total) <= 0:
             return jsonify({"error": "grand_total must be > 0"}), 400
-        with db.session.begin():
-            db.session.add(VendorLedgerEntry(
-                vendor_id=note.vendor_id,
-                txn_date=datetime.utcnow(),
-                txn_type="CREDIT_NOTE",
-                ref_table="vendor_notes",
-                ref_id=note.id,
-                debit=quantize_decimal(0, "0.0001"),
-                credit=quantize_decimal(note.grand_total or 0, "0.0001"),
-                notes=f"Vendor credit note {note.note_no}"
-            ))
-            adjust_vendor_outstanding(note.vendor_id, to_decimal(note.grand_total or 0))
+        db.session.add(VendorLedgerEntry(
+            vendor_id=note.vendor_id,
+            txn_date=datetime.utcnow(),
+            txn_type="CREDIT_NOTE",
+            ref_table="vendor_notes",
+            ref_id=note.id,
+            debit=quantize_decimal(0, "0.0001"),
+            credit=quantize_decimal(note.grand_total or 0, "0.0001"),
+            notes=f"Vendor credit note {note.note_no}"
+        ))
+        applied = adjust_vendor_outstanding(note.vendor_id, to_decimal(note.grand_total or 0), return_applied=True)
+        note.outstanding_impact = quantize_decimal(applied, "0.0001")
 
-            note.status = "POSTED"
-            note.posted_at = datetime.utcnow()
-            db.session.add(note)
+        note.status = "POSTED"
+        note.posted_at = datetime.utcnow()
+        db.session.add(note)
 
     db.session.commit()
     return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
@@ -3219,10 +3285,40 @@ def api_cancel_vendor_note(note_id):
     items = VendorNoteItem.query.filter_by(note_id=note.id).all()
     allocations = VendorNoteAllocation.query.filter_by(note_id=note.id).all()
 
-    with db.session.begin():
-        reversal_debit = quantize_decimal(0, "0.0001")
-        reversal_credit = quantize_decimal(0, "0.0001")
-        if note.note_type == "DEBIT":
+    reversal_debit = quantize_decimal(0, "0.0001")
+    reversal_credit = quantize_decimal(0, "0.0001")
+    if note.note_type == "DEBIT":
+        for it in items:
+            total_qty = to_int(it.qty) + to_int(it.free_qty)
+            if total_qty <= 0:
+                continue
+            med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+            if not med:
+                continue
+            old_qty = med.qty
+            med.qty = to_int(med.qty) + total_qty
+            history = StockHistory(
+                medicine_id=med.id,
+                medicine_name=med.name,
+                batch=med.batch,
+                action="V_NOTE_REV",
+                stock_before=old_qty,
+                qty_change=total_qty,
+                stock_after=med.qty,
+                user=session.get("username"),
+                remark=f"Debit note cancel {note.note_no}",
+                ref_table="vendor_notes",
+                ref_id=note.id
+            )
+            db.session.add(history)
+
+        if allocations:
+            for alloc in allocations:
+                pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                if not pi:
+                    continue
+                pi.remaining_qty = to_int(pi.remaining_qty) + to_int(alloc.qty)
+        else:
             for it in items:
                 total_qty = to_int(it.qty) + to_int(it.free_qty)
                 if total_qty <= 0:
@@ -3230,70 +3326,40 @@ def api_cancel_vendor_note(note_id):
                 med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
                 if not med:
                     continue
-                old_qty = med.qty
-                med.qty = to_int(med.qty) + total_qty
-                history = StockHistory(
-                    medicine_id=med.id,
-                    medicine_name=med.name,
-                    batch=med.batch,
-                    action="V_NOTE_REV",
-                    stock_before=old_qty,
-                    qty_change=total_qty,
-                    stock_after=med.qty,
-                    user=session.get("username"),
-                    remark=f"Debit note cancel {note.note_no}",
-                    ref_table="vendor_notes",
-                    ref_id=note.id
+                purchase_items = get_purchase_items_for_return(
+                    med,
+                    batch_no=it.batch_no,
+                    reference_purchase_id=note.reference_purchase_id
                 )
-                db.session.add(history)
+                remaining = total_qty
+                for pi in purchase_items:
+                    if remaining <= 0:
+                        break
+                    take = remaining
+                    pi.remaining_qty = to_int(pi.remaining_qty) + take
+                    remaining -= take
+        reversal_credit = quantize_decimal(note.grand_total or 0, "0.0001")
+    elif note.note_type == "CREDIT":
+        reversal_debit = quantize_decimal(note.grand_total or 0, "0.0001")
 
-            if allocations:
-                for alloc in allocations:
-                    pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
-                    if not pi:
-                        continue
-                    pi.remaining_qty = to_int(pi.remaining_qty) + to_int(alloc.qty)
-            else:
-                for it in items:
-                    total_qty = to_int(it.qty) + to_int(it.free_qty)
-                    if total_qty <= 0:
-                        continue
-                    med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
-                    if not med:
-                        continue
-                    purchase_items = get_purchase_items_for_return(
-                        med,
-                        batch_no=it.batch_no,
-                        reference_purchase_id=note.reference_purchase_id
-                    )
-                    remaining = total_qty
-                    for pi in purchase_items:
-                        if remaining <= 0:
-                            break
-                        take = remaining
-                        pi.remaining_qty = to_int(pi.remaining_qty) + take
-                        remaining -= take
-            reversal_credit = quantize_decimal(note.grand_total or 0, "0.0001")
-            adjust_vendor_outstanding(note.vendor_id, to_decimal(note.grand_total or 0))
-        elif note.note_type == "CREDIT":
-            reversal_debit = quantize_decimal(note.grand_total or 0, "0.0001")
-            adjust_vendor_outstanding(note.vendor_id, -to_decimal(note.grand_total or 0))
+    reverse_delta = -get_note_outstanding_impact(note)
+    adjust_vendor_outstanding(note.vendor_id, reverse_delta)
 
-        db.session.add(VendorLedgerEntry(
-            vendor_id=note.vendor_id,
-            txn_date=datetime.utcnow(),
-            txn_type="REVERSAL",
-            ref_table="vendor_notes",
-            ref_id=note.id,
-            debit=reversal_debit,
-            credit=reversal_credit,
-            notes=f"Reversal of {note.note_no}"
-        ))
+    db.session.add(VendorLedgerEntry(
+        vendor_id=note.vendor_id,
+        txn_date=datetime.utcnow(),
+        txn_type="REVERSAL",
+        ref_table="vendor_notes",
+        ref_id=note.id,
+        debit=reversal_debit,
+        credit=reversal_credit,
+        notes=f"Reversal of {note.note_no}"
+    ))
 
-        note.status = "CANCELLED"
-        note.cancelled_at = datetime.utcnow()
-        note.cancel_reason = cancel_reason
-        db.session.add(note)
+    note.status = "CANCELLED"
+    note.cancelled_at = datetime.utcnow()
+    note.cancel_reason = cancel_reason
+    db.session.add(note)
 
     db.session.commit()
     return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
@@ -3346,6 +3412,77 @@ def api_list_vendor_notes():
 def api_view_vendor_note(note_id):
     note = VendorNote.query.get_or_404(note_id)
     return jsonify(vendor_note_to_dict(note, include_items=True, include_ledger=True)), 200
+
+
+@app.route("/api/vendor-notes/<int:note_id>", methods=["DELETE"])
+@login_required
+@vendor_note_access_required(api=True)
+def api_delete_vendor_note(note_id):
+    note = VendorNote.query.get_or_404(note_id)
+    items = VendorNoteItem.query.filter_by(note_id=note.id).all()
+    allocations = VendorNoteAllocation.query.filter_by(note_id=note.id).all()
+
+    if note.status == "POSTED":
+        if note.note_type == "DEBIT":
+            stock_restore = []
+            purchase_restore = []
+
+            for it in items:
+                total_qty = to_int(it.qty) + to_int(it.free_qty)
+                if total_qty <= 0:
+                    continue
+                med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                if not med:
+                    return jsonify({"error": "Cannot delete: linked medicine missing for posted debit note"}), 400
+                stock_restore.append((med, total_qty))
+
+            if allocations:
+                for alloc in allocations:
+                    qty = to_int(alloc.qty)
+                    if qty <= 0:
+                        continue
+                    pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                    if not pi:
+                        return jsonify({"error": "Cannot delete: linked purchase allocation missing"}), 400
+                    purchase_restore.append((pi, qty))
+            else:
+                for it in items:
+                    total_qty = to_int(it.qty) + to_int(it.free_qty)
+                    if total_qty <= 0:
+                        continue
+                    med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                    if not med:
+                        return jsonify({"error": "Cannot delete: linked medicine missing for purchase restore"}), 400
+                    purchase_items = get_purchase_items_for_return(
+                        med,
+                        batch_no=it.batch_no,
+                        reference_purchase_id=note.reference_purchase_id
+                    )
+                    remaining = total_qty
+                    for pi in purchase_items:
+                        if remaining <= 0:
+                            break
+                        take = remaining
+                        purchase_restore.append((pi, take))
+                        remaining -= take
+                    if remaining > 0:
+                        return jsonify({"error": "Cannot delete: purchase restore mapping failed"}), 400
+
+            for med, qty in stock_restore:
+                med.qty = to_int(med.qty) + qty
+            for pi, qty in purchase_restore:
+                pi.remaining_qty = to_int(pi.remaining_qty) + qty
+
+        reverse_delta = -get_note_outstanding_impact(note)
+        adjust_vendor_outstanding(note.vendor_id, reverse_delta)
+
+    StockHistory.query.filter_by(ref_table="vendor_notes", ref_id=note.id).delete(synchronize_session=False)
+    VendorLedgerEntry.query.filter_by(ref_table="vendor_notes", ref_id=note.id).delete(synchronize_session=False)
+    VendorNoteAllocation.query.filter_by(note_id=note.id).delete(synchronize_session=False)
+    VendorNoteItem.query.filter_by(note_id=note.id).delete(synchronize_session=False)
+    db.session.delete(note)
+    db.session.commit()
+    return jsonify({"message": "Vendor note deleted"}), 200
 
 @app.route("/vendor/delete/<int:id>")
 @login_required
