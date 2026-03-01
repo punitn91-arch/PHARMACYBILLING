@@ -2942,6 +2942,7 @@ def api_vendor_purchase_items(purchase_id):
             "expiry": it.expiry,
             "qty": to_int(it.qty),
             "free_qty": to_int(it.free_qty),
+            "remaining_qty": to_int(it.remaining_qty),
             "purchase_rate": to_float(it.purchase_rate),
             "mrp": to_float(it.mrp),
             "gst_percent": to_float(it.gst_percent),

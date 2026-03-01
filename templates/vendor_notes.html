@@ -556,11 +556,13 @@ function fillItemRowFromPurchase(row, item) {
 
     const matchedBatch = matchedOption ? (matchedOption.getAttribute("data-batch") || "") : "";
     const matchedExpiry = matchedOption ? (matchedOption.getAttribute("data-expiry") || "") : "";
-    const matchedQoh = matchedOption ? toNumber(matchedOption.getAttribute("data-qoh"), 0) : 0;
+    const purchaseRemaining = toNumber(item.remaining_qty, NaN);
+    const fallbackPurchased = toNumber(item.qty, 0) + toNumber(item.free_qty, 0);
+    const loadedQoh = Number.isFinite(purchaseRemaining) ? purchaseRemaining : fallbackPurchased;
     row.querySelector("input[name='batch_no']").value = String(item.batch || matchedBatch || "").trim();
     row.querySelector("input[name='expiry']").value = String(item.expiry || matchedExpiry || "").trim();
-    row.querySelector("input[name='qoh_qty']").value = String(matchedQoh);
-    row.querySelector("input[name='return_qty']").value = String(toNumber(item.qty, 0) + toNumber(item.free_qty, 0));
+    row.querySelector("input[name='qoh_qty']").value = String(loadedQoh);
+    row.querySelector("input[name='return_qty']").value = String(loadedQoh);
     row.querySelector("input[name='purchase_rate']").value = String(toNumber(item.purchase_rate, 0));
     row.querySelector("input[name='mrp']").value = String(toNumber(item.mrp, 0));
     row.querySelector("input[name='gst_percent']").value = String(toNumber(item.gst_percent, 0));
@@ -623,7 +625,11 @@ function collectItems() {
     rows.forEach((row) => {
         const medicineId = row.querySelector("select[name='medicine_id']").value;
         const returnQty = toNumber(row.querySelector("input[name='return_qty']").value, 0);
+        const qohQty = toNumber(row.querySelector("input[name='qoh_qty']").value, 0);
         if (!medicineId || returnQty <= 0) return;
+        if (returnQty > qohQty && qohQty >= 0) {
+            throw new Error("Return qty cannot be greater than QOH qty.");
+        }
         items.push({
             medicine_id: toNumber(medicineId, 0),
             batch_no: (row.querySelector("input[name='batch_no']").value || "").trim(),
@@ -681,7 +687,13 @@ async function createNote(postAfter) {
     };
     const refPurchase = document.getElementById("reference_purchase_id").value;
     if (refPurchase) payload.reference_purchase_id = toNumber(refPurchase, 0);
-    const items = amountOnly ? [] : collectItems();
+    let items = [];
+    try {
+        items = amountOnly ? [] : collectItems();
+    } catch (err) {
+        setMessage(err.message || "Invalid item data.", true);
+        return;
+    }
     if (!amountOnly && items.length === 0) {
         setMessage("Add at least one item with return qty > 0.", true);
         return;
