@@ -49,6 +49,36 @@
 
 <hr>
 
+<h3>Appointment Excel Export</h3>
+<form method="GET" action="{{ url_for('export_appointments_excel') }}">
+    {% set appt_type = request.args.get("appointment_report_type", "day") %}
+    <label><b>Appointment Report Type</b></label>
+    <select name="appointment_report_type" id="appointmentReportType" onchange="toggleAppointmentFilters(this.value)">
+        <option value="day" {% if appt_type == "day" %}selected{% endif %}>Day Wise</option>
+        <option value="month" {% if appt_type == "month" %}selected{% endif %}>Month Wise</option>
+        <option value="date_range" {% if appt_type == "date_range" %}selected{% endif %}>Date Wise (Range)</option>
+    </select>
+
+    <div id="appointmentDayBox" style="display:none">
+        <input type="date" name="appointment_day_date" value="{{ request.args.get('appointment_day_date', '') }}">
+    </div>
+
+    <div id="appointmentMonthBox" style="display:none">
+        <input type="number" name="appointment_month" min="1" max="12" placeholder="Month (1-12)" value="{{ request.args.get('appointment_month', '') }}">
+        <input type="number" name="appointment_year" min="1900" max="9999" placeholder="Year" value="{{ request.args.get('appointment_year', '') }}">
+    </div>
+
+    <div id="appointmentDateRangeBox" style="display:none">
+        <input type="date" name="appointment_from_date" value="{{ request.args.get('appointment_from_date', '') }}">
+        <input type="date" name="appointment_to_date" value="{{ request.args.get('appointment_to_date', '') }}">
+    </div>
+
+    <br>
+    <button class="btn save" type="submit">Export Appointment Excel</button>
+</form>
+
+<hr>
+
 {% if report_type == "medicine" and medicine_totals %}
 
 <h3>Medicine Summary</h3>
@@ -187,6 +217,18 @@ function toggleFilters(type) {
 }
 
 toggleFilters("{{ report_type or '' }}");
+
+function toggleAppointmentFilters(type) {
+    document.getElementById("appointmentDayBox").style.display = "none";
+    document.getElementById("appointmentMonthBox").style.display = "none";
+    document.getElementById("appointmentDateRangeBox").style.display = "none";
+
+    if (type === "day") document.getElementById("appointmentDayBox").style.display = "block";
+    if (type === "month") document.getElementById("appointmentMonthBox").style.display = "block";
+    if (type === "date_range") document.getElementById("appointmentDateRangeBox").style.display = "block";
+}
+
+toggleAppointmentFilters("{{ request.args.get('appointment_report_type', 'day') }}");
 </script>
 
 {% endblock %}

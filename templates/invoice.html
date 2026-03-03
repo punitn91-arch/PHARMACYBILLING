@@ -184,7 +184,10 @@ body {
 
 </tr>
 
+{% set gross_total = namespace(value=0) %}
 {% for item in cart %}
+{% set line_amount = (item.amount or 0)|float %}
+{% set gross_total.value = gross_total.value + line_amount %}
 {% set cgst_amt = (item.amount * 0.025) %}
 {% set sgst_amt = (item.amount * 0.025) %}
 {% set disc_amt = (item.amount * (item.discount_percent or 0) / 100) %}
@@ -210,7 +213,11 @@ body {
 <!-- TOTAL -->
 <table class="totals-table">
     <tr>
-        <td><b>Total Discount</b></td>
+        <td><b>TOTAL AMOUNT</b></td>
+        <td>&#8377;{{ "%.2f"|format((gross_total.value or 0)|float) }}</td>
+    </tr>
+    <tr>
+        <td><b>TOTAL DISCOUNT</b></td>
         <td>₹{{ "%.2f"|format((discount or 0)|float) }}</td>
     </tr>
 
@@ -220,7 +227,7 @@ body {
     </tr>
 
     <tr>
-        <td><b>ROUNDED AMT</b></td>
+        <td><b>ROUNDED AMOUNT</b></td>
         <td><b>₹{{ "%.2f"|format(rounded_total or total) }}</b></td>
     </tr>
     

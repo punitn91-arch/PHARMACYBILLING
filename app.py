@@ -4108,6 +4108,133 @@ def export_excel():
         as_attachment=True,
         download_name="Pharmacy_Reports.xlsx"
     )
+
+@app.route("/reports/appointments/export")
+@login_required
+def export_appointments_excel():
+    user = User.query.get(session.get("user_id"))
+    if not user:
+        flash("Access denied", "danger")
+        return redirect("/")
+    if user.role != "admin" and not user.can_view_reports:
+        flash("Access denied", "danger")
+        return redirect("/")
+
+    import pandas as pd
+    from flask import send_file
+    from io import BytesIO
+
+    report_type = (request.args.get("appointment_report_type") or "day").strip().lower()
+    day_date_raw = (request.args.get("appointment_day_date") or "").strip()
+    month = to_int_safe(request.args.get("appointment_month"), 0)
+    year = to_int_safe(request.args.get("appointment_year"), 0)
+    from_date_raw = (request.args.get("appointment_from_date") or "").strip()
+    to_date_raw = (request.args.get("appointment_to_date") or "").strip()
+
+    query = Appointment.query
+    filter_label = ""
+
+    if report_type == "day":
+        selected_date = parse_date(day_date_raw) or date.today()
+        query = query.filter(Appointment.appointment_date == selected_date)
+        filter_label = selected_date.strftime("%Y-%m-%d")
+
+    elif report_type == "month":
+        if month < 1 or month > 12 or year < 1900:
+            flash("Please select a valid month and year for appointment report.", "danger")
+            return redirect("/reports")
+        query = query.filter(
+            db.extract("month", Appointment.appointment_date) == month,
+            db.extract("year", Appointment.appointment_date) == year
+        )
+        filter_label = f"{year}-{month:02d}"
+
+    elif report_type == "date_range":
+        start_date = parse_date(from_date_raw)
+        end_date = parse_date(to_date_raw)
+        if not start_date or not end_date:
+            flash("Please select both From Date and To Date for appointment report.", "danger")
+            return redirect("/reports")
+        if end_date < start_date:
+            flash("To Date must be greater than or equal to From Date.", "danger")
+            return redirect("/reports")
+        query = query.filter(
+            Appointment.appointment_date >= start_date,
+            Appointment.appointment_date <= end_date
+        )
+        filter_label = f"{start_date.strftime('%Y-%m-%d')}_to_{end_date.strftime('%Y-%m-%d')}"
+
+    else:
+        flash("Invalid appointment report type.", "danger")
+        return redirect("/reports")
+
+    appointments = query.order_by(
+        Appointment.appointment_date.asc(),
+        Appointment.appointment_time.asc(),
+        Appointment.id.asc()
+    ).all()
+
+    rows = []
+    for appt in appointments:
+        consultation_fee = to_float_safe(appt.consultation_fee, 0)
+        doctor_discount = to_float_safe(appt.doctor_discount, 0)
+        net_fee = consultation_fee - doctor_discount
+        if net_fee < 0:
+            net_fee = 0
+        payment_status = (
+            appt.payment_status
+            or ("PAID" if (appt.payment_mode or "").strip().upper() == "PAID" else "UNPAID")
+        )
+        rows.append({
+            "Appointment No": appt.appointment_no or "",
+            "Date": appt.appointment_date.strftime("%d-%m-%Y") if appt.appointment_date else "",
+            "Day": appt.appointment_date.strftime("%A") if appt.appointment_date else "",
+            "Time": appt.appointment_time.strftime("%I:%M %p") if appt.appointment_time else "",
+            "Patient Name": appt.patient_name or "",
+            "Mobile": appt.mobile or "",
+            "Doctor": appt.doctor_name or "",
+            "Status": appt.status or "",
+            "Payment Mode": appt.payment_mode or "",
+            "Payment Status": str(payment_status).upper(),
+            "Consultation Fee": round(consultation_fee, 2),
+            "Doctor Discount": round(doctor_discount, 2),
+            "Net Fee": round(net_fee, 2),
+            "Created By": appt.created_by or "",
+            "Created At": appt.created_at.strftime("%d-%m-%Y %I:%M %p") if appt.created_at else ""
+        })
+
+    columns = [
+        "Appointment No",
+        "Date",
+        "Day",
+        "Time",
+        "Patient Name",
+        "Mobile",
+        "Doctor",
+        "Status",
+        "Payment Mode",
+        "Payment Status",
+        "Consultation Fee",
+        "Doctor Discount",
+        "Net Fee",
+        "Created By",
+        "Created At"
+    ]
+    df = pd.DataFrame(rows, columns=columns)
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Appointments", index=False)
+    output.seek(0)
+
+    safe_label = filter_label.replace("/", "-").replace(" ", "_")
+    filename = f"Appointment_Report_{report_type}_{safe_label}.xlsx"
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 @app.route("/users")
 @login_required
 @admin_required
