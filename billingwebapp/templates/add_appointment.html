@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% block title %}{% if edit_mode %}Edit Appointment{% else %}Add Appointment{% endif %}{% endblock %}
+
+{% block body %}
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: {
+            extend: {
+                fontFamily: {
+                    sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif']
+                },
+                colors: {
+                    brand: '#2563eb'
+                },
+                boxShadow: {
+                    soft: '0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 20px rgba(15, 23, 42, 0.04)'
+                }
+            }
+        }
+    };
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<div class="appointment-form-ui font-sans text-slate-900">
+    <section class="mb-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+        <div>
+            <h1 class="text-3xl font-bold tracking-tight text-slate-900">{% if edit_mode %}Edit Appointment{% else %}Book New Appointment{% endif %}</h1>
+            <p class="mt-2 text-sm text-slate-500">Capture patient profile, consultation details, and payment information in one flow.</p>
+        </div>
+        <a href="{{ url_for('appointments') }}" class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Back to Appointments</a>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft md:p-6">
+        <div class="mb-5 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+            If patient does not exist, saving this form will automatically create the patient profile.
+        </div>
+
+        <form id="appointmentForm" method="POST" class="space-y-6">
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div class="xl:col-span-2">
+                    <label for="patient_name" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Patient Name</label>
+                    <input id="patient_name" name="patient_name" type="text" value="{{ form_data.patient_name }}" list="patientNameList" required class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100" placeholder="Enter full name">
+                </div>
+
+                <div>
+                    <label for="mobile" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Mobile Number</label>
+                    <input id="mobile" name="mobile" type="text" value="{{ form_data.mobile }}" list="patientMobileList" maxlength="15" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100" placeholder="10 digit mobile">
+                </div>
+
+                <div>
+                    <label for="gender" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Gender</label>
+                    <select id="gender" name="gender" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                        {% for g in genders %}
+                        <option value="{{ g }}" {% if form_data.gender == g %}selected{% endif %}>{{ g.replace('_', ' ').title() }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label for="appointment_date" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Appointment Date</label>
+                    <input id="appointment_date" name="appointment_date" type="date" value="{{ form_data.appointment_date }}" required class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                </div>
+
+                <div>
+                    <label for="appointment_hour" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Appointment Time</label>
+                    <div class="flex items-center gap-2">
+                        <input id="appointment_hour" type="text" inputmode="numeric" autocomplete="off" placeholder="hh" required maxlength="2" pattern="^(0?[1-9]|1[0-2])$" title="Enter hour from 1 to 12" class="h-11 w-16 rounded-lg border border-slate-200 px-2 text-center text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                        <span class="text-lg font-semibold text-slate-500">:</span>
+                        <input id="appointment_minute" type="text" inputmode="numeric" autocomplete="off" placeholder="mm" required maxlength="2" pattern="^[0-5][0-9]$" title="Enter minute from 00 to 59" class="h-11 w-16 rounded-lg border border-slate-200 px-2 text-center text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                        <select id="appointment_period" class="h-11 w-24 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                            <option value="AM">AM</option>
+                            <option value="PM">PM</option>
+                        </select>
+                    </div>
+                    <input id="appointment_time" name="appointment_time" type="hidden" value="{{ form_data.appointment_time }}">
+                </div>
+
+                <div>
+                    <label for="consultation_fee" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Consultation Fee (Rs)</label>
+                    <input id="consultation_fee" name="consultation_fee" type="number" min="0" step="0.01" value="{{ form_data.consultation_fee }}" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                </div>
+
+                <div>
+                    <label for="doctor_discount" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Doctor Discount (Rs)</label>
+                    <input id="doctor_discount" name="doctor_discount" type="number" min="0" step="0.01" value="{{ form_data.doctor_discount }}" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                </div>
+
+                <div>
+                    <label for="payment_mode" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Payment Mode</label>
+                    <select id="payment_mode" name="payment_mode" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                        {% for mode in payment_modes %}
+                        <option value="{{ mode }}" {% if form_data.payment_mode == mode %}selected{% endif %}>{{ mode }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="xl:col-span-4">
+                    <label for="symptoms" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Symptoms (Optional)</label>
+                    <textarea id="symptoms" name="symptoms" rows="3" class="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100" placeholder="Symptoms noted during booking">{{ form_data.symptoms }}</textarea>
+                </div>
+
+                <div class="xl:col-span-4">
+                    <label for="notes" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</label>
+                    <textarea id="notes" name="notes" rows="3" class="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100" placeholder="Additional booking notes">{{ form_data.notes }}</textarea>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-5">
+                <button type="submit" class="inline-flex h-11 items-center justify-center rounded-lg bg-brand px-5 text-sm font-semibold text-white transition duration-150 hover:bg-blue-700">{% if edit_mode %}Update Appointment{% else %}Save Appointment{% endif %}</button>
+                <a href="{{ url_for('appointments') }}" class="inline-flex h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Cancel</a>
+            </div>
+        </form>
+    </section>
+
+    <datalist id="patientNameList">
+        {% for p in patient_suggestions %}
+        <option value="{{ p.name }}"></option>
+        {% endfor %}
+    </datalist>
+
+    <datalist id="patientMobileList">
+        {% for p in patient_suggestions if p.mobile %}
+        <option value="{{ p.mobile }}">{{ p.name }}</option>
+        {% endfor %}
+    </datalist>
+
+</div>
+
+<script>
+const patientRecords = [
+    {% for p in patient_suggestions %}
+    {
+        name: {{ (p.name or '')|tojson }},
+        mobile: {{ (p.mobile or '')|tojson }},
+        gender: {{ (p.gender or '')|tojson }}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+];
+
+function normalizedMobile(value) {
+    return (value || '').replace(/\D/g, '');
+}
+
+function applyPatientDetails(record) {
+    if (!record) return;
+    const patientName = document.getElementById('patient_name');
+    const mobile = document.getElementById('mobile');
+    const gender = document.getElementById('gender');
+
+    if (patientName && !patientName.value.trim() && record.name) {
+        patientName.value = record.name;
+    }
+    if (mobile && !mobile.value.trim() && record.mobile) {
+        mobile.value = record.mobile;
+    }
+    if (gender && (!gender.value || gender.value === 'OTHER') && record.gender) {
+        const upper = record.gender.toUpperCase();
+        if ([...gender.options].some((option) => option.value === upper)) {
+            gender.value = upper;
+        }
+    }
+}
+
+function findByMobile(value) {
+    const target = normalizedMobile(value);
+    if (!target) return null;
+    return patientRecords.find((item) => normalizedMobile(item.mobile) === target) || null;
+}
+
+function findByName(value) {
+    const target = (value || '').trim().toLowerCase();
+    if (!target) return null;
+    return patientRecords.find((item) => (item.name || '').trim().toLowerCase() === target) || null;
+}
+
+function parseAppointmentTime(value) {
+    const raw = (value || '').trim();
+    if (!raw) return null;
+
+    const twelveHourMatch = raw.match(/^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+        const hour = parseInt(twelveHourMatch[1], 10);
+        if (hour < 1 || hour > 12) {
+            return null;
+        }
+        return {
+            hour: String(hour).padStart(2, '0'),
+            minute: twelveHourMatch[2],
+            period: twelveHourMatch[3].toUpperCase()
+        };
+    }
+
+    const twentyFourHourMatch = raw.match(/^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+    if (!twentyFourHourMatch) {
+        return null;
+    }
+
+    const hour24 = parseInt(twentyFourHourMatch[1], 10);
+    const minute = twentyFourHourMatch[2];
+    const period = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12 = hour24 % 12 || 12;
+    return {
+        hour: String(hour12).padStart(2, '0'),
+        minute: minute,
+        period: period
+    };
+}
+
+function keepTwoDigits(value) {
+    return (value || '').replace(/\D/g, '').slice(0, 2);
+}
+
+function syncAppointmentTimeHidden() {
+    const hiddenInput = document.getElementById('appointment_time');
+    const hourInput = document.getElementById('appointment_hour');
+    const minuteInput = document.getElementById('appointment_minute');
+    const periodSelect = document.getElementById('appointment_period');
+    if (!hiddenInput || !hourInput || !minuteInput || !periodSelect) {
+        return { valid: true };
+    }
+
+    const hourRaw = keepTwoDigits(hourInput.value);
+    const minuteRaw = keepTwoDigits(minuteInput.value);
+    if (!/^\d{1,2}$/.test(hourRaw)) {
+        hiddenInput.value = '';
+        return { valid: false, target: hourInput, message: 'Please enter hour between 1 and 12.' };
+    }
+    if (!/^\d{1,2}$/.test(minuteRaw)) {
+        hiddenInput.value = '';
+        return { valid: false, target: minuteInput, message: 'Please enter minute between 00 and 59.' };
+    }
+
+    const hourNum = parseInt(hourRaw, 10);
+    const minuteNum = parseInt(minuteRaw, 10);
+    if (hourNum < 1 || hourNum > 12) {
+        hiddenInput.value = '';
+        return { valid: false, target: hourInput, message: 'Please enter hour between 1 and 12.' };
+    }
+    if (minuteNum < 0 || minuteNum > 59) {
+        hiddenInput.value = '';
+        return { valid: false, target: minuteInput, message: 'Please enter minute between 00 and 59.' };
+    }
+
+    const normalizedHour = String(hourNum).padStart(2, '0');
+    const normalizedMinute = String(minuteNum).padStart(2, '0');
+    const period = (periodSelect.value || 'AM').toUpperCase() === 'PM' ? 'PM' : 'AM';
+    hourInput.value = normalizedHour;
+    minuteInput.value = normalizedMinute;
+    hiddenInput.value = `${normalizedHour}:${normalizedMinute} ${period}`;
+    return { valid: true };
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    const appointmentForm = document.getElementById('appointmentForm');
+    const appointmentTimeHidden = document.getElementById('appointment_time');
+    const appointmentHour = document.getElementById('appointment_hour');
+    const appointmentMinute = document.getElementById('appointment_minute');
+    const appointmentPeriod = document.getElementById('appointment_period');
+    const mobileInput = document.getElementById('mobile');
+    const patientNameInput = document.getElementById('patient_name');
+
+    if (appointmentTimeHidden && appointmentHour && appointmentMinute && appointmentPeriod) {
+        const parsed = parseAppointmentTime(appointmentTimeHidden.value);
+        if (parsed) {
+            appointmentHour.value = parsed.hour;
+            appointmentMinute.value = parsed.minute;
+            appointmentPeriod.value = parsed.period;
+        }
+
+        appointmentHour.addEventListener('input', function () {
+            appointmentHour.value = keepTwoDigits(appointmentHour.value);
+            appointmentHour.setCustomValidity('');
+        });
+        appointmentMinute.addEventListener('input', function () {
+            appointmentMinute.value = keepTwoDigits(appointmentMinute.value);
+            appointmentMinute.setCustomValidity('');
+        });
+        appointmentHour.addEventListener('blur', function () {
+            syncAppointmentTimeHidden();
+        });
+        appointmentMinute.addEventListener('blur', function () {
+            syncAppointmentTimeHidden();
+        });
+        appointmentPeriod.addEventListener('change', function () {
+            syncAppointmentTimeHidden();
+        });
+    }
+
+    if (mobileInput) {
+        mobileInput.addEventListener('change', function () {
+            applyPatientDetails(findByMobile(mobileInput.value));
+        });
+        mobileInput.addEventListener('blur', function () {
+            applyPatientDetails(findByMobile(mobileInput.value));
+        });
+    }
+
+    if (patientNameInput) {
+        patientNameInput.addEventListener('change', function () {
+            applyPatientDetails(findByName(patientNameInput.value));
+        });
+        patientNameInput.addEventListener('blur', function () {
+            applyPatientDetails(findByName(patientNameInput.value));
+        });
+    }
+
+    if (mobileInput && mobileInput.value) {
+        applyPatientDetails(findByMobile(mobileInput.value));
+    } else if (patientNameInput && patientNameInput.value) {
+        applyPatientDetails(findByName(patientNameInput.value));
+    }
+
+    if (appointmentForm) {
+        appointmentForm.addEventListener('submit', function (event) {
+            const result = syncAppointmentTimeHidden();
+            if (!result.valid) {
+                event.preventDefault();
+                if (result.target) {
+                    result.target.setCustomValidity(result.message || 'Please enter a valid time.');
+                    result.target.reportValidity();
+                }
+                return;
+            }
+            if (appointmentHour) {
+                appointmentHour.setCustomValidity('');
+            }
+            if (appointmentMinute) {
+                appointmentMinute.setCustomValidity('');
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

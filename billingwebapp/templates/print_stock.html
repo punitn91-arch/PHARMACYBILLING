@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Print Stock Report</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+}
+h2 {
+    font-size: 16px;
+}
+table,
+th,
+td {
+    font-size: 11px;
+}
+</style>
+</head>
+<body onload="window.print()">
+
+<h2>Pharmacy Stock Report</h2>
+<hr>
+
+<table border="1" cellpadding="10" width="100%">
+    <tr>
+        <th>Name</th>
+        <th>Batch</th>
+        <th>MRP</th>
+        <th>Qty</th>
+        <th>Expiry</th>
+    </tr>
+
+    {% for m in medicines %}
+    <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.batch }}</td>
+        <td>{{ m.mrp }}</td>
+        <td>{{ m.qty }}</td>
+        <td>{{ m.expiry }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+</body>
+</html>

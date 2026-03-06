@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+<h3>Add User</h3>
+
+<form method="post">
+<input name="username" placeholder="Username" required>
+<input name="password" type="password" placeholder="Password" required>
+
+<select name="role">
+    <option value="staff">Staff</option>
+    <option value="admin">Admin</option>
+</select>
+
+<hr>
+
+<label><input type="checkbox" name="can_view_medicine"> View Medicine</label><br>
+<label><input type="checkbox" name="can_add_medicine"> Add Medicine</label><br>
+<label><input type="checkbox" name="can_edit_medicine"> Edit Medicine</label><br>
+<label><input type="checkbox" name="can_delete_medicine"> Delete Medicine</label><br>
+<label><input type="checkbox" name="can_edit_invoice"> Edit Invoice</label><br>
+<label><input type="checkbox" name="can_delete_invoice"> Delete Invoice</label><br>
+<label><input type="checkbox" name="can_view_stock_history"> Stock History</label><br>
+<label><input type="checkbox" name="can_view_reports"> Reports</label><br>
+<label><input type="checkbox" name="can_manage_users"> Users</label><br>
+
+<br><br>
+<button class="btn save">Create User</button>
+</form>
+</div>
+{% endblock %}

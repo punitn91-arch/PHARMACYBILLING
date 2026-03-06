@@ -1,0 +1,711 @@
+{% extends "base.html" %}
+{% block title %}Vendor Form{% endblock %}
+
+{% block body %}
+
+<style>
+.content .card {
+    background: white;
+    padding: 18px;
+    border-radius: 12px;
+    box-shadow: 0 0 6px #cfd8e3;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+label {
+    font-weight: 600;
+    font-size: 13px;
+    display: block;
+    margin-bottom: 6px;
+}
+
+.content input:not([type="checkbox"]):not([type="radio"]),
+.content select,
+.content textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    font-size: 14px;
+}
+
+textarea {
+    min-height: 70px;
+}
+
+.actions {
+    margin-top: 15px;
+}
+
+.btn {
+    background: #198754;
+    color: white;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: white;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.section-title {
+    margin: 12px 0 6px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #0d6efd;
+}
+
+.full { grid-column: 1 / -1; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#purchaseTable,
+.purchase-history-table {
+    min-width: 1100px;
+}
+
+.table-wrap {
+    width: 100%;
+    overflow: auto;
+    border: 1px solid #e0e6ef;
+    border-radius: 12px;
+}
+
+#purchaseTable th,
+#purchaseTable td,
+.purchase-history-table th,
+.purchase-history-table td {
+    white-space: nowrap;
+}
+
+#purchaseTable input,
+#purchaseTable select {
+    min-width: 70px;
+}
+
+.pack-cell {
+    display: grid;
+    gap: 4px;
+}
+
+.pack-qty-label {
+    font-size: 11px;
+    color: #6c757d;
+    text-align: left;
+}
+
+th {
+    background: #0d6efd;
+    color: white;
+    padding: 8px;
+    font-size: 13px;
+}
+
+td {
+    padding: 8px;
+    border-bottom: 1px solid #ddd;
+    text-align: center;
+    font-size: 13px;
+}
+
+.purchase-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.purchase-actions .left-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #eef3ff;
+    color: #0d47a1;
+}
+
+.total-box-wrap {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
+.total-box {
+    text-align: right;
+    font-weight: 700;
+    padding: 8px 12px;
+    border: 1px solid #d9e2ef;
+    border-radius: 10px;
+    background: #f8fbff;
+    box-shadow: 0 2px 6px rgba(13, 110, 253, 0.08);
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+}
+
+.total-box .rounded-row {
+    color: #0d6efd;
+}
+</style>
+
+<div class="card">
+    <h2>{% if vendor %}Edit Vendor{% else %}Add Vendor{% endif %}</h2>
+
+    <form method="POST" enctype="multipart/form-data">
+        <div class="section-title">Vendor Profile</div>
+        <div class="grid">
+            <div>
+                <label>Vendor Name</label>
+                <input type="text" name="name" required value="{{ vendor.name if vendor else '' }}">
+            </div>
+            <div>
+                <label>Mobile</label>
+                <input type="text" name="mobile" value="{{ vendor.mobile if vendor else '' }}">
+            </div>
+            <div>
+                <label>Email</label>
+                <input type="email" name="email" value="{{ vendor.email if vendor else '' }}">
+            </div>
+            <div>
+                <label>GST No</label>
+                <input type="text" name="gst_no" value="{{ vendor.gst_no if vendor else '' }}">
+            </div>
+        </div>
+
+        <div class="section-title">Address</div>
+        <div class="grid">
+            <div>
+                <label>Shop Name</label>
+                <input type="text" name="shop_name" value="{{ vendor.shop_name if vendor else '' }}">
+            </div>
+            <div>
+                <label>Area</label>
+                <input type="text" name="area" value="{{ vendor.area if vendor else '' }}">
+            </div>
+            <div>
+                <label>City</label>
+                <input type="text" name="city" value="{{ vendor.city if vendor else '' }}">
+            </div>
+            <div>
+                <label>State</label>
+                <input type="text" name="state" value="{{ vendor.state if vendor else '' }}">
+            </div>
+            <div>
+                <label>Pincode</label>
+                <input type="text" name="pincode" value="{{ vendor.pincode if vendor else '' }}">
+            </div>
+            <div class="full">
+                <label>Full Address</label>
+                <input type="text" name="address" value="{{ vendor.address if vendor else '' }}">
+            </div>
+        </div>
+
+        <div class="section-title">Bank Details</div>
+        <div class="grid">
+            <div>
+                <label>Bank Name</label>
+                <input type="text" name="bank_name" value="{{ vendor.bank_name if vendor else '' }}">
+            </div>
+            <div>
+                <label>Account Holder Name</label>
+                <input type="text" name="account_holder_name" value="{{ vendor.account_holder_name if vendor else '' }}">
+            </div>
+            <div>
+                <label>Account No</label>
+                <input type="text" name="account_no" value="{{ vendor.account_no if vendor else '' }}">
+            </div>
+            <div>
+                <label>IFSC</label>
+                <input type="text" name="ifsc" value="{{ vendor.ifsc if vendor else '' }}">
+            </div>
+            <div>
+                <label>UPI</label>
+                <input type="text" name="upi" value="{{ vendor.upi if vendor else '' }}">
+            </div>
+        </div>
+
+        <div class="section-title">Payment & Status</div>
+        <div class="grid">
+            <div>
+                <label>Vendor Type</label>
+                <select name="vendor_type">
+                    <option {% if vendor and vendor.vendor_type == 'Distributor' %}selected{% endif %}>Distributor</option>
+                    <option {% if vendor and vendor.vendor_type == 'Company' %}selected{% endif %}>Company</option>
+                    <option {% if vendor and vendor.vendor_type == 'Local' %}selected{% endif %}>Local</option>
+                </select>
+            </div>
+            <div>
+                <label>Default Payment Mode</label>
+                <select name="default_payment_mode">
+                    <option {% if vendor and vendor.default_payment_mode == 'CASH' %}selected{% endif %}>CASH</option>
+                    <option {% if vendor and vendor.default_payment_mode == 'ONLINE' %}selected{% endif %}>ONLINE</option>
+                    <option {% if vendor and vendor.default_payment_mode == 'UPI' %}selected{% endif %}>UPI</option>
+                    <option {% if vendor and vendor.default_payment_mode == 'BANK TRANSFER' %}selected{% endif %}>BANK TRANSFER</option>
+                </select>
+            </div>
+            <div>
+                <label>Payment Status</label>
+                <select name="payment_status">
+                    <option {% if vendor and vendor.payment_status == 'Paid' %}selected{% endif %}>Paid</option>
+                    <option {% if vendor and vendor.payment_status == 'Unpaid' %}selected{% endif %}>Unpaid</option>
+                    <option {% if vendor and vendor.payment_status == 'Partial' %}selected{% endif %}>Partial</option>
+                </select>
+            </div>
+            <div>
+                <label>Last Purchase Date</label>
+                <input type="date" name="last_purchase_date" value="{{ vendor.last_purchase_date if vendor and vendor.last_purchase_date else '' }}">
+            </div>
+            <div>
+                <label>
+                    <input type="checkbox" name="is_active" {% if vendor and vendor.is_active %}checked{% endif %}>
+                    Active
+                </label>
+            </div>
+        </div>
+
+        <div class="section-title">Attachments & Notes</div>
+        <div class="grid">
+            <div class="full">
+                <label>Attachment Reference (filename or link)</label>
+                <input type="text" name="attachment_ref" value="{{ vendor.attachment_ref if vendor else '' }}">
+            </div>
+            <div class="full">
+                <label>Upload Attachment (PDF/JPG/PNG)</label>
+                <input type="file" name="attachment_file" accept=".pdf,.png,.jpg,.jpeg">
+                {% if vendor and vendor.attachment_ref %}
+                <div style="margin-top:6px; font-size:12px;">
+                    Current: <a href="/static/uploads/vendors/{{ vendor.attachment_ref }}" target="_blank">{{ vendor.attachment_ref }}</a>
+                </div>
+                {% endif %}
+            </div>
+            <div class="full">
+                <label>Notes</label>
+                <textarea name="notes">{{ vendor.notes if vendor else '' }}</textarea>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn" type="submit">Save Vendor</button>
+            <a href="/vendor" style="margin-left:10px;">Back</a>
+        </div>
+    </form>
+</div>
+
+{% if vendor %}
+<div class="card" style="margin-top:16px;">
+    <h3>Purchased Medicines</h3>
+
+    <form method="POST" action="/vendor/{{ vendor.id }}/purchase" id="purchaseForm" onsubmit="return confirm('Save purchase and update stock?')">
+        <div class="grid">
+            <div>
+                <label>Bill / Invoice No</label>
+                <input type="text" name="invoice_no" placeholder="Supplier Bill No" required>
+            </div>
+            <div>
+                <label>Bill Date</label>
+                <input type="date" name="purchase_date" required>
+            </div>
+            <div>
+                <label>Payment Mode</label>
+                <select name="payment_mode">
+                    <option>CASH</option>
+                    <option>ONLINE</option>
+                    <option>UPI</option>
+                    <option>BANK TRANSFER</option>
+                </select>
+            </div>
+            <div>
+                <label>Payment Status</label>
+                <select name="payment_status">
+                    <option>Paid</option>
+                    <option>Unpaid</option>
+                    <option>Partial</option>
+                </select>
+            </div>
+            <div>
+                <label>Paid Amount (for Partial)</label>
+                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="paid_amount" value="0">
+            </div>
+        </div>
+
+        <div class="table-wrap">
+        <table id="purchaseTable">
+            <thead>
+                <tr>
+                    <th>Medicine Name</th>
+                    <th>Composition</th>
+                    <th>Company</th>
+                    <th>Distributor</th>
+                    <th>Pack</th>
+                    <th>Batch</th>
+                    <th>Expiry (MM/YYYY)</th>
+                    <th>Qty</th>
+                    <th>Free</th>
+                    <th>Purchase Rate</th>
+                    <th>MRP</th>
+                    <th>GST %</th>
+                    <th>Disc %</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="purchase-row">
+                    <td>
+                        <input type="text" name="medicine_name" list="medicineList">
+                        <datalist id="medicineList">
+                            {% for m in medicines %}
+                            <option value="{{ m.name }}"></option>
+                            {% endfor %}
+                        </datalist>
+                    </td>
+                    <td><input type="text" name="composition"></td>
+                    <td><input type="text" name="company"></td>
+                    <td><input type="text" name="distributor_name" value="{{ vendor.name }}"></td>
+                    <td class="pack-cell">
+                        <select name="pack_type" class="pack-type">
+                            <option>Strip</option>
+                            <option>Box</option>
+                            <option>Bottle</option>
+                            <option>Sachet</option>
+                            <option>Tube</option>
+                            <option>Vial</option>
+                            <option>Unit</option>
+                        </select>
+                        <div class="pack-qty-label">Units per Pack</div>
+                        <input type="number" name="pack_qty" min="1" step="1" class="pack-qty" placeholder="e.g. 10">
+                    </td>
+                    <td><input type="text" name="batch" required></td>
+                    <td><input type="text" name="expiry" placeholder="MM/YYYY" required></td>
+                    <td><input type="number" name="qty" min="0" value="0"></td>
+                    <td><input type="number" name="free_qty" min="0" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="purchase_rate" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="mrp" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="gst_percent" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="discount_percent" value="0"></td>
+                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="total_value" readonly></td>
+                </tr>
+            </tbody>
+        </table>
+        </div>
+
+        <div class="purchase-actions">
+            <div class="left-actions">
+                <button class="btn-secondary" type="button" id="newPurchaseBill">Add New Purchase Bill</button>
+                <button class="btn-secondary" type="button" id="addPurchaseRow">Add Row</button>
+            </div>
+            <button class="btn" type="submit">Save Purchase</button>
+        </div>
+        <div class="total-box-wrap">
+            <div class="total-box">
+                <div>Grand Total: <span id="grandTotal">0.00</span></div>
+                <div class="rounded-row">Rounded Amt: <span id="roundedTotal">0</span></div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Vendor Bill History</h3>
+    {% if purchase_bills and purchase_bills|length > 0 %}
+    <div class="table-wrap">
+    <table class="purchase-history-table">
+        <tr>
+            <th>Bill No</th>
+            <th>Bill Date</th>
+            <th>Bill Amount</th>
+            <th>Payment Status</th>
+            <th>Actions</th>
+        </tr>
+        {% for b in purchase_bills %}
+        <tr>
+            <td>{{ b.invoice_no if b.invoice_no else b.purchase_no }}</td>
+            <td>{{ b.purchase_date.strftime('%d-%m-%Y') if b.purchase_date else '-' }}</td>
+            <td>{{ b.total_amount or 0 }}</td>
+            <td><span class="badge">{{ b.payment_status or '-' }}</span></td>
+            <td>
+                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}">View</a>
+                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=edit">Edit</a>
+                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=return">Return</a>
+                <a class="btn btn-sm btn-danger"
+                   href="/vendor/purchase/delete/{{ b.id }}"
+                   data-async-action="true"
+                   onclick="return confirm('Delete this bill? This will remove stock and all linked purchase entries from this bill.');">
+                   Delete
+                </a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+    {% else %}
+    <div>No bills yet.</div>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Recent Purchases (Items)</h3>
+    {% if purchase_items and purchase_items|length > 0 %}
+    <div class="table-wrap">
+    <table class="purchase-history-table">
+        <tr>
+            <th>Medicine</th>
+            <th>Batch</th>
+            <th>Pack</th>
+            <th>Expiry</th>
+            <th>Qty</th>
+            <th>Free</th>
+            <th>Rate</th>
+            <th>MRP</th>
+            <th>GST %</th>
+            <th>Disc %</th>
+            <th>Total</th>
+            <th>Date</th>
+            <th>Action</th>
+        </tr>
+        {% for p in purchase_items %}
+        <tr {% if p.is_expired %}style="background:#f8d7da;"{% endif %}>
+            <td>{{ p.medicine_name }}</td>
+            <td>{{ p.batch }}</td>
+            <td>
+                {% if p.pack_type and p.pack_qty %}
+                    {{ p.pack_type }} of {{ p.pack_qty }}
+                {% elif p.pack_type %}
+                    {{ p.pack_type }}
+                {% elif p.pack_qty %}
+                    {{ p.pack_qty }}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>{{ p.expiry }}{% if p.is_expired %} (Expired){% endif %}</td>
+            <td>{{ p.qty }}</td>
+            <td>{{ p.free_qty }}</td>
+            <td>{{ p.purchase_rate }}</td>
+            <td>{{ p.mrp }}</td>
+            <td>{{ p.gst_percent }}</td>
+            <td>{{ p.discount_percent }}</td>
+            <td>{{ p.total_value }}</td>
+            <td>{{ p.created_at.strftime('%d-%m-%Y') }}</td>
+            <td>
+                <a class="btn btn-sm" href="/vendor/purchase-item/edit/{{ p.id }}">Edit</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+    {% else %}
+    <div>No purchases yet.</div>
+    {% endif %}
+</div>
+{% endif %}
+
+<script>
+function sanitizeDecimalInput(input) {
+    if (!input) return;
+    let val = input.value || "";
+    let cleaned = "";
+    let dotSeen = false;
+    for (let i = 0; i < val.length; i++) {
+        let ch = val[i];
+        if (ch >= "0" && ch <= "9") {
+            cleaned += ch;
+        } else if (ch === "." && !dotSeen) {
+            cleaned += ch;
+            dotSeen = true;
+        }
+    }
+    if (cleaned !== val) input.value = cleaned;
+}
+
+function getPackQtyLabel(packType) {
+    if ((packType || "").toLowerCase() === "strip") {
+        return "Tablets per Strip";
+    }
+    return "Units per Pack";
+}
+
+function updatePackLabel(target) {
+    let row = target ? target.closest(".purchase-row") : null;
+    if (!row) return;
+    let select = row.querySelector(".pack-type");
+    let label = row.querySelector(".pack-qty-label");
+    if (!select || !label) return;
+    label.textContent = getPackQtyLabel(select.value);
+}
+
+function parseDecimal(val) {
+    if (val === "" || val === "." || val == null) return 0;
+    let num = Number(val);
+    return Number.isFinite(num) ? num : 0;
+}
+
+function formatDecimal(val) {
+    if (!Number.isFinite(val)) return "";
+    return String(val);
+}
+
+function calculateRowTotal(row) {
+    let qty = parseDecimal(row.querySelector("input[name='qty']").value || 0);
+    let rate = parseDecimal(row.querySelector("input[name='purchase_rate']").value || 0);
+    let gst = parseDecimal(row.querySelector("input[name='gst_percent']").value || 0);
+    let disc = parseDecimal(row.querySelector("input[name='discount_percent']").value || 0);
+    let base = qty * rate;
+    let discAmt = base * disc / 100;
+    let taxable = base - discAmt;
+    let gstAmt = taxable * gst / 100;
+    let total = taxable + gstAmt;
+    row.querySelector("input[name='total_value']").value = formatDecimal(total);
+    return total;
+}
+
+function updateGrandTotal() {
+    let total = 0;
+    document.querySelectorAll("#purchaseTable .purchase-row").forEach(row => {
+        total += calculateRowTotal(row);
+    });
+    document.getElementById("grandTotal").innerText = formatDecimal(total);
+    let roundedEl = document.getElementById("roundedTotal");
+    if (roundedEl) {
+        let rounded = Math.round(total);
+        roundedEl.innerText = String(rounded);
+    }
+}
+
+document.addEventListener("input", function (e) {
+    if (e.target.classList && e.target.classList.contains("decimal-input")) {
+        sanitizeDecimalInput(e.target);
+    }
+    if (e.target.closest("#purchaseTable")) {
+        updateGrandTotal();
+    }
+});
+
+document.addEventListener("change", function (e) {
+    if (e.target.classList && e.target.classList.contains("pack-type")) {
+        updatePackLabel(e.target);
+    }
+});
+
+let addBtn = document.getElementById("addPurchaseRow");
+if (addBtn) {
+    addBtn.addEventListener("click", function () {
+        let tbody = document.querySelector("#purchaseTable tbody");
+        let first = tbody.querySelector(".purchase-row");
+        if (!first) return;
+        let clone = first.cloneNode(true);
+        clone.querySelectorAll("input").forEach(i => {
+            if (i.name === "total_value") {
+                i.value = "";
+                return;
+            }
+            if (i.name === "pack_qty") {
+                i.value = "";
+                return;
+            }
+            if (i.type === "number" || (i.classList && i.classList.contains("decimal-input"))) {
+                i.value = "0";
+                return;
+            }
+            i.value = "";
+        });
+        let selects = clone.querySelectorAll("select");
+        selects.forEach(s => s.selectedIndex = 0);
+        tbody.appendChild(clone);
+        updatePackLabel(clone.querySelector(".pack-type"));
+    });
+}
+
+function clearPurchaseRow(row) {
+    row.querySelectorAll("input").forEach(i => {
+        if (i.name === "total_value") {
+            i.value = "";
+            return;
+        }
+        if (i.name === "pack_qty") {
+            i.value = "";
+            return;
+        }
+        if (i.type === "number" || (i.classList && i.classList.contains("decimal-input"))) {
+            i.value = "0";
+            return;
+        }
+        i.value = "";
+    });
+    row.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
+    updatePackLabel(row.querySelector(".pack-type"));
+}
+
+function setTodayIfEmpty() {
+    let dateInput = document.querySelector("input[name='purchase_date']");
+    if (dateInput && !dateInput.value) {
+        let today = new Date().toISOString().slice(0, 10);
+        dateInput.value = today;
+    }
+}
+
+let newBillBtn = document.getElementById("newPurchaseBill");
+if (newBillBtn) {
+    newBillBtn.addEventListener("click", function () {
+        if (!confirm("Start a new purchase bill? Current entries will be cleared.")) return;
+        let form = document.getElementById("purchaseForm");
+        if (form) {
+            form.querySelector("input[name='invoice_no']").value = "";
+            form.querySelector("input[name='paid_amount']").value = "0";
+            form.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
+            let dateInput = form.querySelector("input[name='purchase_date']");
+            if (dateInput) {
+                let today = new Date().toISOString().slice(0, 10);
+                dateInput.value = today;
+            }
+        }
+        let tbody = document.querySelector("#purchaseTable tbody");
+        if (tbody) {
+            let rows = Array.from(tbody.querySelectorAll(".purchase-row"));
+            rows.forEach((row, idx) => {
+                if (idx === 0) {
+                    clearPurchaseRow(row);
+                } else {
+                    row.remove();
+                }
+            });
+        }
+        updateGrandTotal();
+        document.querySelectorAll("#purchaseTable .purchase-row .pack-type").forEach(select => {
+            updatePackLabel(select);
+        });
+    });
+}
+
+window.addEventListener("load", function () {
+    setTodayIfEmpty();
+    updateGrandTotal();
+    document.querySelectorAll("#purchaseTable .purchase-row .pack-type").forEach(select => {
+        updatePackLabel(select);
+    });
+});
+</script>
+
+{% endblock %}

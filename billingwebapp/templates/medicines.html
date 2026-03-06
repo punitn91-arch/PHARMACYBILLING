@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Medicine Master{% endblock %}
+
+{% block body %}
+
+<style>
+.card {
+    background: white;
+    padding: 15px;
+    border-radius: 6px;
+    box-shadow: 0 0 6px #cfd8e3;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background: #0d6efd;
+    color: white;
+    padding: 10px;
+}
+
+td {
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+    text-align: center;
+}
+
+.add-btn {
+    background: #198754;
+    color: white;
+    padding: 8px 14px;
+    text-decoration: none;
+    border-radius: 4px;
+}
+</style>
+
+<div class="card">
+    <h2>💊 Medicine Master</h2>
+
+    <div style="text-align:right; margin-bottom:10px;">
+        {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
+<a href="/medicines/export" class="add-btn-success" style="margin-left:10px;">
+    📥 Export Excel
+</a>
+{% endif %}
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
+        <input type="text"
+           id="medicineSearch"
+           placeholder="🔍 Search medicine..."
+           onkeyup="searchMedicine()"
+           style="padding:8px; width:250px; border-radius:5px; border:1px solid #ccc;">
+</div>
+
+    </div>
+
+    <table id="medicineTable">
+        <tr>
+            <th>#</th>
+            <th>Medicine Name</th>
+            <th>Batch</th>
+            <th>Pack</th>
+            <th>Expiry</th>
+            <th>MRP</th>
+            <th>Stock</th>
+            <th>Action</th>
+        </tr>
+
+        {% for m in medicines %}
+        <tr class="medicine-row">
+            <td>{{ loop.index }}</td>
+            <td>{{ m.name }}</td>
+            <td>{{ m.batch }}</td>
+            <td>
+                {% if m.pack_type and m.pack_qty %}
+                    {{ m.pack_type }} of {{ m.pack_qty }}
+                {% elif m.pack_type %}
+                    {{ m.pack_type }}
+                {% elif m.pack_qty %}
+                    {{ m.pack_qty }}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>{{ m.expiry[5:7] }}/{{ m.expiry[0:4] }}</td>
+            <td>₹{{ m.mrp }}</td>
+            <td>{{ m.qty }}</td>
+            <td>
+    <!-- EDIT -->
+    {% if session.get("role") == "admin" or session.get("can_edit_medicine") %}
+<a href="/medicines/edit/{{ m.id }}" title="Edit">
+        ✏️
+    </a>
+{% endif %}
+
+    <!-- DELETE -->
+    {% if session.get("role") == "admin" or session.get("can_delete_medicine") %}
+<a href="/medicines/delete/{{ m.id }}"
+       data-async-action="true"
+       onclick="return confirm('Delete this medicine?')"
+       title="Delete">
+        🗑️
+    </a>
+{% endif %}
+</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <script>
+function searchMedicine() {
+    let input = document.getElementById("medicineSearch").value.toLowerCase();
+    let rows = document.querySelectorAll(".medicine-row");
+
+    rows.forEach(row => {
+        let name = row.children[1].innerText.toLowerCase();
+        let batch = row.children[2].innerText.toLowerCase();
+        let pack = row.children[3].innerText.toLowerCase();
+        let haystack = `${name} ${batch} ${pack}`;
+
+        if (haystack.includes(input) && input !== "") {
+            row.style.display = "";
+            row.style.backgroundColor = "#cfe2ff";   // BLUE highlight
+            row.style.fontWeight = "bold";
+        } else if (input === "") {
+            row.style.display = "";
+            row.style.backgroundColor = "";
+            row.style.fontWeight = "";
+        } else {
+            row.style.display = "none";
+        }
+    });
+}
+</script>
+</div>
+
+{% endblock %}

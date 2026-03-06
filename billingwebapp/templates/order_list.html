@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block body %}
+<style>
+/* -------- PRINT FIX -------- */
+@media print {
+
+    /* hide everything */
+    body * {
+        visibility: hidden;
+    }
+
+    /* show only order list */
+    .print-area, .print-area * {
+        visibility: visible;
+    }
+
+    .print-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        background: white;
+        padding: 20px;
+    }
+
+    /* remove shadows & colors */
+    table {
+        box-shadow: none !important;
+    }
+
+    /* hide buttons */
+    .no-print {
+        display: none !important;
+    }
+}
+</style>
+
+<div class="print-area">
+
+    <h2 style="text-align:center;">🛒 One Click Order List</h2>
+
+    <table border="1" width="100%" cellspacing="0" cellpadding="6">
+        <tr>
+            <th>Medicine Name</th>
+            <th>Batch(es)</th>
+            <th>Current Stock</th>
+            <th>Suggested Order Qty</th>
+        </tr>
+
+        {% for i in items %}
+        <tr>
+            <td>{{ i.name }}</td>
+            <td>{{ i.batch }}</td>
+            <td>{{ i.stock }}</td>
+            <td>{{ i.suggested }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+</div>
+
+<table class="table table-bordered">
+    <tr>
+        <th>Medicine Name</th>
+        <th>Batch(es)</th>
+        <th>Current Stock</th>
+        <th>Suggested Order Qty</th>
+    </tr>
+
+    {% for i in items %}
+    <tr>
+        <td>{{ i.name }}</td>
+        <td>{{ i.batch }}</td>
+        <td style="color:red;font-weight:bold">{{ i.stock }}</td>
+        <td style="color:green;font-weight:bold">{{ i.suggested }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<br>
+
+<button onclick="window.print()" class="btn btn-success no-print">
+    🖨️ Print
+</button>
+<a href="/export-low-stock"
+   class="btn btn-success no-print"
+   style="margin-bottom:10px;">
+   📊 Export Low Stock Excel
+</a>
+
+
+
+{% endblock %}

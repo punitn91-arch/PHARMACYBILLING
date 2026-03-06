@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block body %}
+
+<style>
+    .login-container {
+        width: 380px;
+        margin: 120px auto; /* center vertically */
+        background: white;
+        padding: 35px;
+        border-radius: 12px;
+        box-shadow: 0 0 20px rgba(0,0,0,0.15);
+        text-align: center;
+    }
+
+    .login-title {
+        font-size: 26px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #333;
+    }
+
+    .login-title i {
+        font-size: 30px;
+        margin-right: 10px;
+        color: #ff9800;
+    }
+
+    .login-input {
+        width: 90%;
+        padding: 12px;
+        margin: 10px 0;
+        border: 1px solid #999;
+        border-radius: 6px;
+        font-size: 16px;
+    }
+
+    .login-btn {
+        width: 95%;
+        background: #007bff;
+        padding: 12px;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        margin-top: 12px;
+        font-size: 18px;
+        cursor: pointer;
+    }
+
+    .login-btn:hover {
+        background: #0056b3;
+    }
+</style>
+
+<div class="login-container">
+
+    <div class="login-title">
+        <i>🔒</i> Login
+    </div>
+
+    <form method="POST" autocomplete="off">
+        <input type="text" name="username" placeholder="Username" class="login-input" autocomplete="off" required>
+        <input type="password" name="password" placeholder="Password" class="login-input" autocomplete="new-password" required>
+
+        <button type="submit" class="login-btn">Login</button>
+    </form>
+
+</div>
+
+{% endblock %}

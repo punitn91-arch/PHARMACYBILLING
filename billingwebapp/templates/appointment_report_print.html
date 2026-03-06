@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Appointment Report</title>
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #0f172a;
+            --muted: #64748b;
+            --border: #e5e7eb;
+            --brand: #2563eb;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: var(--text);
+            background: var(--bg);
+        }
+
+        .report-card {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 4px 18px rgba(15, 23, 42, 0.06);
+            padding: 24px;
+        }
+
+        .header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            line-height: 1.2;
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #fff;
+            color: var(--text);
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn.primary {
+            background: var(--brand);
+            color: #fff;
+            border-color: var(--brand);
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        table {
+            width: 100%;
+            min-width: 980px;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            font-size: 13px;
+        }
+
+        th {
+            background: #f8fafc;
+            color: var(--muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-size: 11px;
+        }
+
+        .footer {
+            margin-top: 14px;
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        @media print {
+            body {
+                padding: 0;
+                background: #fff;
+            }
+
+            .report-card {
+                border: none;
+                box-shadow: none;
+                padding: 0;
+                max-width: none;
+            }
+
+            .actions {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    {% macro money(v) -%}Rs {{ '%.2f'|format((v or 0)|float) }}{%- endmacro %}
+    <main class="report-card">
+        <header class="header">
+            <div>
+                <h1>Appointment Report</h1>
+                <p class="muted">Filter: {{ report_label }}</p>
+                <p class="muted">Generated: {{ generated_at.strftime('%d-%m-%Y %I:%M %p') }}</p>
+            </div>
+            <div class="actions">
+                <button type="button" class="btn" onclick="window.close()">Close</button>
+                <button type="button" class="btn primary" onclick="window.print()">Print / Save PDF</button>
+            </div>
+        </header>
+
+        <section class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Appointment ID</th>
+                        <th>Time</th>
+                        <th>Patient</th>
+                        <th>Mobile</th>
+                        <th>Doctor</th>
+                        <th>Fee</th>
+                        <th>Discount</th>
+                        <th>Payment Mode</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for a in appointments %}
+                    <tr>
+                        <td>{{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</td>
+                        <td>{{ a.appointment_no or '-' }}</td>
+                        <td>{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}</td>
+                        <td>{{ a.patient_name or '-' }}</td>
+                        <td>{{ a.mobile or '-' }}</td>
+                        <td>{{ a.doctor_name or '-' }}</td>
+                        <td>{{ money(a.consultation_fee) }}</td>
+                        <td>{{ money(a.doctor_discount) }}</td>
+                        <td>{{ (a.payment_mode or '-')|upper }}</td>
+                        <td>{{ (a.status or '-')|replace('_', ' ')|title }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="10" style="text-align: center; color: #64748b;">No appointment records found for this filter.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <footer class="footer">
+            <span>Total Appointments: {{ appointments|length }}</span>
+            <span>Total Net Amount: {{ money(total_net) }}</span>
+        </footer>
+    </main>
+
+    {% if mode == 'print' %}
+    <script>
+        window.addEventListener('load', function () {
+            window.print();
+        });
+    </script>
+    {% endif %}
+</body>
+</html>

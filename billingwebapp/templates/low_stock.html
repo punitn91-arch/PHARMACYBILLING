@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block body %}
+
+<h2>⚠️ Low Stock Medicines</h2>
+<a href="/order-list" class="btn btn-primary" style="margin-bottom:15px;">
+    🛒 Generate Order List
+</a>
+
+<table class="table table-bordered">
+    <tr>
+        <th>Name</th>
+        <th>Batch(es)</th>
+        <th>Expiry</th>
+        <th>Stock</th>
+    </tr>
+    {% for m in medicines %}
+    <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.batch }}</td>
+        <td>{{ m.expiry }}</td>
+        <td style="color:red;font-weight:bold">{{ m.qty }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% endblock %}

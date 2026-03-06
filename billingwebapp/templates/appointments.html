@@ -1,0 +1,578 @@
+{% extends "base.html" %}
+{% block title %}Doctor Appointments{% endblock %}
+
+{% block body %}
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: {
+            extend: {
+                fontFamily: {
+                    sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif']
+                },
+                colors: {
+                    brand: '#2563eb'
+                },
+                boxShadow: {
+                    soft: '0 1px 2px rgba(15, 23, 42, 0.06), 0 2px 8px rgba(15, 23, 42, 0.08)'
+                }
+            }
+        }
+    };
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+.appointments-ui table th,
+.appointments-ui table td {
+    text-align: left !important;
+    vertical-align: middle !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    background: transparent;
+}
+
+.appointments-ui thead th {
+    background: #f8fafc !important;
+    color: #64748b !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.04em;
+}
+
+.appointments-ui tbody tr:hover {
+    background: #f8fafc !important;
+}
+
+.appointments-ui .shadow-soft {
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 20px rgba(15, 23, 42, 0.04);
+}
+
+.appointments-ui .table-actions form,
+.appointments-ui .table-actions a {
+    margin: 0;
+}
+
+.appointments-ui .table-actions summary {
+    list-style: none;
+}
+
+.appointments-ui .table-actions summary::-webkit-details-marker {
+    display: none;
+}
+
+.appointments-ui .appointment-action-panel {
+    min-width: 11rem;
+}
+
+.appointments-ui .wa-btn {
+    border-color: #bbf7d0 !important;
+    background: #dcfce7 !important;
+    color: #15803d !important;
+}
+
+.appointments-ui .wa-btn:hover {
+    background: #bbf7d0 !important;
+    color: #166534 !important;
+}
+
+.appointments-ui .appointments-table {
+    width: max-content;
+}
+
+.appointments-ui .appointments-table th,
+.appointments-ui .appointments-table td {
+    padding-left: 0.6rem !important;
+    padding-right: 0.6rem !important;
+    white-space: nowrap;
+}
+</style>
+
+{% macro money(v) -%}Rs {{ '%.2f'|format((v or 0)|float) }}{%- endmacro %}
+
+{% macro status_badge(status) -%}
+{% set s = (status or 'BOOKED')|upper %}
+{% if s == 'BOOKED' %}
+<span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Booked</span>
+{% elif s == 'CHECKED_IN' %}
+<span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">Checked In</span>
+{% elif s == 'COMPLETED' %}
+<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Completed</span>
+{% else %}
+<span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">Cancelled</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro payment_badge(status) -%}
+{% set s = (status or 'UNPAID')|upper %}
+{% if s == 'PAID' %}
+<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Paid</span>
+{% else %}
+<span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">Unpaid</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro payment_mode_badge(mode) -%}
+{% set value = (mode or 'CASH')|upper %}
+{% if value == 'UPI' %}
+<span class="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700">UPI</span>
+{% elif value == 'CARD' %}
+<span class="inline-flex items-center rounded-full bg-cyan-100 px-2.5 py-1 text-xs font-semibold text-cyan-700">Card</span>
+{% elif value == 'ONLINE' %}
+<span class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">Online</span>
+{% else %}
+<span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">Cash</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro quick_filter_link(key, label) -%}
+<a
+    href="{{ url_for('appointments', quick_filter=key, search=search_query, calendar_view=calendar_view, appointment_report_type=report_filters.appointment_report_type, appointment_day_date=report_filters.appointment_day_date, appointment_month=report_filters.appointment_month, appointment_year=report_filters.appointment_year, appointment_from_date=report_filters.appointment_from_date, appointment_to_date=report_filters.appointment_to_date) }}"
+    class="inline-flex items-center rounded-lg border px-3 py-2 text-xs font-semibold transition duration-150 {{ 'border-brand bg-brand text-white' if quick_filter == key else 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' }}"
+>{{ label }}</a>
+{%- endmacro %}
+
+<div class="appointments-ui pb-12 font-sans text-slate-900">
+{% if not list_only %}
+<section class="mb-8 flex flex-col items-start justify-between gap-4 xl:flex-row xl:items-center">
+    <div>
+        <h1 class="text-4xl font-bold tracking-tight text-slate-900">Doctor Appointments</h1>
+        <p class="mt-2 text-base text-slate-500">Manage appointment flow, track consultation billing, and monitor clinic throughput.</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <a href="{{ url_for('add_appointment') }}" class="inline-flex h-11 items-center justify-center rounded-xl bg-brand px-5 text-sm font-semibold text-white shadow-soft transition duration-150 hover:bg-blue-700 hover:shadow-md">
+            + Add Appointment
+        </a>
+    </div>
+</section>
+
+<section class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft transition duration-150 hover:shadow-md">
+        <div class="flex items-center justify-between">
+            <p class="text-sm font-medium text-slate-500">Booked Today</p>
+            <span class="rounded-lg bg-amber-100 p-2 text-amber-700">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            </span>
+        </div>
+        <p class="mt-4 text-3xl font-bold text-slate-900">{{ today_counts['BOOKED'] }}</p>
+        <p class="mt-2 text-xs text-slate-400">Current day appointment intake</p>
+    </article>
+
+    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft transition duration-150 hover:shadow-md">
+        <div class="flex items-center justify-between">
+            <p class="text-sm font-medium text-slate-500">Checked In</p>
+            <span class="rounded-lg bg-blue-100 p-2 text-blue-700">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            </span>
+        </div>
+        <p class="mt-4 text-3xl font-bold text-slate-900">{{ today_counts['CHECKED_IN'] }}</p>
+        <p class="mt-2 text-xs text-slate-400">Patients currently in clinic</p>
+    </article>
+
+    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft transition duration-150 hover:shadow-md">
+        <div class="flex items-center justify-between">
+            <p class="text-sm font-medium text-slate-500">Completed</p>
+            <span class="rounded-lg bg-emerald-100 p-2 text-emerald-700">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </span>
+        </div>
+        <p class="mt-4 text-3xl font-bold text-slate-900">{{ today_counts['COMPLETED'] }}</p>
+        <p class="mt-2 text-xs text-slate-400">Consultations closed today</p>
+    </article>
+
+    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft transition duration-150 hover:shadow-md">
+        <div class="flex items-center justify-between">
+            <p class="text-sm font-medium text-slate-500">Cancelled</p>
+            <span class="rounded-lg bg-red-100 p-2 text-red-700">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+            </span>
+        </div>
+        <p class="mt-4 text-3xl font-bold text-slate-900">{{ today_counts['CANCELLED'] }}</p>
+        <p class="mt-2 text-xs text-slate-400">Cancelled or no-show count</p>
+    </article>
+
+    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft transition duration-150 hover:shadow-md">
+        <div class="flex items-center justify-between">
+            <p class="text-sm font-medium text-slate-500">Today's Revenue</p>
+            <span class="rounded-lg bg-emerald-100 p-2 text-emerald-700">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-10v10m0-10c1.11 0 2.08.402 2.599 1M12 18c-1.11 0-2.08-.402-2.599-1"/></svg>
+            </span>
+        </div>
+        <p class="mt-4 text-2xl font-bold text-slate-900">{{ money(today_revenue) }}</p>
+        <p class="mt-2 text-xs text-slate-400">Paid consultation net collection</p>
+    </article>
+</section>
+
+{% set appt_report_type = report_filters.appointment_report_type %}
+<section class="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
+    <div class="mb-3">
+        <div>
+            <h2 class="text-base font-semibold text-slate-900">Appointment Reports</h2>
+            <p class="mt-1 text-xs text-slate-500">Active range: {{ report_label }}</p>
+        </div>
+    </div>
+
+    <form method="GET" action="{{ url_for('appointments') }}" class="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-6">
+        <input type="hidden" name="search" value="{{ search_query }}">
+        <input type="hidden" name="quick_filter" value="{{ quick_filter }}">
+
+        <div>
+            <label for="appointmentReportType" class="mb-1 block text-xs font-medium text-slate-500">Report Type</label>
+            <select id="appointmentReportType" name="appointment_report_type" onchange="toggleAppointmentFilters(this.value)" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+                <option value="day" {% if appt_report_type == 'day' %}selected{% endif %}>Day Wise</option>
+                <option value="month" {% if appt_report_type == 'month' %}selected{% endif %}>Month Wise</option>
+                <option value="date_range" {% if appt_report_type == 'date_range' %}selected{% endif %}>Date Range</option>
+            </select>
+        </div>
+
+        <div id="appointmentDayBox">
+            <label for="appointment_day_date" class="mb-1 block text-xs font-medium text-slate-500">Date</label>
+            <input id="appointment_day_date" type="date" name="appointment_day_date" value="{{ report_filters.appointment_day_date }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+        </div>
+
+        <div id="appointmentMonthBox">
+            <label for="appointment_month" class="mb-1 block text-xs font-medium text-slate-500">Month</label>
+            <input id="appointment_month" type="number" min="1" max="12" name="appointment_month" value="{{ report_filters.appointment_month }}" placeholder="1-12" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+        </div>
+
+        <div id="appointmentYearBox">
+            <label for="appointment_year" class="mb-1 block text-xs font-medium text-slate-500">Year</label>
+            <input id="appointment_year" type="number" min="1900" max="9999" name="appointment_year" value="{{ report_filters.appointment_year }}" placeholder="Year" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+        </div>
+
+        <div id="appointmentDateRangeFromBox">
+            <label for="appointment_from_date" class="mb-1 block text-xs font-medium text-slate-500">From Date</label>
+            <input id="appointment_from_date" type="date" name="appointment_from_date" value="{{ report_filters.appointment_from_date }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+        </div>
+
+        <div id="appointmentDateRangeToBox">
+            <label for="appointment_to_date" class="mb-1 block text-xs font-medium text-slate-500">To Date</label>
+            <input id="appointment_to_date" type="date" name="appointment_to_date" value="{{ report_filters.appointment_to_date }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+        </div>
+
+        <div class="md:col-span-2 xl:col-span-6 flex flex-wrap items-center gap-1.5 pt-0.5">
+            <button type="submit" class="inline-flex h-9 items-center rounded-lg bg-brand px-3 text-xs font-semibold text-white transition duration-150 hover:bg-blue-700">Apply Report</button>
+            <button type="submit" formaction="{{ url_for('export_appointments_excel') }}" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Export Excel</button>
+            <button type="submit" formaction="{{ url_for('print_appointments_report') }}?mode=pdf" formtarget="_blank" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Export PDF</button>
+            <button type="submit" formaction="{{ url_for('print_appointments_report') }}?mode=print" formtarget="_blank" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Print</button>
+        </div>
+    </form>
+
+</section>
+{% endif %}
+
+<section class="rounded-2xl border border-slate-200 bg-white shadow-soft">
+    <div class="overflow-x-auto">
+        <table class="appointments-table">
+            <thead>
+                <tr>
+                    <th class="px-4 py-3">Appointment ID</th>
+                    <th class="px-4 py-3">Time</th>
+                    <th class="px-4 py-3">Patient Name</th>
+                    <th class="px-4 py-3">Mobile Number</th>
+                    <th class="px-4 py-3">Payment Mode</th>
+                    <th class="px-4 py-3">Payment Status</th>
+                    <th class="px-4 py-3">Discount</th>
+                    <th class="px-4 py-3">Consultation Fee</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in appointments %}
+                {% set row_status = (a.status or 'BOOKED')|upper %}
+                {% set pay_status = (a.payment_status or ('PAID' if (a.payment_mode or '')|upper == 'PAID' else 'UNPAID'))|upper %}
+                {% set has_mobile = ((a.mobile or '')|trim) != '' %}
+                <tr class="transition duration-150">
+                    <td class="px-4 py-4 text-sm font-semibold text-slate-900">
+                        {{ a.appointment_no }}
+                        <p class="mt-1 text-xs font-medium text-slate-500">Token {{ a.token_no or '-' }} | {{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</p>
+                    </td>
+                    <td class="px-4 py-4 text-sm text-slate-700">{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}</td>
+                    <td class="px-4 py-4 text-sm">
+                        <p class="font-semibold text-slate-900">{{ a.patient_name }}</p>
+                        <p class="mt-1 text-xs text-slate-500">{{ (a.gender or 'NA') }}</p>
+                    </td>
+                    <td class="px-4 py-4 text-sm text-slate-700">{{ a.mobile or '-' }}</td>
+                    <td class="px-4 py-4 text-sm">{{ payment_mode_badge(a.payment_mode) }}</td>
+                    <td class="px-4 py-4 text-sm">{{ payment_badge(pay_status) }}</td>
+                    <td class="px-4 py-4 text-sm text-slate-700">{{ money(a.doctor_discount) }}</td>
+                    <td class="px-4 py-4 text-sm font-semibold text-slate-900">{{ money(a.consultation_fee) }}</td>
+                    <td class="px-4 py-4 text-sm">{{ status_badge(row_status) }}</td>
+                    <td class="px-4 py-4">
+                        <div class="table-actions flex items-center justify-end gap-1.5">
+                            <button
+                                type="button"
+                                class="wa-btn inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-semibold transition duration-150 disabled:cursor-not-allowed disabled:opacity-40"
+                                data-wa-mobile="{{ a.mobile or '' }}"
+                                data-wa-patient="{{ a.patient_name or '' }}"
+                                data-wa-token="{{ a.token_no or '' }}"
+                                data-wa-date="{{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '' }}"
+                                data-wa-time="{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '' }}"
+                                onclick="openAppointmentWhatsapp(this)"
+                                title="{{ 'Send WhatsApp message' if has_mobile else 'Mobile number not available' }}"
+                                {% if not has_mobile %}disabled{% endif %}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.472-.148-.67.15-.198.297-.767.966-.94 1.164-.173.198-.347.223-.644.074-.297-.149-1.255-.463-2.39-1.475-.883-.787-1.479-1.76-1.652-2.057-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.52.149-.174.198-.298.297-.497.099-.198.05-.372-.025-.52-.075-.149-.669-1.612-.916-2.206-.242-.579-.487-.5-.67-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.015-1.04 2.479 0 1.463 1.065 2.877 1.213 3.076.149.198 2.097 3.2 5.077 4.487.709.306 1.261.489 1.692.626.711.226 1.359.194 1.87.118.57-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                                    <path d="M20.52 3.449A11.837 11.837 0 0 0 12.004.001C5.385.001 0 5.387 0 12.007c0 2.115.552 4.184 1.6 6.009L0 24l6.146-1.612a11.953 11.953 0 0 0 5.858 1.503h.005c6.618 0 12.003-5.386 12.003-12.006a11.92 11.92 0 0 0-3.492-8.436zm-8.516 18.42h-.004a9.94 9.94 0 0 1-5.07-1.386l-.364-.216-3.648.957.973-3.558-.236-.371a9.952 9.952 0 0 1-1.52-5.289c0-5.514 4.486-10 10.003-10 2.67.001 5.177 1.04 7.064 2.928 1.888 1.887 2.927 4.395 2.926 7.066-.003 5.514-4.488 9.999-10.002 9.999z"/>
+                                </svg>
+                                WhatsApp
+                            </button>
+                            <details class="appointment-action-menu relative">
+                                <summary title="More Actions" aria-label="More Actions" class="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-600 transition duration-150 hover:bg-slate-100 hover:text-slate-800">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/></svg>
+                                </summary>
+                                <div class="appointment-action-panel fixed z-50 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                                    <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
+                                        <input type="hidden" name="status" value="CHECKED_IN">
+                                        <button type="submit" {% if row_status != 'BOOKED' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40">Check In</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('mark_appointment_paid', id=a.id) }}" data-async-action="true">
+                                        <button type="submit" {% if pay_status == 'PAID' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Paid</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
+                                        <input type="hidden" name="status" value="COMPLETED">
+                                        <button type="submit" {% if pay_status != 'PAID' or row_status in ['COMPLETED', 'CANCELLED'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Completed</button>
+                                    </form>
+                                    <a href="{{ url_for('edit_appointment', id=a.id) }}" class="block px-3 py-2 text-sm text-slate-700 transition duration-150 hover:bg-slate-50 hover:text-slate-900">Edit</a>
+                                    <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
+                                        <input type="hidden" name="status" value="CANCELLED">
+                                        <button type="submit" {% if row_status not in ['BOOKED', 'CHECKED_IN'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40">Cancel</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('delete_appointment', id=a.id) }}" onsubmit="return confirm('Delete this appointment?')" data-async-action="true">
+                                        <button type="submit" class="w-full px-3 py-2 text-left text-sm text-red-600 transition duration-150 hover:bg-red-50">Delete</button>
+                                    </form>
+                                </div>
+                            </details>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="10" class="px-4 py-10 text-center text-sm text-slate-500">No appointments found for selected filters.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+</div>
+
+<script>
+function toggleAppointmentFilters(type) {
+    const dayBox = document.getElementById('appointmentDayBox');
+    const monthBox = document.getElementById('appointmentMonthBox');
+    const yearBox = document.getElementById('appointmentYearBox');
+    const fromBox = document.getElementById('appointmentDateRangeFromBox');
+    const toBox = document.getElementById('appointmentDateRangeToBox');
+    if (!dayBox || !monthBox || !yearBox || !fromBox || !toBox) return;
+
+    dayBox.style.display = 'none';
+    monthBox.style.display = 'none';
+    yearBox.style.display = 'none';
+    fromBox.style.display = 'none';
+    toBox.style.display = 'none';
+
+    if (type === 'day') {
+        dayBox.style.display = 'block';
+    } else if (type === 'month') {
+        monthBox.style.display = 'block';
+        yearBox.style.display = 'block';
+    } else if (type === 'date_range') {
+        fromBox.style.display = 'block';
+        toBox.style.display = 'block';
+    }
+}
+
+function setupAppointmentActionMenus() {
+    const menus = document.querySelectorAll('.appointment-action-menu');
+    if (!menus.length) return;
+
+    const positionMenu = function (menu) {
+        const summary = menu.querySelector('summary');
+        const panel = menu.querySelector('.appointment-action-panel');
+        if (!summary || !panel) return;
+
+        panel.style.top = '-9999px';
+        panel.style.left = '-9999px';
+
+        const triggerRect = summary.getBoundingClientRect();
+        const panelRect = panel.getBoundingClientRect();
+        const viewportPadding = 8;
+        const gap = 8;
+
+        let left = triggerRect.right - panelRect.width;
+        left = Math.max(viewportPadding, Math.min(left, window.innerWidth - panelRect.width - viewportPadding));
+
+        let top = triggerRect.top - panelRect.height - gap;
+        top = Math.max(viewportPadding, top);
+
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+    };
+
+    const repositionOpenMenus = function () {
+        menus.forEach((menu) => {
+            if (menu.hasAttribute('open')) {
+                positionMenu(menu);
+            }
+        });
+    };
+
+    menus.forEach((menu) => {
+        const summary = menu.querySelector('summary');
+        if (!summary) return;
+        summary.addEventListener('click', function () {
+            menus.forEach((otherMenu) => {
+                if (otherMenu !== menu) {
+                    otherMenu.removeAttribute('open');
+                }
+            });
+        });
+
+        menu.addEventListener('toggle', function () {
+            if (menu.hasAttribute('open')) {
+                requestAnimationFrame(function () {
+                    positionMenu(menu);
+                });
+            }
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        menus.forEach((menu) => {
+            if (!menu.contains(event.target)) {
+                menu.removeAttribute('open');
+            }
+        });
+    });
+
+    window.addEventListener('resize', repositionOpenMenus);
+    window.addEventListener('scroll', repositionOpenMenus, true);
+}
+
+function appointmentStatusBadge(status) {
+    const s = String(status || '').toUpperCase();
+    if (s === 'CHECKED_IN') {
+        return '<span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">Checked In</span>';
+    }
+    if (s === 'COMPLETED') {
+        return '<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Completed</span>';
+    }
+    if (s === 'CANCELLED') {
+        return '<span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">Cancelled</span>';
+    }
+    return '<span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Booked</span>';
+}
+
+function appointmentPaymentBadge(status) {
+    const s = String(status || '').toUpperCase();
+    if (s === 'PAID') {
+        return '<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Paid</span>';
+    }
+    return '<span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">Unpaid</span>';
+}
+
+function normalizeWhatsappNumber(raw) {
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length === 10) return `91${digits}`;
+    if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`;
+    return digits;
+}
+
+function openAppointmentWhatsapp(button) {
+    if (!button) return;
+
+    const phone = normalizeWhatsappNumber(button.dataset.waMobile);
+    if (!phone) {
+        alert('Mobile number not available for this appointment.');
+        return;
+    }
+
+    const patient = (button.dataset.waPatient || 'Patient').trim();
+    const token = (button.dataset.waToken || '-').trim();
+    const apptDate = (button.dataset.waDate || '-').trim();
+    const apptTime = (button.dataset.waTime || '-').trim();
+
+    const lines = [
+        `Namaste ${patient},`,
+        'Yeh aapke appointment details hain:',
+        `Token No: ${token}`,
+        `Date: ${apptDate}`,
+        `Time: ${apptTime}`,
+        'Clinic: THE ENDO CLINIC'
+    ];
+
+    lines.push('', 'Kripya time par clinic pahunchiye. Dhanyavaad.');
+    const message = lines.join('\n');
+    const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+}
+
+document.addEventListener('app:async-success', function (event) {
+    const detail = event.detail || {};
+    const trigger = detail.trigger;
+    if (!trigger || !trigger.closest) return;
+
+    const row = trigger.closest('tr');
+    if (!row || !row.closest('.appointments-ui')) return;
+
+    const url = String(detail.actionUrl || '').toLowerCase();
+    const paymentCell = row.children[5];
+    const statusCell = row.children[8];
+    const paidBtn = row.querySelector("form[action*='/payment/paid'] button");
+    const completedInput = row.querySelector("form input[name='status'][value='COMPLETED']");
+    const completedBtn = completedInput ? completedInput.closest('form').querySelector('button') : null;
+    const checkInInput = row.querySelector("form input[name='status'][value='CHECKED_IN']");
+    const checkInBtn = checkInInput ? checkInInput.closest('form').querySelector('button') : null;
+    const cancelInput = row.querySelector("form input[name='status'][value='CANCELLED']");
+    const cancelBtn = cancelInput ? cancelInput.closest('form').querySelector('button') : null;
+    const actionMenu = row.querySelector('.appointment-action-menu');
+    if (actionMenu) actionMenu.removeAttribute('open');
+
+    if (url.includes('/payment/paid')) {
+        if (paymentCell) paymentCell.innerHTML = appointmentPaymentBadge('PAID');
+        if (paidBtn) paidBtn.disabled = true;
+        const currentStatus = String(statusCell ? statusCell.textContent : '').toUpperCase();
+        if (completedBtn && !currentStatus.includes('COMPLETED') && !currentStatus.includes('CANCELLED')) {
+            completedBtn.disabled = false;
+        }
+        return;
+    }
+
+    if (!url.includes('/status')) return;
+    const form = trigger.tagName === 'FORM' ? trigger : trigger.closest('form');
+    if (!form) return;
+    const statusInput = form.querySelector("input[name='status']");
+    const newStatus = String(statusInput ? statusInput.value : '').toUpperCase();
+    if (!newStatus) return;
+
+    if (statusCell) {
+        statusCell.innerHTML = appointmentStatusBadge(newStatus);
+    }
+
+    if (newStatus === 'CHECKED_IN') {
+        if (checkInBtn) checkInBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = false;
+        if (completedBtn) {
+            const isPaid = String(paymentCell ? paymentCell.textContent : '').toUpperCase().includes('PAID');
+            completedBtn.disabled = !isPaid;
+        }
+        return;
+    }
+
+    if (newStatus === 'COMPLETED' || newStatus === 'CANCELLED') {
+        if (checkInBtn) checkInBtn.disabled = true;
+        if (completedBtn) completedBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+    }
+});
+
+toggleAppointmentFilters("{{ report_filters.appointment_report_type }}");
+setupAppointmentActionMenus();
+</script>
+{% endblock %}

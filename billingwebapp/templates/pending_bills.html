@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Pending Bills{% endblock %}
+
+{% block body %}
+
+<style>
+    h2 {
+        color: #004aad;
+        margin-bottom: 20px;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        box-shadow: 0 0 8px #bcd0ea;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    th {
+        background: #0d6efd;
+        color: white;
+        padding: 10px;
+        font-size: 15px;
+        text-align: center;
+    }
+
+    td {
+        padding: 10px;
+        border-bottom: 1px solid #ddd;
+        font-size: 14px;
+        text-align: center;
+    }
+
+    tr:hover {
+        background: #f3f8ff;
+    }
+
+    .btn {
+        padding: 6px 14px;
+        text-decoration: none;
+        border-radius: 5px;
+        font-size: 14px;
+        color: white;
+        margin: 0 4px;
+        display: inline-block;
+    }
+
+    .restore {
+        background: #198754;
+    }
+
+    .restore:hover {
+        background: #157347;
+    }
+
+    .delete {
+        background: #dc3545;
+    }
+
+    .delete:hover {
+        background: #bb2d3b;
+    }
+
+    .empty {
+        font-size: 18px;
+        color: gray;
+        background: white;
+        padding: 30px;
+        border-radius: 6px;
+        box-shadow: 0 0 6px #c7d9f2;
+        width: 50%;
+    }
+</style>
+
+<h2>⏸ Pending Bills</h2>
+
+{% if bills|length == 0 %}
+    <div class="empty">
+        No pending bills found.
+    </div>
+{% else %}
+
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Patient Name</th>
+        <th>Mobile</th>
+        <th>Date & Time</th>
+        <th>Action</th>
+    </tr>
+
+    {% for b in bills %}
+    <tr>
+        <td>{{ b.id }}</td>
+        <td><b>{{ b.customer }}</b></td>
+        <td>{{ b.mobile }}</td>
+        <td>
+            {{ b.created_at.strftime('%d-%m-%Y') }} <br>
+            <small>{{ b.created_at.strftime('%I:%M %p') }}</small>
+        </td>
+        <td>
+            <!-- RESTORE BILL -->
+            <a class="btn restore" href="/restore-bill/{{ b.id }}" data-async-action="true">
+                ▶ Restore
+            </a>
+
+            <!-- DELETE HOLD BILL -->
+            <a class="btn delete"
+               href="/delete-hold/{{ b.id }}"
+               data-async-action="true"
+               onclick="return confirm('Delete this pending bill?')">
+                🗑 Delete
+            </a>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% endif %}
+
+{% endblock %}

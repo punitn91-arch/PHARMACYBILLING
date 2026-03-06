@@ -1,8 +1,0 @@
-Flask
-Flask-SQLAlchemy
-Werkzeug
-SQLAlchemy
-gunicorn
-psycopg2-binary
-pandas
-openpyxl

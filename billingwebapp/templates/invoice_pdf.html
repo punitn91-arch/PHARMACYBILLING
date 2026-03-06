@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>{{ invoice_no }}</title></head>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    margin: 10px;
+}
+h2 {
+    font-size: 16px;
+    margin-bottom: 8px;
+}
+p,
+table,
+th,
+td {
+    font-size: 11px;
+}
+</style>
+<body>
+<h2>DR. ABHISHEK'S PHARMACY</h2>
+<p>Invoice: {{ invoice_no }} | Date: {{ date }}</p>
+<p>Customer: {{ customer }} | Mobile: {{ mobile }} | Gender: {{ gender }}</p>
+<table border=1 cellpadding=5 cellspacing=0 width="100%">
+  <tr><th>Product</th><th>Qty</th><th>MRP</th><th>Amount</th></tr>
+  {% for it in cart %}
+  <tr>
+    <td>{{ it.name }}</td>
+    <td>{{ it.qty }}</td>
+    <td>{{ it.price }}</td>
+    <td>{{ it.amount }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p>Total: ₹{{ total }}</p>
+</body></html>

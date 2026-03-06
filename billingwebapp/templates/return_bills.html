@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Return Bills{% endblock %}
+
+{% block body %}
+
+<style>
+    h2 {
+        margin-bottom: 15px;
+        color: #004aad;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+
+    th {
+        background: #0d6efd;
+        color: white;
+        padding: 10px;
+        font-size: 15px;
+    }
+
+    td {
+        padding: 10px;
+        border-bottom: 1px solid #ddd;
+        text-align: center;
+        font-size: 14px;
+    }
+
+    tr:hover {
+        background: #f3f8ff;
+    }
+
+    .actions a {
+        text-decoration: none;
+        font-size: 18px;
+        margin: 0 6px;
+    }
+</style>
+
+<h2>Return Bills</h2>
+
+{% if returns|length == 0 %}
+    <div class="card">No return bills found.</div>
+{% else %}
+<table>
+    <tr>
+        <th>Return No</th>
+        <th>Invoice No</th>
+        <th>Customer</th>
+        <th>Mobile</th>
+        <th>Date</th>
+        <th>Refund</th>
+        <th>Status</th>
+        <th>Action</th>
+    </tr>
+    {% for r in returns %}
+    <tr>
+        <td>{{ r.return_no if r.return_no else "RB-" ~ r.id }}</td>
+        <td>{{ r.invoice_no if r.invoice_no else "Manual" }}</td>
+        <td>{{ r.customer }}</td>
+        <td>{{ r.mobile }}</td>
+        <td>{{ r.created_at.strftime('%d-%m-%Y') }}</td>
+        <td>Rs {{ "%.2f"|format(r.total_refund or 0) }}</td>
+        <td>
+            {% if r.is_cancelled %}
+                Cancelled
+            {% else %}
+                Active
+            {% endif %}
+        </td>
+        <td class="actions">
+            <a href="/return-invoice/{{ r.id }}" title="View Return Bill">View</a>
+            <a href="/return-invoice/{{ r.id }}?print=1" target="_blank" title="Print Return Bill">Print</a>
+            {% if not r.is_cancelled %}
+            <a class="delete"
+               href="/return-bill/delete/{{ r.id }}"
+               data-async-action="true"
+               onclick="return confirm('Cancel this return bill? Stock will be reversed.')"
+               title="Delete Return Bill">
+                Delete
+            </a>
+            {% else %}
+            <span class="delete" style="opacity:0.5;">Deleted</span>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+
+{% endblock %}

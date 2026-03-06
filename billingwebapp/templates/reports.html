@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block body %}
+
+<h2>Reports</h2>
+
+<form method="POST">
+
+    <label><b>Report Type</b></label>
+    <select name="report_type" onchange="toggleFilters(this.value)" required>
+        <option value="">Select</option>
+        <option value="daily" {% if report_type == "daily" %}selected{% endif %}>Daily Report</option>
+        <option value="monthly" {% if report_type == "monthly" %}selected{% endif %}>Monthly Report</option>
+        <option value="custom" {% if report_type == "custom" %}selected{% endif %}>Custom Date</option>
+        <option value="patient" {% if report_type == "patient" %}selected{% endif %}>Patient Wise</option>
+        <option value="mobile" {% if report_type == "mobile" %}selected{% endif %}>Mobile Wise</option>
+        <option value="profit" {% if report_type == "profit" %}selected{% endif %}>Profit / Loss (FIFO)</option>
+        <option value="medicine" {% if report_type == "medicine" %}selected{% endif %}>Medicine Summary / Fast Movers</option>
+    </select>
+
+    <div id="monthBox" style="display:none">
+        <input type="number" name="month" placeholder="Month (1-12)" value="{{ report_filters.month if report_filters else '' }}">
+        <input type="number" name="year" placeholder="Year" value="{{ report_filters.year if report_filters else '' }}">
+    </div>
+
+    <div id="dateBox" style="display:none">
+        <input type="date" name="from_date" value="{{ report_filters.from_date if report_filters else '' }}">
+        <input type="date" name="to_date" value="{{ report_filters.to_date if report_filters else '' }}">
+    </div>
+
+    <div id="patientBox" style="display:none">
+        <input type="text" name="patient" placeholder="Patient Name" value="{{ report_filters.patient if report_filters else '' }}">
+    </div>
+
+    <div id="mobileBox" style="display:none">
+        <input type="text" name="mobile" placeholder="Mobile Number" value="{{ report_filters.mobile if report_filters else '' }}">
+    </div>
+
+    <div id="medicineBox" style="display:none">
+        <input type="text" name="medicine_query" placeholder="Medicine Name (optional)" value="{{ report_filters.medicine_query if report_filters else '' }}">
+        <input type="number" name="top_n" min="1" max="100" placeholder="Top N Fast Movers (default 10)" value="{{ report_filters.top_n if report_filters else '10' }}">
+    </div>
+
+    <br>
+    <button class="btn save">Generate Report</button>
+    <a href="/reports/export" class="btn hold">Export Excel</a>
+
+</form>
+
+<hr>
+
+{% if report_type == "medicine" and medicine_totals %}
+
+<h3>Medicine Summary</h3>
+<table>
+    <tr><th>Medicines</th><td>{{ medicine_totals.count }}</td></tr>
+    <tr><th>Purchased Qty</th><td>{{ medicine_totals.purchase_qty }}</td></tr>
+    <tr><th>Free Qty</th><td>{{ medicine_totals.free_qty }}</td></tr>
+    <tr><th>Total Inward</th><td>{{ medicine_totals.inward_qty }}</td></tr>
+    <tr><th>Sold Qty</th><td>{{ medicine_totals.sold_qty }}</td></tr>
+    <tr><th>Return Qty</th><td>{{ medicine_totals.return_qty }}</td></tr>
+    <tr><th>Net Sold Qty</th><td>{{ medicine_totals.net_sold_qty }}</td></tr>
+    <tr><th>Current Stock</th><td>{{ medicine_totals.current_stock }}</td></tr>
+    <tr><th>Purchase Value</th><td>Rs {{ medicine_totals.purchase_value }}</td></tr>
+    <tr><th>Sales Value</th><td>Rs {{ medicine_totals.sales_value }}</td></tr>
+    <tr><th>Days in Period</th><td>{{ medicine_totals.period_days if medicine_totals.period_days else "All-time" }}</td></tr>
+</table>
+
+<br>
+<table>
+<tr>
+    <th>Medicine</th>
+    <th>Purchased</th>
+    <th>Free</th>
+    <th>Inward</th>
+    <th>Sold</th>
+    <th>Returned</th>
+    <th>Net Sold</th>
+    <th>Current Stock</th>
+    <th>Purchase Value</th>
+    <th>Sales Value</th>
+    <th>Avg Daily Sale</th>
+</tr>
+
+{% for m in medicine_summary %}
+<tr>
+    <td>{{ m.medicine }}</td>
+    <td>{{ m.purchase_qty }}</td>
+    <td>{{ m.free_qty }}</td>
+    <td>{{ m.inward_qty }}</td>
+    <td>{{ m.sold_qty }}</td>
+    <td>{{ m.return_qty }}</td>
+    <td>{{ m.net_sold_qty }}</td>
+    <td>{{ m.current_stock }}</td>
+    <td>Rs {{ m.purchase_value }}</td>
+    <td>Rs {{ m.sales_value }}</td>
+    <td>{{ m.avg_daily_sale }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h3>Top Fast Moving Medicines</h3>
+{% if fast_movers %}
+<table>
+<tr>
+    <th>Rank</th>
+    <th>Medicine</th>
+    <th>Net Sold</th>
+    <th>Avg Daily Sale</th>
+    <th>Current Stock</th>
+    <th>Sales Value</th>
+</tr>
+{% for m in fast_movers %}
+<tr>
+    <td>{{ loop.index }}</td>
+    <td>{{ m.medicine }}</td>
+    <td>{{ m.net_sold_qty }}</td>
+    <td>{{ m.avg_daily_sale }}</td>
+    <td>{{ m.current_stock }}</td>
+    <td>Rs {{ m.sales_value }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p>No fast-moving medicines found for selected filters.</p>
+{% endif %}
+
+{% elif report_type == "profit" and profit_summary %}
+
+<h3>Profit / Loss (FIFO)</h3>
+<table>
+    <tr><th>From</th><td>{{ profit_summary.from_date }}</td></tr>
+    <tr><th>To</th><td>{{ profit_summary.to_date }}</td></tr>
+    <tr><th>Sales (ex GST)</th><td>Rs {{ profit_summary.sales_total }}</td></tr>
+    <tr><th>Returns (ex GST)</th><td>Rs {{ profit_summary.returns_total }}</td></tr>
+    <tr><th>Net Sales (ex GST)</th><td>Rs {{ profit_summary.net_sales }}</td></tr>
+    <tr><th>COGS (FIFO)</th><td>Rs {{ profit_summary.cogs }}</td></tr>
+    <tr><th>Return COGS</th><td>Rs {{ profit_summary.return_cogs }}</td></tr>
+    <tr><th>Net COGS</th><td>Rs {{ profit_summary.net_cogs }}</td></tr>
+    <tr><th>Gross Profit</th><td>Rs {{ profit_summary.gross_profit }}</td></tr>
+    <tr><th>Gross Profit %</th><td>{{ profit_summary.gross_profit_percentage }}%</td></tr>
+</table>
+
+{% elif invoices %}
+
+<table>
+<tr>
+    <th>Invoice</th>
+    <th>Patient</th>
+    <th>Mobile</th>
+    <th>Date</th>
+    <th>Total</th>
+    <th>User</th>
+</tr>
+
+{% for i in invoices %}
+<tr>
+    <td>{{ i.invoice_no }}</td>
+    <td>{{ i.customer }}</td>
+    <td>{{ i.mobile }}</td>
+    <td>{{ i.created_at.strftime('%d-%m-%Y') }}</td>
+    <td>Rs {{ i.total }}</td>
+    <td>{{ i.created_by }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h3>Total Sale: Rs {{ total }}</h3>
+
+{% else %}
+<p>No data found.</p>
+{% endif %}
+
+<script>
+function toggleFilters(type) {
+    document.getElementById("monthBox").style.display = "none";
+    document.getElementById("dateBox").style.display = "none";
+    document.getElementById("patientBox").style.display = "none";
+    document.getElementById("mobileBox").style.display = "none";
+    document.getElementById("medicineBox").style.display = "none";
+
+    if (type === "monthly") document.getElementById("monthBox").style.display = "block";
+    if (type === "custom" || type === "profit" || type === "medicine") document.getElementById("dateBox").style.display = "block";
+    if (type === "patient") document.getElementById("patientBox").style.display = "block";
+    if (type === "mobile") document.getElementById("mobileBox").style.display = "block";
+    if (type === "medicine") document.getElementById("medicineBox").style.display = "block";
+}
+
+toggleFilters("{{ report_type or '' }}");
+</script>
+
+{% endblock %}

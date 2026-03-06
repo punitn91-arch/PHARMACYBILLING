@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}User{% endblock %}
+
+{% block body %}
+<style>
+.form-card{
+    max-width:600px;
+    background:#fff;
+    padding:25px;
+    border-radius:10px;
+    box-shadow:0 8px 20px rgba(0,0,0,.1);
+}
+.perm-box{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+}
+</style>
+
+<div class="form-card">
+<h3>{{ 'Edit User' if user else 'Add User' }}</h3>
+
+<form method="POST">
+
+<label>Username</label>
+<input class="form-control mb-2" name="username"
+       value="{{ user.username if user else '' }}" required>
+
+{% if not user %}
+<label>Password</label>
+<input class="form-control mb-2" name="password" required>
+{% endif %}
+
+<label>Role</label>
+<select class="form-control mb-3" name="role">
+    <option value="admin" {{ 'selected' if user and user.role=='admin' }}>Admin</option>
+    <option value="staff" {{ 'selected' if user and user.role=='staff' }}>Staff</option>
+</select>
+
+<h5>Permissions</h5>
+<div class="perm-box">
+    <label><input type="checkbox" name="can_view_medicine"
+        {% if user and user.can_view_medicine %}checked{% endif %}> View Medicine</label>
+
+    <label><input type="checkbox" name="can_add_medicine"
+        {% if user and user.can_add_medicine %}checked{% endif %}> Add Medicine</label>
+
+    <label><input type="checkbox" name="can_edit_medicine"
+        {% if user and user.can_edit_medicine %}checked{% endif %}> Edit Medicine</label>
+
+    <label><input type="checkbox" name="can_delete_medicine"
+        {% if user and user.can_delete_medicine %}checked{% endif %}> Delete Medicine</label>
+
+    <label><input type="checkbox" name="can_edit_invoice"
+        {% if user and user.can_edit_invoice %}checked{% endif %}> Edit Invoice</label>
+
+    <label><input type="checkbox" name="can_delete_invoice"
+        {% if user and user.can_delete_invoice %}checked{% endif %}> Delete Invoice</label>
+
+    <label><input type="checkbox" name="can_view_stock_history"
+        {% if user and user.can_view_stock_history %}checked{% endif %}> Stock History</label>
+
+    <label><input type="checkbox" name="can_view_reports"
+        {% if user and user.can_view_reports %}checked{% endif %}> Reports</label>
+
+    <label><input type="checkbox" name="can_manage_users"
+        {% if user and user.can_manage_users %}checked{% endif %}> Users</label>
+</div>
+
+<button class="btn btn-success mt-3">Save</button>
+<a href="/users" class="btn btn-secondary mt-3">Back</a>
+
+</form>
+</div>
+{% endblock %}

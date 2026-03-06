@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block body %}
+
+<h2>⏰ Expiring Soon (Next 30 Days)</h2>
+
+<table class="table table-bordered">
+    <tr>
+        <th>Name</th>
+        <th>Batch</th>
+        <th>Expiry</th>
+        <th>Stock</th>
+    </tr>
+    {% for m in medicines %}
+    <tr>
+        <td>{{ m.name }}</td>
+        <td>{{ m.batch }}</td>
+        <td style="color:orange;font-weight:bold">{{ m.expiry }}</td>
+        <td>{{ m.qty }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% endblock %}

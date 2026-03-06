@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}User Management{% endblock %}
+{% block body %}
+
+<style>
+.card {
+    background:#fff;
+    padding:20px;
+    border-radius:8px;
+    box-shadow:0 0 8px #cfd8e3;
+}
+.btn {
+    padding:6px 12px;
+    border-radius:5px;
+    text-decoration:none;
+    font-size:14px;
+}
+.btn-add { background:#198754;color:#fff; }
+.btn-edit { background:#0d6efd;color:#fff; }
+.btn-pass { background:#6f42c1;color:#fff; }
+.btn-del  { background:#dc3545;color:#fff; }
+.badge {
+    padding:4px 10px;
+    border-radius:12px;
+    font-size:12px;
+}
+.admin { background:#198754;color:#fff; }
+.staff { background:#6c757d;color:#fff; }
+table { width:100%;border-collapse:collapse;margin-top:15px; }
+th,td { padding:10px;border-bottom:1px solid #ddd;text-align:center; }
+th { background:#0d6efd;color:#fff; }
+</style>
+
+<div class="card">
+    <h2>User Management</h2>
+
+    <a href="/users/add" class="btn btn-add">Add User</a>
+
+    <table>
+        <tr>
+            <th>ID</th>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Permissions</th>
+            <th>Actions</th>
+        </tr>
+
+        {% for u in users %}
+        <tr>
+            <td>{{ u.id }}</td>
+            <td>{{ u.username }}</td>
+            <td>
+                <span class="badge {{ u.role }}">
+                    {{ u.role.upper() }}
+                </span>
+            </td>
+
+            <td style="text-align:left">
+                View Medicine: {{ "Yes" if u.can_view_medicine else "No" }}<br>
+                Add Medicine: {{ "Yes" if u.can_add_medicine else "No" }}<br>
+                Edit Medicine: {{ "Yes" if u.can_edit_medicine else "No" }}<br>
+                Delete Medicine: {{ "Yes" if u.can_delete_medicine else "No" }}<br>
+                Edit Invoice: {{ "Yes" if u.can_edit_invoice else "No" }}<br>
+                Delete Invoice: {{ "Yes" if u.can_delete_invoice else "No" }}<br>
+                Stock History: {{ "Yes" if u.can_view_stock_history else "No" }}<br>
+                Reports: {{ "Yes" if u.can_view_reports else "No" }}<br>
+                Users: {{ "Yes" if u.can_manage_users else "No" }}
+            </td>
+
+            <td>
+                <a href="/users/edit/{{ u.id }}" class="btn btn-edit">Edit</a>
+                <a href="/users/change-password/{{ u.id }}" class="btn btn-pass">Password</a>
+
+                {% if u.username != "admin" %}
+                    <a href="/users/delete/{{ u.id }}"
+                       class="btn btn-del"
+                       data-async-action="true"
+                       onclick="return confirm('Delete user?')">
+                       Delete
+                    </a>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+{% endblock %}

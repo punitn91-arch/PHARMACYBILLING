@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block body %}
+
+<h3>Edit Invoice (Admin Only)</h3>
+
+<form method="POST">
+<table class="table">
+<tr>
+    <th>Medicine</th>
+    <th>Qty</th>
+    <th>Discount %</th>
+</tr>
+
+{% for i in items %}
+<tr>
+    <td>
+        <select name="medicine">
+            {% for m in medicines %}
+            <option value="{{ m.id }}"
+                {% if m.name == i.name %}selected{% endif %}>
+                {{ m.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </td>
+
+    <td>
+        <input type="number" name="qty" value="{{ i.qty }}">
+    </td>
+
+    <td>
+        <input type="number" name="discount" value="{{ i.discount_percent }}">
+    </td>
+</tr>
+{% endfor %}
+</table>
+
+<button class="btn btn-success">💾 Update Invoice</button>
+</form>
+
+{% endblock %}
