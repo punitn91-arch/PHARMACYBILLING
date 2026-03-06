@@ -3975,9 +3975,7 @@ def build_appointment_form_data(appt=None):
     form_data = {
         "patient_name": "",
         "mobile": "",
-        "age": "",
         "gender": "OTHER",
-        "doctor_name": APPOINTMENT_DEFAULT_DOCTOR,
         "appointment_date": date.today().isoformat(),
         "appointment_time": "",
         "payment_mode": "CASH",
@@ -3991,9 +3989,7 @@ def build_appointment_form_data(appt=None):
         form_data.update({
             "patient_name": appt.patient_name or "",
             "mobile": appt.mobile or "",
-            "age": str(appt.age) if appt.age is not None else "",
             "gender": (appt.gender or "OTHER").upper(),
-            "doctor_name": (appt.doctor_name or APPOINTMENT_DEFAULT_DOCTOR),
             "appointment_date": appt.appointment_date.isoformat() if appt.appointment_date else date.today().isoformat(),
             "appointment_time": appt.appointment_time.strftime("%H:%M") if appt.appointment_time else "",
             "payment_mode": (appt.payment_mode or "CASH").strip().upper(),
@@ -4012,9 +4008,7 @@ def build_appointment_form_data(appt=None):
 def read_appointment_form_data(form_data):
     form_data["patient_name"] = (request.form.get("patient_name") or "").strip()
     form_data["mobile"] = normalize_patient_mobile(request.form.get("mobile"))
-    form_data["age"] = (request.form.get("age") or "").strip()
     form_data["gender"] = (request.form.get("gender") or "OTHER").strip().upper()
-    form_data["doctor_name"] = (request.form.get("doctor_name") or APPOINTMENT_DEFAULT_DOCTOR).strip()
     form_data["appointment_date"] = (request.form.get("appointment_date") or "").strip()
     form_data["appointment_time"] = (request.form.get("appointment_time") or "").strip()
     form_data["payment_mode"] = (request.form.get("payment_mode") or "CASH").strip().upper()
@@ -4041,15 +4035,6 @@ def validate_appointment_form(form_data):
     if gender not in APPOINTMENT_GENDERS:
         return None, "Invalid gender selected."
 
-    age_val = None
-    if form_data.get("age"):
-        try:
-            age_val = int(form_data["age"])
-        except ValueError:
-            return None, "Age should be a valid number."
-        if age_val < 0 or age_val > 150:
-            return None, "Please enter a valid age."
-
     try:
         doctor_discount = float(form_data["doctor_discount"] or 0)
     except ValueError:
@@ -4067,9 +4052,7 @@ def validate_appointment_form(form_data):
     return {
         "appointment_date": appt_date,
         "appointment_time": appt_time,
-        "age": age_val,
         "gender": gender,
-        "doctor_name": form_data.get("doctor_name") or APPOINTMENT_DEFAULT_DOCTOR,
         "doctor_discount": doctor_discount,
         "consultation_fee": consultation_fee
     }, None
@@ -4082,7 +4065,6 @@ def get_patient_suggestions(limit=200):
 def add_appointment():
     form_data = build_appointment_form_data()
     patient_suggestions = get_patient_suggestions()
-    doctor_suggestions = get_doctor_suggestions()
 
     if request.method == "POST":
         schema_ok, schema_err = ensure_appointment_runtime_schema()
@@ -4093,7 +4075,6 @@ def add_appointment():
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=False
             )
@@ -4106,7 +4087,6 @@ def add_appointment():
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=False
             )
@@ -4122,9 +4102,9 @@ def add_appointment():
                     token_no=get_next_daily_token(validated["appointment_date"]),
                     patient_id=patient.id if patient else None,
                     mobile=mobile,
-                    age=validated["age"],
+                    age=None,
                     gender=validated["gender"],
-                    doctor_name=validated["doctor_name"],
+                    doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
                     appointment_date=validated["appointment_date"],
                     appointment_time=validated["appointment_time"],
                     payment_mode=form_data["payment_mode"],
@@ -4156,7 +4136,6 @@ def add_appointment():
                     form_data=form_data,
                     payment_modes=APPOINTMENT_PAYMENT_MODES,
                     genders=APPOINTMENT_GENDERS,
-                    doctor_suggestions=doctor_suggestions,
                     patient_suggestions=patient_suggestions,
                     edit_mode=False
                 )
@@ -4182,7 +4161,6 @@ def add_appointment():
                     form_data=form_data,
                     payment_modes=APPOINTMENT_PAYMENT_MODES,
                     genders=APPOINTMENT_GENDERS,
-                    doctor_suggestions=doctor_suggestions,
                     patient_suggestions=patient_suggestions,
                     edit_mode=False
                 )
@@ -4193,7 +4171,6 @@ def add_appointment():
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=False
             )
@@ -4210,7 +4187,6 @@ def add_appointment():
         form_data=form_data,
         payment_modes=APPOINTMENT_PAYMENT_MODES,
         genders=APPOINTMENT_GENDERS,
-        doctor_suggestions=doctor_suggestions,
         patient_suggestions=patient_suggestions,
         edit_mode=False
     )
@@ -4221,7 +4197,6 @@ def edit_appointment(id):
     appointment = Appointment.query.get_or_404(id)
     form_data = build_appointment_form_data(appointment)
     patient_suggestions = get_patient_suggestions()
-    doctor_suggestions = get_doctor_suggestions()
 
     if request.method == "POST":
         schema_ok, schema_err = ensure_appointment_runtime_schema()
@@ -4232,7 +4207,6 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4246,7 +4220,6 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4264,9 +4237,7 @@ def edit_appointment(id):
             appointment.patient_name = form_data["patient_name"]
             appointment.patient_id = patient.id if patient else appointment.patient_id
             appointment.mobile = mobile
-            appointment.age = validated["age"]
             appointment.gender = validated["gender"]
-            appointment.doctor_name = validated["doctor_name"]
             appointment.appointment_date = validated["appointment_date"]
             appointment.appointment_time = validated["appointment_time"]
             if old_date != appointment.appointment_date or not appointment.token_no:
@@ -4296,7 +4267,6 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4320,7 +4290,6 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4338,7 +4307,6 @@ def edit_appointment(id):
         form_data=form_data,
         payment_modes=APPOINTMENT_PAYMENT_MODES,
         genders=APPOINTMENT_GENDERS,
-        doctor_suggestions=doctor_suggestions,
         patient_suggestions=patient_suggestions,
         edit_mode=True,
         appt_id=appointment.id
@@ -5069,42 +5037,34 @@ def export_appointments_excel():
             "Appointment No": appt.appointment_no or "",
             "Token No": appt.token_no or "",
             "Date": appt.appointment_date.strftime("%d-%m-%Y") if appt.appointment_date else "",
-            "Day": appt.appointment_date.strftime("%A") if appt.appointment_date else "",
             "Time": appt.appointment_time.strftime("%I:%M %p") if appt.appointment_time else "",
             "Patient Name": appt.patient_name or "",
             "Mobile": appt.mobile or "",
-            "Age": appt.age if appt.age is not None else "",
             "Gender": appt.gender or "",
-            "Doctor": appt.doctor_name or "",
             "Status": appt.status or "",
             "Payment Mode": appt.payment_mode or "",
             "Payment Status": str(payment_status).upper(),
             "Consultation Fee": round(consultation_fee, 2),
             "Doctor Discount": round(doctor_discount, 2),
             "Net Fee": round(net_fee, 2),
-            "Created By": appt.created_by or "",
-            "Created At": appt.created_at.strftime("%d-%m-%Y %I:%M %p") if appt.created_at else ""
+            "Created By": appt.created_by or ""
         })
 
     columns = [
         "Appointment No",
         "Token No",
         "Date",
-        "Day",
         "Time",
         "Patient Name",
         "Mobile",
-        "Age",
         "Gender",
-        "Doctor",
         "Status",
         "Payment Mode",
         "Payment Status",
         "Consultation Fee",
         "Doctor Discount",
         "Net Fee",
-        "Created By",
-        "Created At"
+        "Created By"
     ]
     df = pd.DataFrame(rows, columns=columns)
 
