@@ -3734,23 +3734,42 @@ def ensure_appointment_runtime_schema():
             ("updated_at", "TIMESTAMP")
         ]
     }
+    dialect = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    errors = []
     try:
-        insp = inspect(db.engine)
-        changed = False
         for table_name, cols in required.items():
-            existing = {c["name"] for c in insp.get_columns(table_name)}
             for col_name, col_def in cols:
-                if col_name in existing:
-                    continue
-                db.session.execute(
-                    text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {col_def}')
-                )
-                changed = True
-        if changed:
-            db.session.commit()
+                try:
+                    if dialect == "postgresql":
+                        db.session.execute(
+                            text(f'ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "{col_name}" {col_def}')
+                        )
+                        db.session.commit()
+                        continue
+
+                    insp = inspect(db.engine)
+                    existing = {c["name"] for c in insp.get_columns(table_name)}
+                    if col_name in existing:
+                        continue
+                    db.session.execute(
+                        text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {col_def}')
+                    )
+                    db.session.commit()
+                except Exception as exc:
+                    db.session.rollback()
+                    err_text = str(getattr(exc, "orig", exc))
+                    low = err_text.lower()
+                    if "duplicate column" in low or "already exists" in low:
+                        continue
+                    errors.append(f"{table_name}.{col_name}: {err_text}")
     except Exception:
         db.session.rollback()
         app.logger.exception("Runtime appointment schema check failed")
+        return False, "Schema check failed"
+    if errors:
+        app.logger.error("Runtime appointment schema errors: %s", " | ".join(errors))
+        return False, errors[0]
+    return True, ""
 
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
     by_date = {}
@@ -4022,7 +4041,18 @@ def add_appointment():
     doctor_suggestions = get_doctor_suggestions()
 
     if request.method == "POST":
-        ensure_appointment_runtime_schema()
+        schema_ok, schema_err = ensure_appointment_runtime_schema()
+        if not schema_ok:
+            flash("Unable to save appointment because database schema update failed.", "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                genders=APPOINTMENT_GENDERS,
+                doctor_suggestions=doctor_suggestions,
+                patient_suggestions=patient_suggestions,
+                edit_mode=False
+            )
         form_data = read_appointment_form_data(form_data)
         validated, error_msg = validate_appointment_form(form_data)
         if error_msg:
@@ -4087,8 +4117,18 @@ def add_appointment():
                     patient_suggestions=patient_suggestions,
                     edit_mode=False
                 )
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
                 db.session.rollback()
+                # Auto-repair + retry once when DB reports missing columns.
+                try:
+                    err_text = str(getattr(exc, "orig", exc))
+                except Exception:
+                    err_text = str(exc)
+                low = err_text.lower()
+                if ("undefined column" in low or "does not exist" in low) and attempt == 0:
+                    schema_retry_ok, _ = ensure_appointment_runtime_schema()
+                    if schema_retry_ok:
+                        continue
                 app.logger.exception("Appointment create failed")
                 flash("Unable to save appointment due to a database error. Please try again.", "danger")
                 return render_template(
@@ -4138,7 +4178,19 @@ def edit_appointment(id):
     doctor_suggestions = get_doctor_suggestions()
 
     if request.method == "POST":
-        ensure_appointment_runtime_schema()
+        schema_ok, schema_err = ensure_appointment_runtime_schema()
+        if not schema_ok:
+            flash("Unable to update appointment because database schema update failed.", "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                genders=APPOINTMENT_GENDERS,
+                doctor_suggestions=doctor_suggestions,
+                patient_suggestions=patient_suggestions,
+                edit_mode=True,
+                appt_id=appointment.id
+            )
         form_data = read_appointment_form_data(form_data)
         validated, error_msg = validate_appointment_form(form_data)
         if error_msg:
@@ -4198,8 +4250,15 @@ def edit_appointment(id):
                 edit_mode=True,
                 appt_id=appointment.id
             )
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             db.session.rollback()
+            try:
+                err_text = str(getattr(exc, "orig", exc))
+            except Exception:
+                err_text = str(exc)
+            low = err_text.lower()
+            if "undefined column" in low or "does not exist" in low:
+                ensure_appointment_runtime_schema()
             app.logger.exception("Appointment update failed")
             flash("Unable to update appointment due to a database error. Please try again.", "danger")
             return render_template(
