@@ -52,7 +52,7 @@
         to_date=(report_filters.to_date if report_filters else ''),
         patient=(report_filters.patient if report_filters else ''),
         mobile=(report_filters.mobile if report_filters else '')
-    ) }}" class="btn hold">Export Excel</a>
+    ) }}" class="btn hold">Export Filtered</a>
     <a href="{{ url_for('export_excel', scope='all') }}" class="btn hold">Meta Report</a>
 
 </form>
