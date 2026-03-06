@@ -4758,6 +4758,153 @@ def export_excel():
     from io import BytesIO
 
     now = clinic_now()
+    db_dialect = db.engine.dialect.name if db.engine else "unknown"
+    scope = (request.args.get("scope") or "filtered").strip().lower()
+    if scope not in ("filtered", "all"):
+        scope = "filtered"
+
+    def build_invoice_rows(rows):
+        return [{
+            "Invoice ID": i.id,
+            "Invoice No": i.invoice_no,
+            "Patient Name": i.customer,
+            "Mobile": i.mobile,
+            "Doctor": i.doctor,
+            "Gender": i.gender,
+            "Subtotal": i.subtotal,
+            "Discount": i.discount,
+            "CGST": i.cgst,
+            "SGST": i.sgst,
+            "Total": i.total,
+            "Payment Mode": i.payment_mode,
+            "Created By": i.created_by,
+            "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
+        } for i in rows]
+
+    def build_invoice_item_rows(rows):
+        return [{
+            "Item ID": it.id,
+            "Invoice ID": it.invoice_id,
+            "Name": it.name,
+            "Batch": it.batch,
+            "Expiry": it.expiry,
+            "Qty": it.qty,
+            "Price": it.price,
+            "Amount": it.amount,
+            "Discount %": it.discount_percent,
+            "Discount Amount": it.discount_amount,
+            "Net Amount": it.net_amount,
+            "Cost Price": it.cost_price,
+            "Cost Amount": it.cost_amount
+        } for it in rows]
+
+    if scope == "filtered":
+        report_type = (request.args.get("report_type") or "").strip().lower()
+        month = to_int_safe(request.args.get("month"), 0)
+        year = to_int_safe(request.args.get("year"), 0)
+        from_date = (request.args.get("from_date") or "").strip()
+        to_date = (request.args.get("to_date") or "").strip()
+        patient = (request.args.get("patient") or "").strip()
+        mobile_raw = (request.args.get("mobile") or "").strip()
+
+        query = Invoice.query
+        applied_filter = "all"
+        if report_type == "daily":
+            today = clinic_now().date()
+            start = datetime.combine(today, time.min)
+            end = datetime.combine(today, time.max)
+            query = query.filter(Invoice.created_at >= start, Invoice.created_at <= end)
+            applied_filter = f"daily ({today.isoformat()})"
+        elif report_type == "monthly":
+            if month >= 1 and month <= 12 and year >= 1900:
+                query = query.filter(
+                    db.extract("month", Invoice.created_at) == month,
+                    db.extract("year", Invoice.created_at) == year
+                )
+                applied_filter = f"monthly ({year}-{month:02d})"
+            else:
+                applied_filter = "monthly (invalid month/year, exported all)"
+        elif report_type == "custom":
+            try:
+                from_dt = datetime.strptime(from_date, "%Y-%m-%d")
+                to_dt = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+                query = query.filter(Invoice.created_at >= from_dt, Invoice.created_at < to_dt)
+                applied_filter = f"custom ({from_date} to {to_date})"
+            except ValueError:
+                applied_filter = "custom (invalid dates, exported all)"
+        elif report_type == "patient":
+            if patient:
+                query = query.filter(Invoice.customer.ilike(f"%{patient}%"))
+                applied_filter = f"patient ({patient})"
+            else:
+                applied_filter = "patient (blank, exported all)"
+        elif report_type == "mobile":
+            if mobile_raw:
+                mobile_digits = normalize_patient_mobile(mobile_raw)
+                normalized_mobile = db.func.replace(
+                    db.func.replace(
+                        db.func.replace(
+                            db.func.replace(
+                                db.func.replace(
+                                    db.func.replace(db.func.coalesce(Invoice.mobile, ""), " ", ""),
+                                    "-", ""
+                                ),
+                                "+", ""
+                            ),
+                            "(", ""
+                        ),
+                        ")", ""
+                    ),
+                    ".", ""
+                )
+                if mobile_digits:
+                    query = query.filter(
+                        or_(
+                            normalized_mobile.like(f"%{mobile_digits}%"),
+                            Invoice.mobile.ilike(f"%{mobile_raw}%")
+                        )
+                    )
+                else:
+                    query = query.filter(Invoice.mobile.ilike(f"%{mobile_raw}%"))
+                applied_filter = f"mobile ({mobile_raw})"
+            else:
+                applied_filter = "mobile (blank, exported all)"
+        elif report_type:
+            applied_filter = f"{report_type} (not invoice list type, exported all)"
+
+        invoices = query.order_by(Invoice.created_at.desc(), Invoice.id.desc()).all()
+        invoice_ids = [i.id for i in invoices]
+        invoice_items = []
+        if invoice_ids:
+            invoice_items = InvoiceItem.query.filter(
+                InvoiceItem.invoice_id.in_(invoice_ids)
+            ).order_by(InvoiceItem.invoice_id.asc(), InvoiceItem.id.asc()).all()
+
+        meta_rows = [
+            {"Metric": "Generated At", "Value": now.strftime("%d-%m-%Y %I:%M:%S %p")},
+            {"Metric": "Database Dialect", "Value": db_dialect},
+            {"Metric": "Scope", "Value": "filtered"},
+            {"Metric": "Report Type", "Value": report_type or "all"},
+            {"Metric": "Applied Filter", "Value": applied_filter},
+            {"Metric": "Invoices", "Value": len(invoices)},
+            {"Metric": "Invoice Items", "Value": len(invoice_items)}
+        ]
+
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            pd.DataFrame(meta_rows).to_excel(writer, sheet_name="Meta", index=False)
+            pd.DataFrame(build_invoice_rows(invoices)).to_excel(writer, sheet_name="Invoices", index=False)
+            pd.DataFrame(build_invoice_item_rows(invoice_items)).to_excel(writer, sheet_name="InvoiceItems", index=False)
+        output.seek(0)
+
+        filename = f"Pharmacy_Reports_Filtered_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            max_age=0
+        )
 
     invoices = Invoice.query.order_by(Invoice.created_at.desc(), Invoice.id.desc()).all()
     invoice_items = InvoiceItem.query.order_by(InvoiceItem.id.asc()).all()
@@ -4770,39 +4917,6 @@ def export_excel():
     medicines = Medicine.query.order_by(Medicine.name.asc(), Medicine.batch.asc(), Medicine.id.asc()).all()
     returns = Return.query.order_by(Return.created_at.desc(), Return.id.desc()).all()
     return_items = ReturnItem.query.order_by(ReturnItem.id.asc()).all()
-
-    invoice_rows = [{
-        "Invoice ID": i.id,
-        "Invoice No": i.invoice_no,
-        "Patient Name": i.customer,
-        "Mobile": i.mobile,
-        "Doctor": i.doctor,
-        "Gender": i.gender,
-        "Subtotal": i.subtotal,
-        "Discount": i.discount,
-        "CGST": i.cgst,
-        "SGST": i.sgst,
-        "Total": i.total,
-        "Payment Mode": i.payment_mode,
-        "Created By": i.created_by,
-        "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
-    } for i in invoices]
-
-    invoice_item_rows = [{
-        "Item ID": it.id,
-        "Invoice ID": it.invoice_id,
-        "Name": it.name,
-        "Batch": it.batch,
-        "Expiry": it.expiry,
-        "Qty": it.qty,
-        "Price": it.price,
-        "Amount": it.amount,
-        "Discount %": it.discount_percent,
-        "Discount Amount": it.discount_amount,
-        "Net Amount": it.net_amount,
-        "Cost Price": it.cost_price,
-        "Cost Amount": it.cost_amount
-    } for it in invoice_items]
 
     appointment_rows = [{
         "Appointment ID": a.id,
@@ -4889,7 +5003,8 @@ def export_excel():
 
     meta_rows = [
         {"Metric": "Generated At", "Value": now.strftime("%d-%m-%Y %I:%M:%S %p")},
-        {"Metric": "Database Dialect", "Value": (db.session.bind.dialect.name if db.session.bind else "unknown")},
+        {"Metric": "Database Dialect", "Value": db_dialect},
+        {"Metric": "Scope", "Value": "all"},
         {"Metric": "Invoices", "Value": len(invoices)},
         {"Metric": "Invoice Items", "Value": len(invoice_items)},
         {"Metric": "Appointments", "Value": len(appointments)},
@@ -4902,8 +5017,8 @@ def export_excel():
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(meta_rows).to_excel(writer, sheet_name="Meta", index=False)
-        pd.DataFrame(invoice_rows).to_excel(writer, sheet_name="Invoices", index=False)
-        pd.DataFrame(invoice_item_rows).to_excel(writer, sheet_name="InvoiceItems", index=False)
+        pd.DataFrame(build_invoice_rows(invoices)).to_excel(writer, sheet_name="Invoices", index=False)
+        pd.DataFrame(build_invoice_item_rows(invoice_items)).to_excel(writer, sheet_name="InvoiceItems", index=False)
         pd.DataFrame(appointment_rows).to_excel(writer, sheet_name="Appointments", index=False)
         pd.DataFrame(patient_rows).to_excel(writer, sheet_name="Patients", index=False)
         pd.DataFrame(medicine_rows).to_excel(writer, sheet_name="Medicines", index=False)
@@ -4911,7 +5026,7 @@ def export_excel():
         pd.DataFrame(return_item_rows).to_excel(writer, sheet_name="ReturnItems", index=False)
 
     output.seek(0)
-    filename = f"Pharmacy_Reports_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"Pharmacy_Reports_Full_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
     return send_file(
         output,
         as_attachment=True,

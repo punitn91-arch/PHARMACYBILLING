@@ -43,7 +43,17 @@
 
     <br>
     <button class="btn save">Generate Report</button>
-    <a href="/reports/export" class="btn hold">Export Excel</a>
+    <a href="{{ url_for('export_excel',
+        scope='filtered',
+        report_type=report_type or '',
+        month=(report_filters.month if report_filters else ''),
+        year=(report_filters.year if report_filters else ''),
+        from_date=(report_filters.from_date if report_filters else ''),
+        to_date=(report_filters.to_date if report_filters else ''),
+        patient=(report_filters.patient if report_filters else ''),
+        mobile=(report_filters.mobile if report_filters else '')
+    ) }}" class="btn hold">Export Filtered</a>
+    <a href="{{ url_for('export_excel', scope='all') }}" class="btn hold">Export Full Data</a>
 
 </form>
 
