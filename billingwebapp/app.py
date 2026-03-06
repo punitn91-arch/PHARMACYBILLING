@@ -3736,6 +3736,18 @@ def build_appointment_calendar_days(appointments, calendar_view, focus_date):
         })
     return days
 
+def appointment_no_sort_value(appointment_no):
+    value = str(appointment_no or "").strip().upper()
+    if value.startswith("APT-"):
+        value = value[4:]
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if not digits:
+        return 10**9
+    try:
+        return int(digits)
+    except ValueError:
+        return 10**9
+
 def build_appointment_report_payload(args, flash_errors=False):
     today = date.today()
     legacy_date = parse_date(args.get("date"))
@@ -3841,11 +3853,13 @@ def build_appointment_report_payload(args, flash_errors=False):
             Appointment.mobile.ilike(like)
         ))
 
-    appointments = query.order_by(
-        Appointment.appointment_date.asc(),
-        Appointment.appointment_time.asc(),
-        Appointment.id.asc()
-    ).all()
+    appointments = query.order_by(Appointment.id.asc()).all()
+    appointments.sort(
+        key=lambda appt: (
+            appointment_no_sort_value(appt.appointment_no),
+            appt.id or 0
+        )
+    )
 
     return {
         "appointments": appointments,
