@@ -43,36 +43,45 @@ def is_async_request():
 @app.after_request
 def adapt_redirect_for_async(response):
     if not is_async_request():
-        return response
-    if response.status_code not in ASYNC_REDIRECT_STATUSES:
-        return response
+        final_response = response
+    elif response.status_code not in ASYNC_REDIRECT_STATUSES:
+        final_response = response
+    else:
+        flashes = session.get("_flashes", []) or []
+        messages = []
+        has_error = False
+        for category, message in flashes:
+            cat = str(category or "info").lower()
+            msg = str(message or "").strip()
+            if not msg:
+                continue
+            if cat in ("danger", "error"):
+                has_error = True
+            messages.append({
+                "category": cat,
+                "message": msg
+            })
 
-    flashes = session.get("_flashes", []) or []
-    messages = []
-    has_error = False
-    for category, message in flashes:
-        cat = str(category or "info").lower()
-        msg = str(message or "").strip()
-        if not msg:
-            continue
-        if cat in ("danger", "error"):
-            has_error = True
-        messages.append({
-            "category": cat,
-            "message": msg
-        })
+        if "_flashes" in session:
+            session.pop("_flashes", None)
 
-    if "_flashes" in session:
-        session.pop("_flashes", None)
+        payload = {
+            "ok": not has_error,
+            "redirect_url": response.headers.get("Location"),
+            "messages": messages
+        }
+        async_response = jsonify(payload)
+        async_response.status_code = 200
+        final_response = async_response
 
-    payload = {
-        "ok": not has_error,
-        "redirect_url": response.headers.get("Location"),
-        "messages": messages
-    }
-    async_response = jsonify(payload)
-    async_response.status_code = 200
-    return async_response
+    # Ensure browsers/CDNs don't keep serving stale HTML after redeploy.
+    if request.method == "GET" and str(final_response.mimetype or "").lower() == "text/html":
+        final_response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        final_response.headers["Pragma"] = "no-cache"
+        final_response.headers["Expires"] = "0"
+
+    final_response.headers["X-App-Release"] = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "local")
+    return final_response
 
 def to_int(val):
     return int(val) if val not in (None, "", " ") else 0
