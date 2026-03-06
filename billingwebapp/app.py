@@ -4755,28 +4755,169 @@ def export_excel():
         return redirect("/")
     import pandas as pd
     from flask import send_file
+    from io import BytesIO
 
-    invoices = Invoice.query.all()
+    now = clinic_now()
 
-    data = [{
+    invoices = Invoice.query.order_by(Invoice.created_at.desc(), Invoice.id.desc()).all()
+    invoice_items = InvoiceItem.query.order_by(InvoiceItem.id.asc()).all()
+    appointments = Appointment.query.order_by(
+        Appointment.appointment_date.desc(),
+        Appointment.appointment_time.desc(),
+        Appointment.id.desc()
+    ).all()
+    patients = Patient.query.order_by(Patient.updated_at.desc(), Patient.id.desc()).all()
+    medicines = Medicine.query.order_by(Medicine.name.asc(), Medicine.batch.asc(), Medicine.id.asc()).all()
+    returns = Return.query.order_by(Return.created_at.desc(), Return.id.desc()).all()
+    return_items = ReturnItem.query.order_by(ReturnItem.id.asc()).all()
+
+    invoice_rows = [{
+        "Invoice ID": i.id,
         "Invoice No": i.invoice_no,
         "Patient Name": i.customer,
         "Mobile": i.mobile,
-        "Date": i.created_at.strftime("%d-%m-%Y"),
-        "Total (ex GST)": i.subtotal,
+        "Doctor": i.doctor,
+        "Gender": i.gender,
+        "Subtotal": i.subtotal,
+        "Discount": i.discount,
+        "CGST": i.cgst,
+        "SGST": i.sgst,
+        "Total": i.total,
         "Payment Mode": i.payment_mode,
-        "User": i.created_by
+        "Created By": i.created_by,
+        "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
     } for i in invoices]
 
-    df = pd.DataFrame(data)
+    invoice_item_rows = [{
+        "Item ID": it.id,
+        "Invoice ID": it.invoice_id,
+        "Name": it.name,
+        "Batch": it.batch,
+        "Expiry": it.expiry,
+        "Qty": it.qty,
+        "Price": it.price,
+        "Amount": it.amount,
+        "Discount %": it.discount_percent,
+        "Discount Amount": it.discount_amount,
+        "Net Amount": it.net_amount,
+        "Cost Price": it.cost_price,
+        "Cost Amount": it.cost_amount
+    } for it in invoice_items]
 
-    file_path = "reports.xlsx"
-    df.to_excel(file_path, index=False)
+    appointment_rows = [{
+        "Appointment ID": a.id,
+        "Appointment No": a.appointment_no,
+        "Token No": a.token_no,
+        "Patient ID": a.patient_id,
+        "Patient Name": a.patient_name,
+        "Mobile": a.mobile,
+        "Age": a.age,
+        "Gender": a.gender,
+        "Doctor": a.doctor_name,
+        "Appointment Date": a.appointment_date.strftime("%d-%m-%Y") if a.appointment_date else "",
+        "Appointment Time": a.appointment_time.strftime("%I:%M %p") if a.appointment_time else "",
+        "Payment Mode": a.payment_mode,
+        "Payment Status": a.payment_status,
+        "Doctor Discount": a.doctor_discount,
+        "Consultation Fee": a.consultation_fee,
+        "Status": a.status,
+        "Symptoms": a.symptoms,
+        "Previous Visit Notes": a.previous_visit_notes,
+        "Notes": a.notes,
+        "Created By": a.created_by,
+        "Created At": a.created_at.strftime("%d-%m-%Y %I:%M %p") if a.created_at else ""
+    } for a in appointments]
 
+    patient_rows = [{
+        "Patient ID": p.id,
+        "Name": p.name,
+        "Mobile": p.mobile,
+        "Age": p.age,
+        "Gender": p.gender,
+        "Notes": p.notes,
+        "Created At": p.created_at.strftime("%d-%m-%Y %I:%M %p") if p.created_at else "",
+        "Updated At": p.updated_at.strftime("%d-%m-%Y %I:%M %p") if p.updated_at else ""
+    } for p in patients]
+
+    medicine_rows = [{
+        "Medicine ID": m.id,
+        "Name": m.name,
+        "Batch": m.batch,
+        "Expiry": m.expiry,
+        "Composition": m.composition,
+        "Company": m.company,
+        "Pack Type": m.pack_type,
+        "Pack Qty": m.pack_qty,
+        "MRP": m.mrp,
+        "Qty": m.qty,
+        "Discount %": m.discount_percent,
+        "Created At": m.created_at.strftime("%d-%m-%Y %I:%M %p") if m.created_at else ""
+    } for m in medicines]
+
+    return_rows = [{
+        "Return ID": r.id,
+        "Return No": r.return_no,
+        "Invoice ID": r.invoice_id,
+        "Invoice No": r.invoice_no,
+        "Customer": r.customer,
+        "Mobile": r.mobile,
+        "Total Refund": r.total_refund,
+        "CGST": r.cgst,
+        "SGST": r.sgst,
+        "Payment Mode": r.payment_mode,
+        "Is Cancelled": r.is_cancelled,
+        "Cancelled By": r.cancelled_by,
+        "Cancelled At": r.cancelled_at.strftime("%d-%m-%Y %I:%M %p") if r.cancelled_at else "",
+        "Created By": r.created_by,
+        "Created At": r.created_at.strftime("%d-%m-%Y %I:%M %p") if r.created_at else ""
+    } for r in returns]
+
+    return_item_rows = [{
+        "Return Item ID": ri.id,
+        "Return ID": ri.return_id,
+        "Invoice Item ID": ri.invoice_item_id,
+        "Medicine ID": ri.medicine_id,
+        "Medicine Name": ri.medicine_name,
+        "Batch": ri.batch,
+        "Expiry": ri.expiry,
+        "Qty": ri.qty,
+        "Price": ri.price,
+        "Amount": ri.amount,
+        "Net Amount": ri.net_amount,
+        "Cost Amount": ri.cost_amount
+    } for ri in return_items]
+
+    meta_rows = [
+        {"Metric": "Generated At", "Value": now.strftime("%d-%m-%Y %I:%M:%S %p")},
+        {"Metric": "Database Dialect", "Value": (db.session.bind.dialect.name if db.session.bind else "unknown")},
+        {"Metric": "Invoices", "Value": len(invoices)},
+        {"Metric": "Invoice Items", "Value": len(invoice_items)},
+        {"Metric": "Appointments", "Value": len(appointments)},
+        {"Metric": "Patients", "Value": len(patients)},
+        {"Metric": "Medicines", "Value": len(medicines)},
+        {"Metric": "Returns", "Value": len(returns)},
+        {"Metric": "Return Items", "Value": len(return_items)}
+    ]
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame(meta_rows).to_excel(writer, sheet_name="Meta", index=False)
+        pd.DataFrame(invoice_rows).to_excel(writer, sheet_name="Invoices", index=False)
+        pd.DataFrame(invoice_item_rows).to_excel(writer, sheet_name="InvoiceItems", index=False)
+        pd.DataFrame(appointment_rows).to_excel(writer, sheet_name="Appointments", index=False)
+        pd.DataFrame(patient_rows).to_excel(writer, sheet_name="Patients", index=False)
+        pd.DataFrame(medicine_rows).to_excel(writer, sheet_name="Medicines", index=False)
+        pd.DataFrame(return_rows).to_excel(writer, sheet_name="Returns", index=False)
+        pd.DataFrame(return_item_rows).to_excel(writer, sheet_name="ReturnItems", index=False)
+
+    output.seek(0)
+    filename = f"Pharmacy_Reports_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
     return send_file(
-        file_path,
+        output,
         as_attachment=True,
-        download_name="Pharmacy_Reports.xlsx"
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        max_age=0
     )
 
 @app.route("/reports/appointments/export")
