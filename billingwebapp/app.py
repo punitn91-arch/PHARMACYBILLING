@@ -3689,15 +3689,19 @@ def upsert_patient_profile(form_data):
 
     patient = None
     if mobile:
+        # When mobile is provided, treat it as primary identity.
         patient = Patient.query.filter_by(mobile=mobile).first()
-    if not patient and patient_name:
-        patient = Patient.query.filter(
-            db.func.lower(Patient.name) == patient_name.lower()
-        ).order_by(Patient.id.desc()).first()
-
-    if not patient:
-        patient = Patient(name=patient_name, mobile=mobile or None)
-        db.session.add(patient)
+        if not patient:
+            patient = Patient(name=patient_name, mobile=mobile)
+            db.session.add(patient)
+    else:
+        if patient_name:
+            patient = Patient.query.filter(
+                db.func.lower(Patient.name) == patient_name.lower()
+            ).order_by(Patient.id.desc()).first()
+        if not patient:
+            patient = Patient(name=patient_name, mobile=None)
+            db.session.add(patient)
 
     patient.name = patient_name
     if mobile:
@@ -3707,6 +3711,46 @@ def upsert_patient_profile(form_data):
     if previous_visit_notes:
         patient.notes = previous_visit_notes
     return patient, mobile
+
+def ensure_appointment_runtime_schema():
+    # Defensive runtime check for deployments where migration block was skipped.
+    required = {
+        "appointment": [
+            ("payment_mode", "TEXT"),
+            ("payment_status", "TEXT"),
+            ("doctor_discount", "REAL"),
+            ("consultation_fee", "REAL"),
+            ("token_no", "INTEGER"),
+            ("patient_id", "INTEGER"),
+            ("age", "INTEGER"),
+            ("gender", "TEXT"),
+            ("symptoms", "TEXT"),
+            ("previous_visit_notes", "TEXT")
+        ],
+        "patient": [
+            ("age", "INTEGER"),
+            ("gender", "TEXT"),
+            ("notes", "TEXT"),
+            ("updated_at", "TIMESTAMP")
+        ]
+    }
+    try:
+        insp = inspect(db.engine)
+        changed = False
+        for table_name, cols in required.items():
+            existing = {c["name"] for c in insp.get_columns(table_name)}
+            for col_name, col_def in cols:
+                if col_name in existing:
+                    continue
+                db.session.execute(
+                    text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {col_def}')
+                )
+                changed = True
+        if changed:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime appointment schema check failed")
 
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
     by_date = {}
@@ -3978,6 +4022,7 @@ def add_appointment():
     doctor_suggestions = get_doctor_suggestions()
 
     if request.method == "POST":
+        ensure_appointment_runtime_schema()
         form_data = read_appointment_form_data(form_data)
         validated, error_msg = validate_appointment_form(form_data)
         if error_msg:
@@ -3992,49 +4037,71 @@ def add_appointment():
                 edit_mode=False
             )
 
-        try:
-            patient, mobile = upsert_patient_profile(form_data)
-            db.session.flush()
+        appointment_saved = False
+        for attempt in range(2):
+            try:
+                patient, mobile = upsert_patient_profile(form_data)
+                db.session.flush()
 
-            appointment = Appointment(
-                appointment_no=generate_appointment_no(),
-                patient_name=form_data["patient_name"],
-                token_no=get_next_daily_token(validated["appointment_date"]),
-                patient_id=patient.id if patient else None,
-                mobile=mobile,
-                age=validated["age"],
-                gender=validated["gender"],
-                doctor_name=validated["doctor_name"],
-                appointment_date=validated["appointment_date"],
-                appointment_time=validated["appointment_time"],
-                payment_mode=form_data["payment_mode"],
-                payment_status="UNPAID",
-                doctor_discount=validated["doctor_discount"],
-                consultation_fee=validated["consultation_fee"],
-                status="BOOKED",
-                symptoms=form_data["symptoms"],
-                previous_visit_notes=form_data["previous_visit_notes"],
-                notes=form_data["notes"],
-                created_by=session.get("username")
-            )
-            db.session.add(appointment)
-            db.session.commit()
-        except IntegrityError:
-            db.session.rollback()
-            flash("Unable to save appointment. This mobile may already be linked to another patient.", "danger")
-            return render_template(
-                "add_appointment.html",
-                form_data=form_data,
-                payment_modes=APPOINTMENT_PAYMENT_MODES,
-                genders=APPOINTMENT_GENDERS,
-                doctor_suggestions=doctor_suggestions,
-                patient_suggestions=patient_suggestions,
-                edit_mode=False
-            )
-        except SQLAlchemyError:
-            db.session.rollback()
-            app.logger.exception("Appointment create failed")
-            flash("Unable to save appointment due to a database error. Please try again.", "danger")
+                appointment = Appointment(
+                    appointment_no=generate_appointment_no(),
+                    patient_name=form_data["patient_name"],
+                    token_no=get_next_daily_token(validated["appointment_date"]),
+                    patient_id=patient.id if patient else None,
+                    mobile=mobile,
+                    age=validated["age"],
+                    gender=validated["gender"],
+                    doctor_name=validated["doctor_name"],
+                    appointment_date=validated["appointment_date"],
+                    appointment_time=validated["appointment_time"],
+                    payment_mode=form_data["payment_mode"],
+                    payment_status="UNPAID",
+                    doctor_discount=validated["doctor_discount"],
+                    consultation_fee=validated["consultation_fee"],
+                    status="BOOKED",
+                    symptoms=form_data["symptoms"],
+                    previous_visit_notes=form_data["previous_visit_notes"],
+                    notes=form_data["notes"],
+                    created_by=session.get("username")
+                )
+                db.session.add(appointment)
+                db.session.commit()
+                appointment_saved = True
+                break
+            except IntegrityError as exc:
+                db.session.rollback()
+                err_text = str(getattr(exc, "orig", exc)).lower()
+                if "appointment_no" in err_text and attempt == 0:
+                    # Rare race: regenerate appointment number once.
+                    continue
+                if "mobile" in err_text:
+                    flash("Unable to save appointment. Mobile number is already used in another patient profile.", "danger")
+                else:
+                    flash("Unable to save appointment due to duplicate data. Please try again.", "danger")
+                return render_template(
+                    "add_appointment.html",
+                    form_data=form_data,
+                    payment_modes=APPOINTMENT_PAYMENT_MODES,
+                    genders=APPOINTMENT_GENDERS,
+                    doctor_suggestions=doctor_suggestions,
+                    patient_suggestions=patient_suggestions,
+                    edit_mode=False
+                )
+            except SQLAlchemyError:
+                db.session.rollback()
+                app.logger.exception("Appointment create failed")
+                flash("Unable to save appointment due to a database error. Please try again.", "danger")
+                return render_template(
+                    "add_appointment.html",
+                    form_data=form_data,
+                    payment_modes=APPOINTMENT_PAYMENT_MODES,
+                    genders=APPOINTMENT_GENDERS,
+                    doctor_suggestions=doctor_suggestions,
+                    patient_suggestions=patient_suggestions,
+                    edit_mode=False
+                )
+        if not appointment_saved:
+            flash("Unable to save appointment. Please try again.", "danger")
             return render_template(
                 "add_appointment.html",
                 form_data=form_data,
@@ -4071,6 +4138,7 @@ def edit_appointment(id):
     doctor_suggestions = get_doctor_suggestions()
 
     if request.method == "POST":
+        ensure_appointment_runtime_schema()
         form_data = read_appointment_form_data(form_data)
         validated, error_msg = validate_appointment_form(form_data)
         if error_msg:
@@ -4113,9 +4181,13 @@ def edit_appointment(id):
                 appointment.payment_status = "UNPAID"
 
             db.session.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             db.session.rollback()
-            flash("Unable to update appointment. This mobile may already be linked to another patient.", "danger")
+            err_text = str(getattr(exc, "orig", exc)).lower()
+            if "mobile" in err_text:
+                flash("Unable to update appointment. Mobile number is already used in another patient profile.", "danger")
+            else:
+                flash("Unable to update appointment due to duplicate data. Please check entries.", "danger")
             return render_template(
                 "add_appointment.html",
                 form_data=form_data,
