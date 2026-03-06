@@ -1044,6 +1044,42 @@ def logout_everywhere():
     session.clear()
     flash("Logged out from all devices.", "success")
     return redirect("/login")
+
+
+@app.route("/change-password", methods=["GET", "POST"])
+@login_required
+def change_password():
+    user = User.query.get_or_404(session.get("user_id"))
+
+    if request.method == "POST":
+        current_password = (request.form.get("current_password") or "").strip()
+        new_password = (request.form.get("new_password") or "").strip()
+        confirm_password = (request.form.get("confirm_password") or "").strip()
+
+        if not current_password:
+            flash("Current password is required", "danger")
+            return redirect(request.url)
+        if not user.check_password(current_password):
+            flash("Current password is incorrect", "danger")
+            return redirect(request.url)
+        if not new_password:
+            flash("New password is required", "danger")
+            return redirect(request.url)
+        if new_password != confirm_password:
+            flash("New password and confirm password do not match", "danger")
+            return redirect(request.url)
+
+        user.set_password(new_password)
+        db.session.commit()
+        flash("Password updated successfully", "success")
+        return redirect("/")
+
+    return render_template(
+        "change_password.html",
+        user=user,
+        require_current_password=True,
+        page_title="Change Password"
+    )
 # ---------------- ADD USER (ADMIN ONLY) ----------------
 def admin_required(f):
     @wraps(f)
@@ -5195,7 +5231,12 @@ def change_user_password(user_id):
         flash("Password updated")
         return redirect("/users")
 
-    return render_template("change_password.html", user=user)
+    return render_template(
+        "change_password.html",
+        user=user,
+        require_current_password=False,
+        page_title=f"Change Password - {user.username}"
+    )
 @app.route("/users/delete/<int:user_id>")
 @login_required
 @admin_required
