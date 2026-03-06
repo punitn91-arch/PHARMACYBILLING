@@ -1,5 +1,6 @@
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import validates
 from werkzeug.security import check_password_hash, generate_password_hash
 
 db = SQLAlchemy()
@@ -175,6 +176,15 @@ class Patient(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    @validates("age")
+    def _sanitize_age(self, _key, value):
+        if value in (None, "", " "):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
 
 # ================= APPOINTMENT =================
 class Appointment(db.Model):
@@ -209,6 +219,15 @@ class Appointment(db.Model):
     checked_in_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
     cancelled_at = db.Column(db.DateTime)
+
+    @validates("age")
+    def _sanitize_age(self, _key, value):
+        if value in (None, "", " "):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
 
 # ================= STOCK HISTORY =================
