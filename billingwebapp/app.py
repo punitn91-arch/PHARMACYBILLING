@@ -3718,6 +3718,28 @@ def upsert_patient_profile(form_data):
         patient.notes = previous_visit_notes
     return patient, mobile
 
+def safe_upsert_patient_profile(form_data, current_patient_id=None):
+    mobile = normalize_patient_mobile(form_data.get("mobile"))
+    try:
+        patient, mobile = upsert_patient_profile(form_data)
+        db.session.flush()
+        return patient, mobile, None
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        app.logger.exception("Patient profile upsert failed; continuing appointment flow")
+        patient = None
+        if mobile:
+            try:
+                patient = Patient.query.filter_by(mobile=mobile).first()
+            except Exception:
+                patient = None
+        if not patient and current_patient_id:
+            try:
+                patient = Patient.query.get(current_patient_id)
+            except Exception:
+                patient = None
+        return patient, mobile, exc
+
 def ensure_appointment_runtime_schema():
     # Defensive runtime check for deployments where migration block was skipped.
     required = {
@@ -4076,8 +4098,7 @@ def add_appointment():
         appointment_saved = False
         for attempt in range(2):
             try:
-                patient, mobile = upsert_patient_profile(form_data)
-                db.session.flush()
+                patient, mobile, _patient_err = safe_upsert_patient_profile(form_data)
 
                 appointment = Appointment(
                     appointment_no=generate_appointment_no(),
@@ -4136,7 +4157,10 @@ def add_appointment():
                     if schema_retry_ok:
                         continue
                 app.logger.exception("Appointment create failed")
-                flash("Unable to save appointment due to a database error. Please try again.", "danger")
+                short_err = (err_text or "database error").replace("\n", " ").strip()
+                if len(short_err) > 140:
+                    short_err = short_err[:140] + "..."
+                flash(f"Unable to save appointment due to a database error. {short_err}", "danger")
                 return render_template(
                     "add_appointment.html",
                     form_data=form_data,
@@ -4213,11 +4237,16 @@ def edit_appointment(id):
             )
 
         try:
-            patient, mobile = upsert_patient_profile(form_data)
-            db.session.flush()
+            patient, mobile, patient_err = safe_upsert_patient_profile(
+                form_data,
+                current_patient_id=appointment.patient_id
+            )
+            if patient_err:
+                # Rollback in safe_upsert may detach loaded row; reload it.
+                appointment = Appointment.query.get_or_404(id)
             old_date = appointment.appointment_date
             appointment.patient_name = form_data["patient_name"]
-            appointment.patient_id = patient.id if patient else None
+            appointment.patient_id = patient.id if patient else appointment.patient_id
             appointment.mobile = mobile
             appointment.age = validated["age"]
             appointment.gender = validated["gender"]
@@ -4266,7 +4295,10 @@ def edit_appointment(id):
             if "undefined column" in low or "does not exist" in low:
                 ensure_appointment_runtime_schema()
             app.logger.exception("Appointment update failed")
-            flash("Unable to update appointment due to a database error. Please try again.", "danger")
+            short_err = (err_text or "database error").replace("\n", " ").strip()
+            if len(short_err) > 140:
+                short_err = short_err[:140] + "..."
+            flash(f"Unable to update appointment due to a database error. {short_err}", "danger")
             return render_template(
                 "add_appointment.html",
                 form_data=form_data,
