@@ -4781,6 +4781,17 @@ def export_excel():
             "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
         } for i in rows]
 
+    def build_invoice_rows_legacy(rows):
+        return [{
+            "Invoice No": i.invoice_no,
+            "Patient Name": i.customer,
+            "Mobile": i.mobile,
+            "Date": i.created_at.strftime("%d-%m-%Y") if i.created_at else "",
+            "Total (ex GST)": i.subtotal,
+            "Payment Mode": i.payment_mode,
+            "User": i.created_by
+        } for i in rows]
+
     def build_invoice_item_rows(rows):
         return [{
             "Item ID": it.id,
@@ -4880,24 +4891,12 @@ def export_excel():
                 InvoiceItem.invoice_id.in_(invoice_ids)
             ).order_by(InvoiceItem.invoice_id.asc(), InvoiceItem.id.asc()).all()
 
-        meta_rows = [
-            {"Metric": "Generated At", "Value": now.strftime("%d-%m-%Y %I:%M:%S %p")},
-            {"Metric": "Database Dialect", "Value": db_dialect},
-            {"Metric": "Scope", "Value": "filtered"},
-            {"Metric": "Report Type", "Value": report_type or "all"},
-            {"Metric": "Applied Filter", "Value": applied_filter},
-            {"Metric": "Invoices", "Value": len(invoices)},
-            {"Metric": "Invoice Items", "Value": len(invoice_items)}
-        ]
-
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            pd.DataFrame(meta_rows).to_excel(writer, sheet_name="Meta", index=False)
-            pd.DataFrame(build_invoice_rows(invoices)).to_excel(writer, sheet_name="Invoices", index=False)
-            pd.DataFrame(build_invoice_item_rows(invoice_items)).to_excel(writer, sheet_name="InvoiceItems", index=False)
+            pd.DataFrame(build_invoice_rows_legacy(invoices)).to_excel(writer, sheet_name="Reports", index=False)
         output.seek(0)
 
-        filename = f"Pharmacy_Reports_Filtered_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filename = f"Pharmacy_Reports_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
         return send_file(
             output,
             as_attachment=True,
