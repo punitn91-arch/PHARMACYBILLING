@@ -7,6 +7,10 @@ import webbrowser
 import threading
 import os
 from decimal import Decimal, ROUND_HALF_UP
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None
 from werkzeug.utils import secure_filename
 from sqlalchemy import text, or_, inspect
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -23,6 +27,18 @@ IS_PROD = bool(
 
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" and not IS_PROD:
     threading.Timer(1, open_browser).start()
+
+
+APP_TIMEZONE = (os.environ.get("APP_TIMEZONE") or "Asia/Kolkata").strip() or "Asia/Kolkata"
+
+
+def clinic_now():
+    if ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(APP_TIMEZONE))
+        except Exception:
+            pass
+    return datetime.now()
 
 
 APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -4428,7 +4444,7 @@ def reports():
 
         # DAILY
         if report_type == "daily":
-            today = datetime.now().date()
+            today = clinic_now().date()
             start = datetime.combine(today, time.min)
             end = datetime.combine(today, time.max)
 
@@ -4439,13 +4455,15 @@ def reports():
 
         # MONTHLY
         elif report_type == "monthly":
-            month = int(request.form.get("month"))
-            year = int(request.form.get("year"))
-
-            invoices = Invoice.query.filter(
-                db.extract("month", Invoice.created_at) == month,
-                db.extract("year", Invoice.created_at) == year
-            ).all()
+            month = to_int_safe(request.form.get("month"), 0)
+            year = to_int_safe(request.form.get("year"), 0)
+            if month < 1 or month > 12 or year < 1900:
+                flash("Please enter a valid month and year.", "danger")
+            else:
+                invoices = Invoice.query.filter(
+                    db.extract("month", Invoice.created_at) == month,
+                    db.extract("year", Invoice.created_at) == year
+                ).all()
 
         # CUSTOM DATE
         elif report_type == "custom":
@@ -4453,24 +4471,63 @@ def reports():
             to_date = request.form.get("to_date")
 
             if from_date and to_date:
-                from_dt = datetime.strptime(from_date, "%Y-%m-%d")
-                to_dt = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                invoices = Invoice.query.filter(
-                    Invoice.created_at >= from_dt,
-                    Invoice.created_at < to_dt
-                ).all()
+                try:
+                    from_dt = datetime.strptime(from_date, "%Y-%m-%d")
+                    to_dt = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+                except ValueError:
+                    flash("Please enter valid from/to dates.", "danger")
+                else:
+                    invoices = Invoice.query.filter(
+                        Invoice.created_at >= from_dt,
+                        Invoice.created_at < to_dt
+                    ).all()
+            else:
+                flash("Please select both from date and to date.", "danger")
 
         # PATIENT WISE
         elif report_type == "patient":
-            patient = request.form.get("patient").upper()
-            invoices = Invoice.query.filter(
-                Invoice.customer.like(f"%{patient}%")
-            ).all()
+            patient = (request.form.get("patient") or "").strip()
+            if not patient:
+                flash("Please enter patient name.", "danger")
+            else:
+                invoices = Invoice.query.filter(
+                    Invoice.customer.ilike(f"%{patient}%")
+                ).all()
 
         # MOBILE WISE
         elif report_type == "mobile":
-            mobile = request.form.get("mobile")
-            invoices = Invoice.query.filter_by(mobile=mobile).all()
+            mobile_raw = (request.form.get("mobile") or "").strip()
+            if not mobile_raw:
+                flash("Please enter mobile number.", "danger")
+            else:
+                mobile_digits = normalize_patient_mobile(mobile_raw)
+                normalized_mobile = db.func.replace(
+                    db.func.replace(
+                        db.func.replace(
+                            db.func.replace(
+                                db.func.replace(
+                                    db.func.replace(db.func.coalesce(Invoice.mobile, ""), " ", ""),
+                                    "-", ""
+                                ),
+                                "+", ""
+                            ),
+                            "(", ""
+                        ),
+                        ")", ""
+                    ),
+                    ".", ""
+                )
+                if mobile_digits:
+                    invoices = Invoice.query.filter(
+                        or_(
+                            normalized_mobile.like(f"%{mobile_digits}%"),
+                            Invoice.mobile.ilike(f"%{mobile_raw}%")
+                        )
+                    ).all()
+                else:
+                    invoices = Invoice.query.filter(
+                        Invoice.mobile.ilike(f"%{mobile_raw}%")
+                    ).all()
 
         # PROFIT / LOSS (FIFO)
         elif report_type == "profit":
@@ -4557,7 +4614,7 @@ def reports():
                 if start and end:
                     period_days = (end.date() - start.date()).days + 1
                 elif start and not end:
-                    period_days = (datetime.now().date() - start.date()).days + 1
+                    period_days = (clinic_now().date() - start.date()).days + 1
                 elif end and not start:
                     period_days = 1
 
