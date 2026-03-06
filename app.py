@@ -17,5 +17,7 @@ if not spec or not spec.loader:
     raise RuntimeError("Unable to load billingwebapp/app.py")
 
 module = importlib.util.module_from_spec(spec)
+# Register module before execution so Flask can resolve root/template paths correctly.
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 app = module.app

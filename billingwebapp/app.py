@@ -24,13 +24,19 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true" and not IS_PROD:
     threading.Timer(1, open_browser).start()
 
 
-app = Flask(__name__)
+APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(
+    __name__,
+    template_folder=os.path.join(APP_BASE_DIR, "templates"),
+    static_folder=os.path.join(APP_BASE_DIR, "static"),
+    static_url_path="/static"
+)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
 
 ASYNC_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 # ---------------- UPLOADS ----------------
-UPLOAD_FOLDER = os.path.join(app.root_path, "static", "uploads", "vendors")
+UPLOAD_FOLDER = os.path.join(APP_BASE_DIR, "static", "uploads", "vendors")
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
