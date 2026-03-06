@@ -3683,9 +3683,15 @@ def get_next_daily_token(appt_date, exclude_appointment_id=None):
 def upsert_patient_profile(form_data):
     patient_name = (form_data.get("patient_name") or "").strip()
     mobile = normalize_patient_mobile(form_data.get("mobile"))
-    age = form_data.get("age")
+    age_raw = (form_data.get("age") or "").strip()
     gender = form_data.get("gender")
     previous_visit_notes = (form_data.get("previous_visit_notes") or "").strip()
+    age_val = None
+    if age_raw:
+        try:
+            age_val = int(age_raw)
+        except ValueError:
+            age_val = None
 
     patient = None
     if mobile:
@@ -3706,7 +3712,7 @@ def upsert_patient_profile(form_data):
     patient.name = patient_name
     if mobile:
         patient.mobile = mobile
-    patient.age = age
+    patient.age = age_val
     patient.gender = gender
     if previous_visit_notes:
         patient.notes = previous_visit_notes
