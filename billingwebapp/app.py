@@ -9,6 +9,7 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from werkzeug.utils import secure_filename
 from sqlalchemy import text, or_, inspect
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 def open_browser():
     webbrowser.open("http://127.0.0.1:5000")
@@ -3991,32 +3992,58 @@ def add_appointment():
                 edit_mode=False
             )
 
-        patient, mobile = upsert_patient_profile(form_data)
-        db.session.flush()
+        try:
+            patient, mobile = upsert_patient_profile(form_data)
+            db.session.flush()
 
-        appointment = Appointment(
-            appointment_no=generate_appointment_no(),
-            patient_name=form_data["patient_name"],
-            token_no=get_next_daily_token(validated["appointment_date"]),
-            patient_id=patient.id if patient else None,
-            mobile=mobile,
-            age=validated["age"],
-            gender=validated["gender"],
-            doctor_name=validated["doctor_name"],
-            appointment_date=validated["appointment_date"],
-            appointment_time=validated["appointment_time"],
-            payment_mode=form_data["payment_mode"],
-            payment_status="UNPAID",
-            doctor_discount=validated["doctor_discount"],
-            consultation_fee=validated["consultation_fee"],
-            status="BOOKED",
-            symptoms=form_data["symptoms"],
-            previous_visit_notes=form_data["previous_visit_notes"],
-            notes=form_data["notes"],
-            created_by=session.get("username")
-        )
-        db.session.add(appointment)
-        db.session.commit()
+            appointment = Appointment(
+                appointment_no=generate_appointment_no(),
+                patient_name=form_data["patient_name"],
+                token_no=get_next_daily_token(validated["appointment_date"]),
+                patient_id=patient.id if patient else None,
+                mobile=mobile,
+                age=validated["age"],
+                gender=validated["gender"],
+                doctor_name=validated["doctor_name"],
+                appointment_date=validated["appointment_date"],
+                appointment_time=validated["appointment_time"],
+                payment_mode=form_data["payment_mode"],
+                payment_status="UNPAID",
+                doctor_discount=validated["doctor_discount"],
+                consultation_fee=validated["consultation_fee"],
+                status="BOOKED",
+                symptoms=form_data["symptoms"],
+                previous_visit_notes=form_data["previous_visit_notes"],
+                notes=form_data["notes"],
+                created_by=session.get("username")
+            )
+            db.session.add(appointment)
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("Unable to save appointment. This mobile may already be linked to another patient.", "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                genders=APPOINTMENT_GENDERS,
+                doctor_suggestions=doctor_suggestions,
+                patient_suggestions=patient_suggestions,
+                edit_mode=False
+            )
+        except SQLAlchemyError:
+            db.session.rollback()
+            app.logger.exception("Appointment create failed")
+            flash("Unable to save appointment due to a database error. Please try again.", "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                genders=APPOINTMENT_GENDERS,
+                doctor_suggestions=doctor_suggestions,
+                patient_suggestions=patient_suggestions,
+                edit_mode=False
+            )
 
         flash("Appointment booked successfully.", "success")
         return redirect(url_for(
@@ -4059,32 +4086,61 @@ def edit_appointment(id):
                 appt_id=appointment.id
             )
 
-        patient, mobile = upsert_patient_profile(form_data)
-        db.session.flush()
-        old_date = appointment.appointment_date
-        appointment.patient_name = form_data["patient_name"]
-        appointment.patient_id = patient.id if patient else None
-        appointment.mobile = mobile
-        appointment.age = validated["age"]
-        appointment.gender = validated["gender"]
-        appointment.doctor_name = validated["doctor_name"]
-        appointment.appointment_date = validated["appointment_date"]
-        appointment.appointment_time = validated["appointment_time"]
-        if old_date != appointment.appointment_date or not appointment.token_no:
-            appointment.token_no = get_next_daily_token(
-                appointment.appointment_date,
-                exclude_appointment_id=appointment.id
-            )
-        appointment.payment_mode = form_data["payment_mode"]
-        appointment.doctor_discount = validated["doctor_discount"]
-        appointment.consultation_fee = validated["consultation_fee"]
-        appointment.symptoms = form_data["symptoms"]
-        appointment.previous_visit_notes = form_data["previous_visit_notes"]
-        appointment.notes = form_data["notes"]
-        if (appointment.payment_status or "").strip().upper() not in APPOINTMENT_PAYMENT_STATUSES:
-            appointment.payment_status = "UNPAID"
+        try:
+            patient, mobile = upsert_patient_profile(form_data)
+            db.session.flush()
+            old_date = appointment.appointment_date
+            appointment.patient_name = form_data["patient_name"]
+            appointment.patient_id = patient.id if patient else None
+            appointment.mobile = mobile
+            appointment.age = validated["age"]
+            appointment.gender = validated["gender"]
+            appointment.doctor_name = validated["doctor_name"]
+            appointment.appointment_date = validated["appointment_date"]
+            appointment.appointment_time = validated["appointment_time"]
+            if old_date != appointment.appointment_date or not appointment.token_no:
+                appointment.token_no = get_next_daily_token(
+                    appointment.appointment_date,
+                    exclude_appointment_id=appointment.id
+                )
+            appointment.payment_mode = form_data["payment_mode"]
+            appointment.doctor_discount = validated["doctor_discount"]
+            appointment.consultation_fee = validated["consultation_fee"]
+            appointment.symptoms = form_data["symptoms"]
+            appointment.previous_visit_notes = form_data["previous_visit_notes"]
+            appointment.notes = form_data["notes"]
+            if (appointment.payment_status or "").strip().upper() not in APPOINTMENT_PAYMENT_STATUSES:
+                appointment.payment_status = "UNPAID"
 
-        db.session.commit()
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("Unable to update appointment. This mobile may already be linked to another patient.", "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                genders=APPOINTMENT_GENDERS,
+                doctor_suggestions=doctor_suggestions,
+                patient_suggestions=patient_suggestions,
+                edit_mode=True,
+                appt_id=appointment.id
+            )
+        except SQLAlchemyError:
+            db.session.rollback()
+            app.logger.exception("Appointment update failed")
+            flash("Unable to update appointment due to a database error. Please try again.", "danger")
+            return render_template(
+                "add_appointment.html",
+                form_data=form_data,
+                payment_modes=APPOINTMENT_PAYMENT_MODES,
+                genders=APPOINTMENT_GENDERS,
+                doctor_suggestions=doctor_suggestions,
+                patient_suggestions=patient_suggestions,
+                edit_mode=True,
+                appt_id=appointment.id
+            )
+
         flash("Appointment updated successfully.", "success")
         return redirect(url_for(
             "appointments",
