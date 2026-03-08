@@ -12,7 +12,7 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, or_, inspect
+from sqlalchemy import text, or_, inspect, create_engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 def open_browser():
@@ -52,10 +52,37 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
 
 ASYNC_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
+TMP_BASE_DIR = os.path.join("/tmp", "billingwebapp")
+
+
+def ensure_writable_dir(preferred_path, fallback_path):
+    try:
+        os.makedirs(preferred_path, exist_ok=True)
+        return preferred_path
+    except OSError:
+        os.makedirs(fallback_path, exist_ok=True)
+        return fallback_path
+
+
+def test_database_url(db_url):
+    try:
+        connect_args = {}
+        if db_url.startswith("postgresql://"):
+            connect_args["connect_timeout"] = 5
+        probe_engine = create_engine(db_url, connect_args=connect_args)
+        with probe_engine.connect():
+            pass
+        probe_engine.dispose()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
 # ---------------- UPLOADS ----------------
-UPLOAD_FOLDER = os.path.join(APP_BASE_DIR, "static", "uploads", "vendors")
+UPLOAD_FOLDER = ensure_writable_dir(
+    os.path.join(APP_BASE_DIR, "static", "uploads", "vendors"),
+    os.path.join(TMP_BASE_DIR, "uploads", "vendors")
+)
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -777,11 +804,22 @@ def fifo_cancel_return(invoice_item_id, qty, fallback_rate):
     return cost_total
 
 # ---------------- DATABASE ----------------
-os.makedirs(app.instance_path, exist_ok=True)
-default_db = "sqlite:///" + os.path.join(app.instance_path, "pharmacy.db")
-db_url = os.environ.get("DATABASE_URL", default_db)
+instance_dir = ensure_writable_dir(
+    app.instance_path,
+    os.path.join(TMP_BASE_DIR, "instance")
+)
+default_db = "sqlite:///" + os.path.join(instance_dir, "pharmacy.db")
+db_url = (os.environ.get("DATABASE_URL") or "").strip() or default_db
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
+if db_url != default_db:
+    db_ok, db_err = test_database_url(db_url)
+    if not db_ok:
+        app.logger.error(
+            "Primary DATABASE_URL is unreachable. Falling back to local SQLite. Error: %s",
+            db_err
+        )
+        db_url = default_db
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
@@ -5265,6 +5303,7 @@ def export_medicines():
         return redirect("/medicines")
     import pandas as pd
     from flask import send_file
+    from io import BytesIO
 
     medicines = Medicine.query.order_by(Medicine.name).all()
 
@@ -5290,15 +5329,22 @@ def export_medicines():
 
     df = pd.DataFrame(data)
 
-    file_path = "medicine_list.xlsx"
-    df.to_excel(file_path, index=False)
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
 
-    return send_file(file_path, as_attachment=True)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="medicine_list.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 @app.route("/export-low-stock")
 @login_required
 def export_low_stock():
     import pandas as pd
     from flask import send_file
+    from io import BytesIO
 
     meds = get_low_stock_items(limit=LOW_STOCK_LIMIT)
 
@@ -5316,10 +5362,16 @@ def export_low_stock():
 
     df = pd.DataFrame(data)
 
-    file_path = "low_stock_medicines.xlsx"
-    df.to_excel(file_path, index=False)
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
 
-    return send_file(file_path, as_attachment=True)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="low_stock_medicines.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 from datetime import datetime, time
 
@@ -5375,6 +5427,7 @@ def export_stock_history():
         return redirect("/")
     import pandas as pd
     from flask import send_file
+    from io import BytesIO
 
     history = StockHistory.query.order_by(StockHistory.created_at.desc()).all()
 
@@ -5393,10 +5446,16 @@ def export_stock_history():
         })
 
     df = pd.DataFrame(data)
-    file = "stock_history.xlsx"
-    df.to_excel(file, index=False)
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
 
-    return send_file(file, as_attachment=True)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="stock_history.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     
 @app.route("/stock-history/delete/<int:id>", methods=["POST"])
 @login_required
