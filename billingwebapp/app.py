@@ -6,13 +6,14 @@ from functools import wraps
 import webbrowser
 import threading
 import os
+import secrets
 from decimal import Decimal, ROUND_HALF_UP
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
     ZoneInfo = None
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, or_, inspect, create_engine
+from sqlalchemy import text, or_, inspect
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 def open_browser():
@@ -23,7 +24,10 @@ IS_PROD = bool(
     or os.environ.get("RAILWAY_PUBLIC_DOMAIN")
     or os.environ.get("RENDER")
     or os.environ.get("FLY_APP_NAME")
+    or os.environ.get("VERCEL")
+    or (os.environ.get("VERCEL_ENV") or "").lower() == "production"
 )
+IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
 
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" and not IS_PROD:
     threading.Timer(1, open_browser).start()
@@ -64,18 +68,30 @@ def ensure_writable_dir(preferred_path, fallback_path):
         return fallback_path
 
 
-def test_database_url(db_url):
-    try:
-        connect_args = {}
-        if db_url.startswith("postgresql://"):
-            connect_args["connect_timeout"] = 5
-        probe_engine = create_engine(db_url, connect_args=connect_args)
-        with probe_engine.connect():
-            pass
-        probe_engine.dispose()
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
+def env_flag(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_database_url(raw_url):
+    db_url = (raw_url or "").strip()
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    return db_url
+
+
+def resolve_database_url(default_db):
+    for env_name in ("DATABASE_URL", "POSTGRES_URL_NON_POOLING", "POSTGRES_URL"):
+        candidate = normalize_database_url(os.environ.get(env_name))
+        if candidate:
+            return candidate
+    if IS_PROD:
+        raise RuntimeError(
+            "Database URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables."
+        )
+    return default_db
 
 # ---------------- UPLOADS ----------------
 UPLOAD_FOLDER = ensure_writable_dir(
@@ -809,20 +825,11 @@ instance_dir = ensure_writable_dir(
     os.path.join(TMP_BASE_DIR, "instance")
 )
 default_db = "sqlite:///" + os.path.join(instance_dir, "pharmacy.db")
-db_url = (os.environ.get("DATABASE_URL") or "").strip() or default_db
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
-if db_url != default_db:
-    db_ok, db_err = test_database_url(db_url)
-    if not db_ok:
-        app.logger.error(
-            "Primary DATABASE_URL is unreachable. Falling back to local SQLite. Error: %s",
-            db_err
-        )
-        db_url = default_db
+db_url = resolve_database_url(default_db)
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
+AUTO_DATA_BACKFILL_ON_BOOT = env_flag("AUTO_DATA_BACKFILL_ON_BOOT", not IS_SERVERLESS)
 
 # ---------------- INIT ----------------
 with app.app_context():
@@ -908,52 +915,56 @@ with app.app_context():
         ensure_column("appointment", "gender", "TEXT")
         ensure_column("appointment", "symptoms", "TEXT")
         ensure_column("appointment", "previous_visit_notes", "TEXT")
-        db.session.execute(text(
-            'UPDATE "appointment" '
-            'SET "payment_status" = CASE '
-            'WHEN "payment_status" IS NULL OR "payment_status" = \'\' THEN '
-            'CASE WHEN UPPER(COALESCE("payment_mode", \'\')) IN (\'PAID\', \'UNPAID\') '
-            'THEN UPPER("payment_mode") ELSE \'UNPAID\' END '
-            'ELSE UPPER("payment_status") END'
-        ))
-        db.session.execute(text(
-            'UPDATE "appointment" '
-            'SET "payment_mode" = CASE '
-            'WHEN UPPER(COALESCE("payment_mode", \'\')) IN (\'CASH\', \'ONLINE\', \'UPI\', \'CARD\') '
-            'THEN UPPER("payment_mode") ELSE \'CASH\' END'
-        ))
-        db.session.execute(text(
-            'UPDATE "appointment" '
-            'SET "doctor_discount" = 0 '
-            'WHERE "doctor_discount" IS NULL'
-        ))
-        db.session.execute(text(
-            'UPDATE "appointment" '
-            'SET "consultation_fee" = 0 '
-            'WHERE "consultation_fee" IS NULL'
-        ))
-        db.session.commit()
-        appointments_without_token = Appointment.query.filter(
-            Appointment.token_no.is_(None)
-        ).order_by(
-            Appointment.appointment_date.asc(),
-            Appointment.appointment_time.asc(),
-            Appointment.id.asc()
-        ).all()
-        if appointments_without_token:
-            token_tracker = {}
-            for appt in appointments_without_token:
-                if not appt.appointment_date:
-                    continue
-                day_key = appt.appointment_date.isoformat()
-                if day_key not in token_tracker:
-                    day_max = db.session.query(db.func.max(Appointment.token_no)).filter(
-                        Appointment.appointment_date == appt.appointment_date
-                    ).scalar() or 0
-                    token_tracker[day_key] = int(day_max)
-                token_tracker[day_key] += 1
-                appt.token_no = token_tracker[day_key]
+        if AUTO_DATA_BACKFILL_ON_BOOT:
+            db.session.execute(text(
+                'UPDATE "appointment" '
+                'SET "payment_status" = CASE '
+                'WHEN "payment_status" IS NULL OR "payment_status" = \'\' THEN '
+                'CASE WHEN UPPER(COALESCE("payment_mode", \'\')) IN (\'PAID\', \'UNPAID\') '
+                'THEN UPPER("payment_mode") ELSE \'UNPAID\' END '
+                'ELSE UPPER("payment_status") END'
+            ))
+            db.session.execute(text(
+                'UPDATE "appointment" '
+                'SET "payment_mode" = CASE '
+                'WHEN UPPER(COALESCE("payment_mode", \'\')) IN (\'CASH\', \'ONLINE\', \'UPI\', \'CARD\') '
+                'THEN UPPER("payment_mode") ELSE \'CASH\' END'
+            ))
+            db.session.execute(text(
+                'UPDATE "appointment" '
+                'SET "doctor_discount" = 0 '
+                'WHERE "doctor_discount" IS NULL'
+            ))
+            db.session.execute(text(
+                'UPDATE "appointment" '
+                'SET "consultation_fee" = 0 '
+                'WHERE "consultation_fee" IS NULL'
+            ))
             db.session.commit()
+
+            appointments_without_token = Appointment.query.filter(
+                Appointment.token_no.is_(None)
+            ).order_by(
+                Appointment.appointment_date.asc(),
+                Appointment.appointment_time.asc(),
+                Appointment.id.asc()
+            ).all()
+            if appointments_without_token:
+                token_tracker = {}
+                for appt in appointments_without_token:
+                    if not appt.appointment_date:
+                        continue
+                    day_key = appt.appointment_date.isoformat()
+                    if day_key not in token_tracker:
+                        day_max = db.session.query(db.func.max(Appointment.token_no)).filter(
+                            Appointment.appointment_date == appt.appointment_date
+                        ).scalar() or 0
+                        token_tracker[day_key] = int(day_max)
+                    token_tracker[day_key] += 1
+                    appt.token_no = token_tracker[day_key]
+                db.session.commit()
+        else:
+            app.logger.info("Skipping boot-time data backfill (AUTO_DATA_BACKFILL_ON_BOOT=0)")
 
         db.session.execute(text(
             'CREATE TABLE IF NOT EXISTS "sales_allocation" ('
@@ -968,47 +979,63 @@ with app.app_context():
         ))
         db.session.commit()
         ensure_column("sales_allocation", "returned_qty", "INTEGER")
-        missing_remaining = db.session.execute(text(
-            'SELECT COUNT(*) FROM "vendor_purchase_item" WHERE "remaining_qty" IS NULL'
-        )).scalar()
-        if missing_remaining:
-            db.session.execute(text('UPDATE "vendor_purchase_item" SET "remaining_qty" = 0'))
+        if AUTO_DATA_BACKFILL_ON_BOOT:
+            missing_remaining = db.session.execute(text(
+                'SELECT COUNT(*) FROM "vendor_purchase_item" WHERE "remaining_qty" IS NULL'
+            )).scalar()
+            if missing_remaining:
+                db.session.execute(text('UPDATE "vendor_purchase_item" SET "remaining_qty" = 0'))
+                db.session.commit()
+                medicines = Medicine.query.all()
+                for med in medicines:
+                    stock_left = to_int(med.qty)
+                    purchase_items = VendorPurchaseItem.query.filter(
+                        or_(
+                            VendorPurchaseItem.medicine_id == med.id,
+                            (VendorPurchaseItem.medicine_id.is_(None) &
+                             (VendorPurchaseItem.medicine_name == med.name) &
+                             (VendorPurchaseItem.batch == med.batch))
+                        )
+                    ).order_by(VendorPurchaseItem.created_at.desc(), VendorPurchaseItem.id.desc()).all()
+                    for pi in purchase_items:
+                        lot_qty = to_int(pi.qty) + to_int(pi.free_qty)
+                        if stock_left <= 0:
+                            pi.remaining_qty = 0
+                            continue
+                        take = lot_qty if stock_left >= lot_qty else stock_left
+                        pi.remaining_qty = take
+                        stock_left -= take
+                db.session.commit()
+            db.session.execute(text(
+                'UPDATE "sales_allocation" '
+                'SET "returned_qty" = 0 '
+                'WHERE "returned_qty" IS NULL'
+            ))
             db.session.commit()
-            medicines = Medicine.query.all()
-            for med in medicines:
-                stock_left = to_int(med.qty)
-                purchase_items = VendorPurchaseItem.query.filter(
-                    or_(
-                        VendorPurchaseItem.medicine_id == med.id,
-                        (VendorPurchaseItem.medicine_id.is_(None) &
-                         (VendorPurchaseItem.medicine_name == med.name) &
-                         (VendorPurchaseItem.batch == med.batch))
-                    )
-                ).order_by(VendorPurchaseItem.created_at.desc(), VendorPurchaseItem.id.desc()).all()
-                for pi in purchase_items:
-                    lot_qty = to_int(pi.qty) + to_int(pi.free_qty)
-                    if stock_left <= 0:
-                        pi.remaining_qty = 0
-                        continue
-                    take = lot_qty if stock_left >= lot_qty else stock_left
-                    pi.remaining_qty = take
-                    stock_left -= take
-            db.session.commit()
-        db.session.execute(text(
-            'UPDATE "sales_allocation" '
-            'SET "returned_qty" = 0 '
-            'WHERE "returned_qty" IS NULL'
-        ))
-        db.session.commit()
     except Exception:
         # If schema upgrade fails, app should still run
         db.session.rollback()
         pass
     if not User.query.filter_by(username="admin").first():
-        admin = User(username="admin", role="admin")
-        admin.set_password("admin123")
-        db.session.add(admin)
-        db.session.commit()
+        bootstrap_admin_password = (
+            (os.environ.get("DEFAULT_ADMIN_PASSWORD") or "").strip()
+            or (os.environ.get("ADMIN_PASSWORD") or "").strip()
+        )
+        if not bootstrap_admin_password and not IS_PROD:
+            bootstrap_admin_password = secrets.token_urlsafe(12)
+            app.logger.warning(
+                "Generated a local bootstrap admin password because DEFAULT_ADMIN_PASSWORD is missing: %s",
+                bootstrap_admin_password
+            )
+        if bootstrap_admin_password:
+            admin = User(username="admin", role="admin")
+            admin.set_password(bootstrap_admin_password)
+            db.session.add(admin)
+            db.session.commit()
+        else:
+            app.logger.warning(
+                "Admin bootstrap skipped because DEFAULT_ADMIN_PASSWORD/ADMIN_PASSWORD is not set."
+            )
 
 # ---------------- AUTH DECORATOR ----------------
 def set_login_session(user):
