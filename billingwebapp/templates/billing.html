@@ -354,24 +354,24 @@ tr.item-row {
         <div class="top-grid">
             <div class="field">
                 <label>Patient Name</label>
-                <input type="text" name="customer" required oninput="this.value=this.value.toUpperCase()" value="{{ restored_hold_bill.header.customer if restored_hold_bill else prefill.customer }}">
+                <input type="text" name="customer" required oninput="this.value=this.value.toUpperCase()" value="{{ restored_hold_bill.header.customer if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Mobile</label>
-                <input type="text" name="mobile" value="{{ restored_hold_bill.header.mobile if restored_hold_bill else prefill.mobile }}">
+                <input type="text" name="mobile" value="{{ restored_hold_bill.header.mobile if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Gender</label>
                 <select name="gender" required>
                     <option value="">Select</option>
-                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Male" %}selected{% elif not restored_hold_bill and prefill.gender|lower == "male" %}selected{% endif %}>Male</option>
-                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Female" %}selected{% elif not restored_hold_bill and prefill.gender|lower == "female" %}selected{% endif %}>Female</option>
-                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Other" %}selected{% elif not restored_hold_bill and prefill.gender|lower == "other" %}selected{% endif %}>Other</option>
+                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Male" %}selected{% endif %}>Male</option>
+                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Female" %}selected{% endif %}>Female</option>
+                    <option {% if restored_hold_bill and restored_hold_bill.header.gender == "Other" %}selected{% endif %}>Other</option>
                 </select>
             </div>
             <div class="field">
                 <label>Doctor</label>
-                <input type="text" name="doctor" value="{{ restored_hold_bill.header.doctor if restored_hold_bill else prefill.doctor }}">
+                <input type="text" name="doctor" value="{{ restored_hold_bill.header.doctor if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Sale Type</label>

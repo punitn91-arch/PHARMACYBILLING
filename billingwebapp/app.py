@@ -1,6 +1,6 @@
 # app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
-from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Consultation, ConsultationItem, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry
+from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry
 from datetime import datetime, time, timedelta, date
 from functools import wraps
 import webbrowser
@@ -1649,20 +1649,12 @@ def billing():
         else:
             restored_hold_bill = normalize_hold_bill_data(hold_bill)
 
-    prefill = {
-        "customer": (request.args.get("customer") or "").strip(),
-        "mobile": (request.args.get("mobile") or "").strip(),
-        "gender": (request.args.get("gender") or "").strip(),
-        "doctor": (request.args.get("doctor") or "").strip()
-    }
-
     return render_template(
         "billing.html",
         medicines=meds,
         medicine_names=medicine_names,
         medicine_data=medicine_data,
-        restored_hold_bill=restored_hold_bill,
-        prefill=prefill
+        restored_hold_bill=restored_hold_bill
     )
 
 
@@ -3724,14 +3716,6 @@ def appointments():
     payload = build_appointment_report_payload(request.args, flash_errors=True)
     appointments = payload["appointments"]
     list_only = (request.args.get("view") or "").strip().lower() == "list"
-    consultation_map = {}
-    appt_ids = [a.id for a in appointments]
-    if appt_ids:
-        consult_ids = {
-            c.appointment_id
-            for c in Consultation.query.filter(Consultation.appointment_id.in_(appt_ids)).all()
-        }
-        consultation_map = {appt_id: (appt_id in consult_ids) for appt_id in appt_ids}
 
     today = date.today()
     today_appointments = Appointment.query.filter(
@@ -3774,7 +3758,6 @@ def appointments():
         search_query=payload["search_query"],
         calendar_view=payload["calendar_view"],
         calendar_days=calendar_days,
-        consultation_map=consultation_map,
         today_counts=today_counts,
         today_revenue=today_revenue,
         week_revenue=week_revenue,
@@ -3960,34 +3943,6 @@ def build_appointment_calendar_days(appointments, calendar_view, focus_date):
             "slots": by_date.get(d, [])
         })
     return days
-
-
-def parse_prescription_items(form):
-    names = form.getlist("rx_name")
-    dosages = form.getlist("rx_dosage")
-    frequencies = form.getlist("rx_frequency")
-    durations = form.getlist("rx_duration")
-    instructions = form.getlist("rx_instructions")
-    row_count = max(
-        len(names),
-        len(dosages),
-        len(frequencies),
-        len(durations),
-        len(instructions)
-    )
-    items = []
-    for idx in range(row_count):
-        name = (names[idx] if idx < len(names) else "").strip()
-        if not name:
-            continue
-        items.append({
-            "medicine_name": name,
-            "dosage": (dosages[idx] if idx < len(dosages) else "").strip(),
-            "frequency": (frequencies[idx] if idx < len(frequencies) else "").strip(),
-            "duration": (durations[idx] if idx < len(durations) else "").strip(),
-            "instructions": (instructions[idx] if idx < len(instructions) else "").strip()
-        })
-    return items
 
 def build_appointment_report_payload(args, flash_errors=False):
     today = date.today()
@@ -4456,104 +4411,6 @@ def edit_appointment(id):
         patient_suggestions=patient_suggestions,
         edit_mode=True,
         appt_id=appointment.id
-    )
-
-
-@app.route("/appointments/<int:id>/consultation", methods=["GET", "POST"])
-@login_required
-def appointment_consultation(id):
-    appointment = Appointment.query.get_or_404(id)
-    consultation = Consultation.query.filter_by(appointment_id=appointment.id).first()
-    items = []
-    if consultation:
-        items = ConsultationItem.query.filter_by(
-            consultation_id=consultation.id
-        ).order_by(ConsultationItem.id.asc()).all()
-
-    if request.method == "POST":
-        follow_up_date = parse_date(request.form.get("follow_up_date"))
-        mark_completed = request.form.get("mark_completed") == "1"
-
-        if not consultation:
-            consultation = Consultation(
-                appointment_id=appointment.id,
-                patient_id=appointment.patient_id,
-                patient_name=appointment.patient_name,
-                mobile=appointment.mobile,
-                age=appointment.age,
-                gender=appointment.gender,
-                appointment_date=appointment.appointment_date,
-                appointment_time=appointment.appointment_time,
-                created_by=session.get("username")
-            )
-
-        consultation.patient_name = appointment.patient_name
-        consultation.mobile = appointment.mobile
-        consultation.age = appointment.age
-        consultation.gender = appointment.gender
-        consultation.appointment_date = appointment.appointment_date
-        consultation.appointment_time = appointment.appointment_time
-        consultation.complaints = (request.form.get("complaints") or "").strip()
-        consultation.diagnosis = (request.form.get("diagnosis") or "").strip()
-        consultation.advice = (request.form.get("advice") or "").strip()
-        consultation.bp = (request.form.get("bp") or "").strip()
-        consultation.pulse = (request.form.get("pulse") or "").strip()
-        consultation.temperature = (request.form.get("temperature") or "").strip()
-        consultation.weight = (request.form.get("weight") or "").strip()
-        consultation.spo2 = (request.form.get("spo2") or "").strip()
-        consultation.follow_up_date = follow_up_date
-        consultation.follow_up_notes = (request.form.get("follow_up_notes") or "").strip()
-        consultation.status = "COMPLETED" if mark_completed else "IN_PROGRESS"
-
-        db.session.add(consultation)
-        db.session.flush()
-
-        ConsultationItem.query.filter_by(consultation_id=consultation.id).delete()
-        for item in parse_prescription_items(request.form):
-            db.session.add(ConsultationItem(
-                consultation_id=consultation.id,
-                medicine_name=item["medicine_name"],
-                dosage=item["dosage"],
-                frequency=item["frequency"],
-                duration=item["duration"],
-                instructions=item["instructions"]
-            ))
-
-        if mark_completed:
-            appointment.status = "COMPLETED"
-            appointment.completed_at = clinic_now()
-
-        db.session.commit()
-        if request.form.get("save_and_print") == "1":
-            return redirect(url_for("print_consultation", id=appointment.id))
-        flash("Consultation saved successfully.", "success")
-        return redirect(url_for("appointment_consultation", id=appointment.id))
-
-    return render_template(
-        "consultation.html",
-        appointment=appointment,
-        consultation=consultation,
-        items=items
-    )
-
-
-@app.route("/appointments/<int:id>/consultation/print")
-@login_required
-def print_consultation(id):
-    appointment = Appointment.query.get_or_404(id)
-    consultation = Consultation.query.filter_by(appointment_id=appointment.id).first()
-    if not consultation:
-        flash("Consultation not found. Please save consultation first.", "warning")
-        return redirect(url_for("appointment_consultation", id=appointment.id))
-    items = ConsultationItem.query.filter_by(
-        consultation_id=consultation.id
-    ).order_by(ConsultationItem.id.asc()).all()
-    return render_template(
-        "consultation_print.html",
-        appointment=appointment,
-        consultation=consultation,
-        items=items,
-        today=clinic_now().strftime("%d-%m-%Y")
     )
 
 @app.route("/appointments/<int:id>/status", methods=["POST"])
