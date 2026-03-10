@@ -218,6 +218,54 @@ class Appointment(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     checked_in_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
+
+
+# ================= CONSULTATION =================
+class Consultation(db.Model):
+    __tablename__ = "consultation"
+
+    id = db.Column(db.Integer, primary_key=True)
+    appointment_id = db.Column(db.Integer, unique=True, index=True)
+    patient_id = db.Column(db.Integer, index=True)
+
+    patient_name = db.Column(db.String(120), nullable=False)
+    mobile = db.Column(db.String(20))
+    age = db.Column(db.Integer)
+    gender = db.Column(db.String(10))
+
+    appointment_date = db.Column(db.Date)
+    appointment_time = db.Column(db.Time)
+
+    complaints = db.Column(db.Text)
+    diagnosis = db.Column(db.Text)
+    advice = db.Column(db.Text)
+
+    bp = db.Column(db.String(20))
+    pulse = db.Column(db.String(20))
+    temperature = db.Column(db.String(20))
+    weight = db.Column(db.String(20))
+    spo2 = db.Column(db.String(20))
+
+    follow_up_date = db.Column(db.Date)
+    follow_up_notes = db.Column(db.Text)
+    status = db.Column(db.String(20), default="IN_PROGRESS")
+
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ConsultationItem(db.Model):
+    __tablename__ = "consultation_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    consultation_id = db.Column(db.Integer, nullable=False, index=True)
+
+    medicine_name = db.Column(db.String(150))
+    dosage = db.Column(db.String(50))
+    frequency = db.Column(db.String(50))
+    duration = db.Column(db.String(50))
+    instructions = db.Column(db.String(255))
     cancelled_at = db.Column(db.DateTime)
 
     @validates("age")

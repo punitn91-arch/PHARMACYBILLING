@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}OPD Consultation{% endblock %}
+{% block body %}
+<div class="appointments-ui pb-12 font-sans text-slate-900">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <h1 class="text-2xl font-bold">OPD Consultation</h1>
+            <p class="mt-1 text-sm text-slate-500">Appointment {{ appointment.appointment_no }} | Token {{ appointment.token_no or '-' }}</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="{{ url_for('appointments') }}" class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Back to Appointments</a>
+            <a href="{{ url_for('billing', customer=appointment.patient_name, mobile=appointment.mobile, gender=appointment.gender, doctor=appointment.doctor_name) }}" class="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700">Create Bill</a>
+        </div>
+    </div>
+
+    <div class="mt-6 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Patient</p>
+            <p class="mt-1 text-base font-semibold text-slate-900">{{ appointment.patient_name }}</p>
+            <p class="text-sm text-slate-500">Mobile: {{ appointment.mobile or '-' }}</p>
+        </div>
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Appointment</p>
+            <p class="mt-1 text-base font-semibold text-slate-900">
+                {{ appointment.appointment_date.strftime('%d-%m-%Y') if appointment.appointment_date else '-' }}
+                {{ appointment.appointment_time.strftime('%I:%M %p') if appointment.appointment_time else '' }}
+            </p>
+            <p class="text-sm text-slate-500">Doctor: {{ appointment.doctor_name }}</p>
+        </div>
+    </div>
+
+    <form method="POST" class="mt-6 space-y-6">
+        <div class="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-5">
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">BP</label>
+                <input name="bp" value="{{ consultation.bp if consultation else '' }}" placeholder="120/80" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Pulse</label>
+                <input name="pulse" value="{{ consultation.pulse if consultation else '' }}" placeholder="72" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Temp</label>
+                <input name="temperature" value="{{ consultation.temperature if consultation else '' }}" placeholder="98.6" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Weight</label>
+                <input name="weight" value="{{ consultation.weight if consultation else '' }}" placeholder="65" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">SpO2</label>
+                <input name="spo2" value="{{ consultation.spo2 if consultation else '' }}" placeholder="98" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Complaints / Symptoms</label>
+                <textarea name="complaints" rows="4" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">{{ consultation.complaints if consultation else appointment.symptoms }}</textarea>
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Diagnosis</label>
+                <textarea name="diagnosis" rows="4" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">{{ consultation.diagnosis if consultation else '' }}</textarea>
+            </div>
+            <div class="md:col-span-2">
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Advice</label>
+                <textarea name="advice" rows="3" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">{{ consultation.advice if consultation else '' }}</textarea>
+            </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Prescription</h3>
+                <button type="button" id="addRxRow" class="inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Add Medicine</button>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                    <thead class="text-xs uppercase tracking-wide text-slate-400">
+                        <tr>
+                            <th class="py-2 pr-3">Medicine</th>
+                            <th class="py-2 pr-3">Dosage</th>
+                            <th class="py-2 pr-3">Frequency</th>
+                            <th class="py-2 pr-3">Duration</th>
+                            <th class="py-2 pr-3">Instructions</th>
+                            <th class="py-2"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="rxRows" class="divide-y divide-slate-100">
+                        {% if items %}
+                        {% for item in items %}
+                        <tr>
+                            <td class="py-2 pr-3"><input name="rx_name" value="{{ item.medicine_name }}" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_dosage" value="{{ item.dosage }}" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_frequency" value="{{ item.frequency }}" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_duration" value="{{ item.duration }}" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_instructions" value="{{ item.instructions }}" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2"><button type="button" class="remove-rx text-xs text-red-600">Remove</button></td>
+                        </tr>
+                        {% endfor %}
+                        {% else %}
+                        <tr>
+                            <td class="py-2 pr-3"><input name="rx_name" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_dosage" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_frequency" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_duration" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2 pr-3"><input name="rx_instructions" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>
+                            <td class="py-2"><button type="button" class="remove-rx text-xs text-red-600">Remove</button></td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Follow Up Date</label>
+                <input type="date" name="follow_up_date" value="{{ consultation.follow_up_date.strftime('%Y-%m-%d') if consultation and consultation.follow_up_date else '' }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+            <div>
+                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Follow Up Notes</label>
+                <input name="follow_up_notes" value="{{ consultation.follow_up_notes if consultation else '' }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm">
+            </div>
+            <div class="md:col-span-2">
+                <label class="inline-flex items-center gap-2 text-sm text-slate-600">
+                    <input type="checkbox" name="mark_completed" value="1" {% if consultation and consultation.status == 'COMPLETED' %}checked{% endif %}>
+                    Mark appointment as completed
+                </label>
+            </div>
+        </div>
+
+        <input type="hidden" name="save_and_print" id="saveAndPrint" value="0">
+        <div class="flex flex-wrap gap-3">
+            <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg bg-brand px-4 text-sm font-semibold text-white shadow-sm">Save Consultation</button>
+            <button type="submit" data-print="1" class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Save & Print</button>
+        </div>
+    </form>
+</div>
+
+<script>
+(function () {
+    const addBtn = document.getElementById('addRxRow');
+    const rows = document.getElementById('rxRows');
+    function bindRemove(btn) {
+        btn.addEventListener('click', function () {
+            const tr = btn.closest('tr');
+            if (tr) {
+                tr.remove();
+            }
+        });
+    }
+    if (rows) {
+        rows.querySelectorAll('.remove-rx').forEach(bindRemove);
+    }
+    if (addBtn && rows) {
+        addBtn.addEventListener('click', function () {
+            const tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td class="py-2 pr-3"><input name="rx_name" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>' +
+                '<td class="py-2 pr-3"><input name="rx_dosage" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>' +
+                '<td class="py-2 pr-3"><input name="rx_frequency" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>' +
+                '<td class="py-2 pr-3"><input name="rx_duration" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>' +
+                '<td class="py-2 pr-3"><input name="rx_instructions" class="h-9 w-full rounded-md border border-slate-200 px-2 text-sm"></td>' +
+                '<td class="py-2"><button type="button" class="remove-rx text-xs text-red-600">Remove</button></td>';
+            rows.appendChild(tr);
+            bindRemove(tr.querySelector('.remove-rx'));
+        });
+    }
+
+    const savePrintButtons = document.querySelectorAll('button[data-print="1"]');
+    savePrintButtons.forEach((btn) => {
+        btn.addEventListener('click', function () {
+            const hidden = document.getElementById('saveAndPrint');
+            if (hidden) hidden.value = '1';
+        });
+    });
+})();
+</script>
+{% endblock %}

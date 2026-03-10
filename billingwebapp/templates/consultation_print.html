@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Prescription</title>
+    <style>
+        body { font-family: Arial, sans-serif; color: #111; margin: 24px; }
+        h1 { margin: 0 0 8px; font-size: 20px; }
+        .muted { color: #666; font-size: 12px; }
+        .section { margin-top: 16px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { border-bottom: 1px solid #e5e5e5; padding: 6px 4px; text-align: left; font-size: 12px; }
+        th { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; color: #555; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        @media print { .no-print { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="no-print" style="text-align:right; margin-bottom: 8px;">
+        <button onclick="window.print()">Print</button>
+    </div>
+
+    <h1>Consultation & Prescription</h1>
+    <div class="muted">Date: {{ today }}</div>
+
+    <div class="section grid">
+        <div>
+            <strong>Patient:</strong> {{ appointment.patient_name }}<br>
+            <strong>Mobile:</strong> {{ appointment.mobile or '-' }}<br>
+            <strong>Gender:</strong> {{ appointment.gender or '-' }}
+        </div>
+        <div>
+            <strong>Appointment:</strong>
+            {{ appointment.appointment_date.strftime('%d-%m-%Y') if appointment.appointment_date else '-' }}
+            {{ appointment.appointment_time.strftime('%I:%M %p') if appointment.appointment_time else '' }}<br>
+            <strong>Doctor:</strong> {{ appointment.doctor_name }}
+        </div>
+    </div>
+
+    <div class="section grid">
+        <div>
+            <strong>BP:</strong> {{ consultation.bp or '-' }}<br>
+            <strong>Pulse:</strong> {{ consultation.pulse or '-' }}<br>
+            <strong>Temp:</strong> {{ consultation.temperature or '-' }}
+        </div>
+        <div>
+            <strong>Weight:</strong> {{ consultation.weight or '-' }}<br>
+            <strong>SpO2:</strong> {{ consultation.spo2 or '-' }}
+        </div>
+    </div>
+
+    <div class="section">
+        <strong>Complaints / Symptoms</strong>
+        <div class="muted">{{ consultation.complaints or '-' }}</div>
+    </div>
+
+    <div class="section">
+        <strong>Diagnosis</strong>
+        <div class="muted">{{ consultation.diagnosis or '-' }}</div>
+    </div>
+
+    <div class="section">
+        <strong>Advice</strong>
+        <div class="muted">{{ consultation.advice or '-' }}</div>
+    </div>
+
+    <div class="section">
+        <strong>Prescription</strong>
+        <table>
+            <thead>
+                <tr>
+                    <th>Medicine</th>
+                    <th>Dosage</th>
+                    <th>Frequency</th>
+                    <th>Duration</th>
+                    <th>Instructions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.medicine_name }}</td>
+                    <td>{{ item.dosage or '-' }}</td>
+                    <td>{{ item.frequency or '-' }}</td>
+                    <td>{{ item.duration or '-' }}</td>
+                    <td>{{ item.instructions or '-' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="muted">No medicines prescribed.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="section">
+        <strong>Follow Up</strong>
+        <div class="muted">
+            Date: {{ consultation.follow_up_date.strftime('%d-%m-%Y') if consultation.follow_up_date else '-' }}
+            {% if consultation.follow_up_notes %}<br>Notes: {{ consultation.follow_up_notes }}{% endif %}
+        </div>
+    </div>
+</body>
+</html>
