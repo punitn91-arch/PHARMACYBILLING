@@ -3765,7 +3765,6 @@ def customer():
 
 @app.route("/appointments")
 @login_required
-@invoice_access_required
 def appointments():
     payload = build_appointment_report_payload(request.args, flash_errors=True)
     appointments = payload["appointments"]
@@ -4217,7 +4216,6 @@ def get_patient_suggestions(limit=200):
 
 @app.route("/appointments/add", methods=["GET", "POST"])
 @login_required
-@invoice_access_required
 def add_appointment():
     form_data = build_appointment_form_data()
     patient_suggestions = get_patient_suggestions()
@@ -4349,7 +4347,6 @@ def add_appointment():
 
 @app.route("/appointments/<int:id>/edit", methods=["GET", "POST"])
 @login_required
-@invoice_access_required
 def edit_appointment(id):
     appointment = Appointment.query.get_or_404(id)
     form_data = build_appointment_form_data(appointment)
@@ -4471,7 +4468,6 @@ def edit_appointment(id):
 
 @app.route("/appointments/<int:id>/status", methods=["POST"])
 @login_required
-@invoice_access_required
 def update_appointment_status(id):
     appointment = Appointment.query.get_or_404(id)
     new_status = (request.form.get("status") or "").strip().upper()
@@ -4513,7 +4509,6 @@ def update_appointment_status(id):
 
 @app.route("/appointments/<int:id>/payment/paid", methods=["POST"])
 @login_required
-@invoice_access_required
 def mark_appointment_paid(id):
     appointment = Appointment.query.get_or_404(id)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
@@ -4527,7 +4522,6 @@ def mark_appointment_paid(id):
 
 @app.route("/appointments/delete/<int:id>", methods=["POST"])
 @login_required
-@invoice_access_required
 def delete_appointment(id):
     appointment = Appointment.query.get_or_404(id)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
