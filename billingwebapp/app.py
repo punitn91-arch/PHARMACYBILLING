@@ -1149,7 +1149,38 @@ def change_password():
 def admin_required(f):
     @wraps(f)
     def w(*args, **kwargs):
-        if session.get("role") != "admin":
+        if session.get("role") != "admin" and not session.get("can_manage_users"):
+            flash("Access denied", "danger")
+            return redirect("/")
+        return f(*args, **kwargs)
+    return w
+
+def invoice_access_required(f):
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = User.query.get(session.get("user_id"))
+        if not user:
+            flash("Access denied", "danger")
+            return redirect("/")
+        if user.role != "admin" and not user.can_invoice_action:
+            flash("Access denied", "danger")
+            return redirect("/")
+        return f(*args, **kwargs)
+    return w
+
+def inventory_access_required(f):
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = User.query.get(session.get("user_id"))
+        if not user:
+            flash("Access denied", "danger")
+            return redirect("/")
+        if user.role != "admin" and not (
+            user.can_view_medicine
+            or user.can_add_medicine
+            or user.can_edit_medicine
+            or user.can_delete_medicine
+        ):
             flash("Access denied", "danger")
             return redirect("/")
         return f(*args, **kwargs)
@@ -1442,6 +1473,7 @@ def delete_medicine(id):
 # ---------------- BILLING ----------------
 @app.route("/billing", methods=["GET", "POST"])
 @login_required
+@invoice_access_required
 def billing():
     meds = Medicine.query.order_by(Medicine.name).all()
     medicine_names = sorted({m.name for m in meds})
@@ -1661,6 +1693,7 @@ def billing():
 # ---------------- RETURN MEDICINE ----------------
 @app.route("/return-medicine", methods=["GET", "POST"])
 @login_required
+@invoice_access_required
 def return_medicine():
     invoice = None
     items_payload = []
@@ -1987,6 +2020,7 @@ def return_medicine():
 # ---------------- RETURN INVOICE ----------------
 @app.route("/return-invoice/<int:id>")
 @login_required
+@invoice_access_required
 def return_invoice(id):
     ret = Return.query.get_or_404(id)
     items = ReturnItem.query.filter_by(return_id=id).all()
@@ -2007,6 +2041,7 @@ def return_invoice(id):
 # ---------------- HOLD BILL ----------------
 @app.route("/billing/hold", methods=["POST"])
 @login_required
+@invoice_access_required
 def hold_bill():
     items = build_hold_items_from_form(request.form)
     hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0)
@@ -2064,12 +2099,14 @@ def hold_bill():
 # ---------------- PENDING BILLS ----------------
 @app.route("/pending-bills")
 @login_required
+@invoice_access_required
 def pending_bills():
     bills = HoldBill.query.order_by(HoldBill.id.desc()).all()
     return render_template("pending_bills.html", bills=bills)
 
 @app.route("/restore-bill/<int:id>")
 @login_required
+@invoice_access_required
 def restore_bill(id):
     hb = HoldBill.query.get(id)
     if not hb:
@@ -2079,6 +2116,7 @@ def restore_bill(id):
 
 @app.route("/delete-hold/<int:id>")
 @login_required
+@invoice_access_required
 def delete_hold(id):
     db.session.delete(HoldBill.query.get_or_404(id))
     db.session.commit()
@@ -2087,6 +2125,7 @@ def delete_hold(id):
 # ---------------- CANCEL RETURN BILL ----------------
 @app.route("/return-bill/delete/<int:id>")
 @login_required
+@invoice_access_required
 def delete_return_bill(id):
     ret = Return.query.get_or_404(id)
     if ret.is_cancelled:
@@ -2139,6 +2178,7 @@ def delete_return_bill(id):
 # ---------------- RETURN BILLS LIST ----------------
 @app.route("/return-bills")
 @login_required
+@invoice_access_required
 def return_bills():
     returns = Return.query.order_by(Return.id.desc()).all()
     return render_template("return_bills.html", returns=returns)
@@ -2146,6 +2186,7 @@ def return_bills():
 # ---------------- INVOICES LIST ----------------
 @app.route("/invoices")
 @login_required
+@invoice_access_required
 def invoices():
     from_str = request.args.get("from", "").strip()
     to_str = request.args.get("to", "").strip()
@@ -2170,6 +2211,7 @@ def invoices():
 # ---------------- PART-3: VIEW / PRINT INVOICE ----------------
 @app.route("/invoice/<int:id>")
 @login_required
+@invoice_access_required
 def view_invoice(id):
     inv = Invoice.query.get_or_404(id)
     items = InvoiceItem.query.filter_by(invoice_id=id).all()
@@ -2194,6 +2236,7 @@ def view_invoice(id):
     )
 @app.route("/invoice/edit/<int:id>", methods=["GET", "POST"])
 @login_required
+@invoice_access_required
 def edit_invoice(id):
     user = User.query.get(session.get("user_id"))
     if not user:
@@ -2399,6 +2442,7 @@ def salt():
 
 @app.route("/vendor")
 @login_required
+@inventory_access_required
 def vendor():
     vendors = Vendor.query.order_by(Vendor.name).all()
     return render_template("vendor.html", vendors=vendors)
@@ -2482,6 +2526,7 @@ def vendor_note_invoice(note_id):
 
 @app.route("/vendor/reports")
 @login_required
+@inventory_access_required
 def vendor_reports():
     vendors = Vendor.query.order_by(Vendor.name).all()
     purchase_summary = []
@@ -2533,6 +2578,7 @@ def vendor_reports():
 
 @app.route("/vendor/medicine-history")
 @login_required
+@inventory_access_required
 def vendor_medicine_history():
     query_name = (request.args.get("name") or "").strip()
     items_query = VendorPurchaseItem.query
@@ -2561,6 +2607,7 @@ def vendor_medicine_history():
 
 @app.route("/vendor/add", methods=["GET", "POST"])
 @login_required
+@inventory_access_required
 def add_vendor():
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()
@@ -2624,6 +2671,7 @@ def add_vendor():
 
 @app.route("/vendor/edit/<int:id>", methods=["GET", "POST"])
 @login_required
+@inventory_access_required
 def edit_vendor(id):
     v = Vendor.query.get_or_404(id)
 
@@ -2720,6 +2768,7 @@ def edit_vendor(id):
 
 @app.route("/vendor/<int:id>/purchase", methods=["POST"])
 @login_required
+@inventory_access_required
 def add_vendor_purchase(id):
     vendor = Vendor.query.get_or_404(id)
 
@@ -2928,6 +2977,7 @@ def add_vendor_purchase(id):
 
 @app.route("/vendor/purchase/<int:purchase_id>")
 @login_required
+@inventory_access_required
 def view_vendor_purchase(purchase_id):
     purchase = VendorPurchase.query.get_or_404(purchase_id)
     vendor = Vendor.query.get(purchase.vendor_id)
@@ -2943,6 +2993,7 @@ def view_vendor_purchase(purchase_id):
 
 @app.route("/vendor/purchase/delete/<int:purchase_id>")
 @login_required
+@inventory_access_required
 def delete_vendor_purchase(purchase_id):
     purchase = VendorPurchase.query.get_or_404(purchase_id)
     vendor = Vendor.query.get(purchase.vendor_id)
@@ -3064,6 +3115,7 @@ def delete_vendor_purchase(purchase_id):
 
 @app.route("/vendor/purchase-item/edit/<int:item_id>", methods=["GET", "POST"])
 @login_required
+@inventory_access_required
 def edit_vendor_purchase_item(item_id):
     item = VendorPurchaseItem.query.get_or_404(item_id)
     purchase = VendorPurchase.query.get(item.purchase_id)
@@ -3694,6 +3746,7 @@ def api_delete_vendor_note(note_id):
 
 @app.route("/vendor/delete/<int:id>")
 @login_required
+@inventory_access_required
 def delete_vendor(id):
     v = Vendor.query.get_or_404(id)
     has_purchases = VendorPurchase.query.filter_by(vendor_id=v.id).first()
@@ -3712,6 +3765,7 @@ def customer():
 
 @app.route("/appointments")
 @login_required
+@invoice_access_required
 def appointments():
     payload = build_appointment_report_payload(request.args, flash_errors=True)
     appointments = payload["appointments"]
@@ -4163,6 +4217,7 @@ def get_patient_suggestions(limit=200):
 
 @app.route("/appointments/add", methods=["GET", "POST"])
 @login_required
+@invoice_access_required
 def add_appointment():
     form_data = build_appointment_form_data()
     patient_suggestions = get_patient_suggestions()
@@ -4294,6 +4349,7 @@ def add_appointment():
 
 @app.route("/appointments/<int:id>/edit", methods=["GET", "POST"])
 @login_required
+@invoice_access_required
 def edit_appointment(id):
     appointment = Appointment.query.get_or_404(id)
     form_data = build_appointment_form_data(appointment)
@@ -4415,6 +4471,7 @@ def edit_appointment(id):
 
 @app.route("/appointments/<int:id>/status", methods=["POST"])
 @login_required
+@invoice_access_required
 def update_appointment_status(id):
     appointment = Appointment.query.get_or_404(id)
     new_status = (request.form.get("status") or "").strip().upper()
@@ -4456,6 +4513,7 @@ def update_appointment_status(id):
 
 @app.route("/appointments/<int:id>/payment/paid", methods=["POST"])
 @login_required
+@invoice_access_required
 def mark_appointment_paid(id):
     appointment = Appointment.query.get_or_404(id)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
@@ -4469,6 +4527,7 @@ def mark_appointment_paid(id):
 
 @app.route("/appointments/delete/<int:id>", methods=["POST"])
 @login_required
+@invoice_access_required
 def delete_appointment(id):
     appointment = Appointment.query.get_or_404(id)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
@@ -5235,6 +5294,7 @@ def edit_user(user_id):
         user.can_view_stock_history = True if request.form.get("can_view_stock_history") else False
         user.can_view_reports = True if request.form.get("can_view_reports") else False
         user.can_manage_users = True if request.form.get("can_manage_users") else False
+        user.session_version = int(user.session_version or 0) + 1
 
         db.session.commit()
         flash("User updated successfully")
@@ -5292,6 +5352,7 @@ def change_user_password(user_id):
             flash("New password and confirm password do not match", "danger")
             return redirect(request.url)
         user.set_password(new_password)
+        user.session_version = int(user.session_version or 0) + 1
         db.session.commit()
         flash("Password updated")
         return redirect("/users")

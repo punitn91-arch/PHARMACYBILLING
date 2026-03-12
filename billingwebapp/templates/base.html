@@ -738,7 +738,7 @@
         {% if session.get("role") == "admin" or session.get("can_view_reports") %}
 <a href="/reports">📊 Reports</a>
 {% endif %}
-        {% if session.get("role") == "admin" %}
+        {% if session.get("role") == "admin" or session.get("can_manage_users") %}
 <h4>System</h4>
 <a href="/users">Users</a>
 {% endif %}
