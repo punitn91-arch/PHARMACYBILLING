@@ -57,7 +57,7 @@
 
     <div class="card-box">
         <div class="card-title">Today's Sale</div>
-        <div class="card-value blue">₹ {{ today_sale }}</div>
+        <div class="card-value blue">₹ {{ "%.3f"|format((today_sale or 0)|float) }}</div>
         <small>Bills Today: {{ bills_today }}</small>
     </div>
 
@@ -89,13 +89,13 @@
 
     <div class="card-box">
         <div class="card-title">Inventory Value</div>
-        <div class="card-value green">₹ {{ inventory_value }}</div>
+        <div class="card-value green">₹ {{ "%.3f"|format((inventory_value or 0)|float) }}</div>
         <small>Well stocked</small>
     </div>
 
     <div class="card-box">
         <div class="card-title">GST Collected (Today)</div>
-        <div class="card-value blue">₹ {{ gst_collected }}</div>
+        <div class="card-value blue">₹ {{ "%.3f"|format((gst_collected or 0)|float) }}</div>
         <small>For reporting only</small>
     </div>
 
