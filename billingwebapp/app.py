@@ -2261,127 +2261,28 @@ def edit_invoice(id):
     if user.role != "admin" and not (user.can_edit_invoice or user.can_invoice_action):
         flash("Access denied", "danger")
         return redirect("/invoices")
-    flash("Invoice editing is disabled to protect batch-wise stock. Use Return Bill for changes.", "warning")
-    return redirect("/invoices")
     invoice = Invoice.query.get_or_404(id)
     items = InvoiceItem.query.filter_by(invoice_id=id).all()
-    medicines = Medicine.query.order_by(Medicine.name).all()
+    payment_modes = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
 
     if request.method == "POST":
-        has_returns = Return.query.filter(Return.invoice_id == invoice.id, Return.is_cancelled == False).first()
-        if has_returns:
-            flash("Cannot edit invoice with returns. Cancel returns first.", "danger")
-            return redirect("/invoices")
+        customer = (request.form.get("customer") or "").strip()
+        mobile = (request.form.get("mobile") or "").strip()
+        payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
 
-        # 1) Old stock wapas add + FIFO restore
-        for it in items:
-            med = Medicine.query.filter_by(name=it.name, batch=it.batch).first()
-            if med:
-                med.qty += it.qty
-                history = StockHistory(
-                    medicine_id=med.id,
-                    medicine_name=med.name,
-                    batch=med.batch,
-                    action="RETURN",
-                    stock_before=med.qty - it.qty,
-                    qty_change=it.qty,
-                    stock_after=med.qty,
-                    user=session.get("username"),
-                    remark="Invoice edited (stock returned)"
-                )
-                db.session.add(history)
+        if not customer:
+            flash("Patient name is required.", "danger")
+            return redirect(f"/invoice/edit/{invoice.id}")
+        if payment_mode not in payment_modes:
+            flash("Invalid payment mode selected.", "danger")
+            return redirect(f"/invoice/edit/{invoice.id}")
 
-            allocations = SalesAllocation.query.filter_by(invoice_item_id=it.id).all()
-            for alloc in allocations:
-                sold_qty = to_int(alloc.qty) - to_int(alloc.returned_qty)
-                if sold_qty <= 0:
-                    continue
-                if alloc.purchase_item_id:
-                    pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
-                    if pi:
-                        pi.remaining_qty = to_int(pi.remaining_qty) + sold_qty
-            SalesAllocation.query.filter_by(invoice_item_id=it.id).delete()
-
-        # 2) Old invoice items delete
-        InvoiceItem.query.filter_by(invoice_id=id).delete()
-
-        subtotal = 0
-        discount_total = 0
-
-        meds = request.form.getlist("medicine")
-        qtys = request.form.getlist("qty")
-        discs = request.form.getlist("discount")
-
-        for mid, qty, disc in zip(meds, qtys, discs):
-            if not mid:
-                continue
-            med = Medicine.query.get(int(mid))
-            qty = int(qty or 0)
-            disc = float(disc or 0)
-
-            if qty > med.qty:
-                flash(f"Not enough stock for {med.name}", "danger")
-                return redirect(f"/invoice/edit/{invoice.id}")
-
-            amount = qty * med.mrp
-            disc_amt = amount * disc / 100
-            net = amount - disc_amt
-
-            subtotal += net
-            discount_total += disc_amt
-
-            old_stock = med.qty
-            med.qty -= qty
-
-            history = StockHistory(
-                medicine_id=med.id,
-                medicine_name=med.name,
-                batch=med.batch,
-                action="SALE",
-                stock_before=old_stock,
-                qty_change=-qty,
-                stock_after=med.qty,
-                user=session.get("username"),
-                remark="Invoice edited (sale)"
-            )
-            db.session.add(history)
-
-            allocations = fifo_consume(med, qty)
-            cost_amount = sum(a["qty"] * a["cost_rate"] for a in allocations)
-            cost_price = round(cost_amount / qty, 4) if qty else 0
-
-            inv_item = InvoiceItem(
-                invoice_id=invoice.id,
-                name=med.name,
-                qty=qty,
-                price=med.mrp,
-                batch=med.batch,
-                expiry=med.expiry,
-                discount_percent=disc,
-                discount_amount=disc_amt,
-                net_amount=net,
-                cost_price=cost_price,
-                cost_amount=cost_amount
-            )
-            db.session.add(inv_item)
-            db.session.flush()
-            for alloc in allocations:
-                db.session.add(SalesAllocation(
-                    invoice_item_id=inv_item.id,
-                    purchase_item_id=alloc["purchase_item"].id if alloc["purchase_item"] else None,
-                    qty=alloc["qty"],
-                    cost_rate=alloc["cost_rate"],
-                    returned_qty=0
-                ))
-
-        invoice.subtotal = subtotal
-        invoice.discount = discount_total
-        invoice.cgst = round(subtotal * 0.025, 2)
-        invoice.sgst = round(subtotal * 0.025, 2)
-        invoice.total = subtotal   # GST add nahi ho raha
+        invoice.customer = customer
+        invoice.mobile = mobile
+        invoice.payment_mode = payment_mode
 
         db.session.commit()
-        flash("Invoice updated successfully", "success")
+        flash("Invoice details updated successfully.", "success")
         return redirect(f"/invoice/{invoice.id}")
 
 
@@ -2389,7 +2290,7 @@ def edit_invoice(id):
         "edit_invoice.html",
         invoice=invoice,
         items=items,
-        medicines=medicines
+        payment_modes=payment_modes
     )
 @app.route("/delete-invoice/<int:id>")
 @login_required

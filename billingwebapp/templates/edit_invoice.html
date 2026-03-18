@@ -1,41 +1,197 @@
 {% extends "base.html" %}
+{% block title %}Edit Invoice{% endblock %}
+
 {% block body %}
+<style>
+.edit-shell {
+    max-width: 1100px;
+    margin: 0 auto;
+}
 
-<h3>Edit Invoice (Admin Only)</h3>
+.edit-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+    padding: 22px;
+    margin-bottom: 18px;
+}
 
-<form method="POST">
-<table class="table">
-<tr>
-    <th>Medicine</th>
-    <th>Qty</th>
-    <th>Discount %</th>
-</tr>
+.edit-title {
+    margin: 0 0 8px;
+    color: #0f4fbf;
+}
 
-{% for i in items %}
-<tr>
-    <td>
-        <select name="medicine">
-            {% for m in medicines %}
-            <option value="{{ m.id }}"
-                {% if m.name == i.name %}selected{% endif %}>
-                {{ m.name }}
-            </option>
+.edit-note {
+    margin: 0;
+    color: #55627a;
+    font-size: 14px;
+}
+
+.meta-grid,
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+}
+
+.meta-box {
+    border: 1px solid #d9e2f2;
+    background: #f8fbff;
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+
+.meta-box small,
+.field label {
+    display: block;
+    margin-bottom: 6px;
+    color: #5e6d85;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.meta-box strong {
+    color: #10223e;
+    font-size: 16px;
+}
+
+.field input,
+.field select {
+    width: 100%;
+    border: 1px solid #c8d3e6;
+    border-radius: 10px;
+    padding: 11px 12px;
+    font-size: 15px;
+    background: #fff;
+}
+
+.readonly-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 14px;
+}
+
+.readonly-table th,
+.readonly-table td {
+    border-bottom: 1px solid #e7edf7;
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 14px;
+}
+
+.readonly-table th {
+    color: #0f4fbf;
+    background: #f5f9ff;
+}
+
+.page-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+}
+
+.btn-primary,
+.btn-secondary {
+    display: inline-block;
+    border: 0;
+    border-radius: 10px;
+    padding: 11px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.btn-primary {
+    background: #0f62fe;
+    color: #fff;
+}
+
+.btn-secondary {
+    background: #eef3fb;
+    color: #23406c;
+}
+</style>
+
+<div class="edit-shell">
+    <div class="edit-card">
+        <h3 class="edit-title">Edit Invoice Details</h3>
+        <p class="edit-note">Medicine rows read-only rahenge. Yahan se sirf patient name, mobile number aur payment mode update hoga.</p>
+    </div>
+
+    <div class="edit-card">
+        <div class="meta-grid">
+            <div class="meta-box">
+                <small>Invoice No</small>
+                <strong>{{ invoice.invoice_no }}</strong>
+            </div>
+            <div class="meta-box">
+                <small>Date</small>
+                <strong>{{ invoice.created_at.strftime('%d-%m-%Y') if invoice.created_at else '-' }}</strong>
+            </div>
+            <div class="meta-box">
+                <small>Total</small>
+                <strong>Rs {{ "%.2f"|format(invoice.total or 0) }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="edit-card">
+        <form method="POST">
+            <div class="form-grid">
+                <div class="field">
+                    <label for="customer">Patient Name</label>
+                    <input id="customer" type="text" name="customer" value="{{ invoice.customer or '' }}" required>
+                </div>
+                <div class="field">
+                    <label for="mobile">Mobile Number</label>
+                    <input id="mobile" type="text" name="mobile" value="{{ invoice.mobile or '' }}">
+                </div>
+                <div class="field">
+                    <label for="payment_mode">Payment Mode</label>
+                    <select id="payment_mode" name="payment_mode" required>
+                        {% for mode in payment_modes %}
+                        <option value="{{ mode }}" {% if (invoice.payment_mode or 'CASH')|upper == mode %}selected{% endif %}>{{ mode }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="page-actions">
+                <button class="btn-primary" type="submit">Update Invoice</button>
+                <a class="btn-secondary" href="/invoice/{{ invoice.id }}">Cancel</a>
+            </div>
+        </form>
+    </div>
+
+    <div class="edit-card">
+        <h4 class="edit-title" style="font-size:22px;">Invoice Items</h4>
+        <p class="edit-note">Ye list sirf reference ke liye hai. Stock-safe edit ke liye medicine lines yahan change nahi hongi.</p>
+        <table class="readonly-table">
+            <tr>
+                <th>Medicine</th>
+                <th>Batch</th>
+                <th>Expiry</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Discount %</th>
+                <th>Net Amount</th>
+            </tr>
+            {% for item in items %}
+            <tr>
+                <td>{{ item.name }}</td>
+                <td>{{ item.batch or '-' }}</td>
+                <td>{{ item.expiry or '-' }}</td>
+                <td>{{ item.qty }}</td>
+                <td>Rs {{ "%.2f"|format(item.price or 0) }}</td>
+                <td>{{ item.discount_percent or 0 }}</td>
+                <td>Rs {{ "%.2f"|format(item.net_amount or 0) }}</td>
+            </tr>
             {% endfor %}
-        </select>
-    </td>
-
-    <td>
-        <input type="number" name="qty" value="{{ i.qty }}">
-    </td>
-
-    <td>
-        <input type="number" name="discount" value="{{ i.discount_percent }}">
-    </td>
-</tr>
-{% endfor %}
-</table>
-
-<button class="btn btn-success">💾 Update Invoice</button>
-</form>
-
+        </table>
+    </div>
+</div>
 {% endblock %}
