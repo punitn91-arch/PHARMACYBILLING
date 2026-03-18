@@ -1754,7 +1754,7 @@ def return_medicine():
                 sgst_amt = tax_amt / 2
                 net_amt = amount
 
-                total_refund += amount + tax_amt
+                total_refund += net_amt
                 total_cgst += cgst_amt
                 total_sgst += sgst_amt
 
@@ -1874,6 +1874,9 @@ def return_medicine():
         gst_rate = 0
         if invoice.subtotal and (invoice.cgst or invoice.sgst):
             gst_rate = ((invoice.cgst + invoice.sgst) / invoice.subtotal) * 100
+        refund_multiplier = 1.0
+        if to_float(invoice.subtotal) > 0 and to_float(invoice.total) > 0:
+            refund_multiplier = to_float(invoice.total) / to_float(invoice.subtotal)
 
         ret = Return(
             invoice_id=invoice.id,
@@ -1961,7 +1964,7 @@ def return_medicine():
 
         ret.cgst = round(total_cgst, 2)
         ret.sgst = round(total_sgst, 2)
-        ret.total_refund = round(subtotal_return + total_cgst + total_sgst, 2)
+        ret.total_refund = round(subtotal_return * refund_multiplier, 2)
         db.session.commit()
         flash("Medicine returned successfully. Stock updated & Return Bill generated.", "success")
         return redirect(f"/return-invoice/{ret.id}")
@@ -2026,7 +2029,7 @@ def return_invoice(id):
     items = ReturnItem.query.filter_by(return_id=id).all()
     return_no = ret.return_no or f"RB-{ret.id:06d}"
     subtotal = sum((i.net_amount or 0) for i in items)
-    total_refund = ret.total_refund or round(subtotal + (ret.cgst or 0) + (ret.sgst or 0), 2)
+    total_refund = ret.total_refund or round(subtotal, 2)
 
     return render_template(
         "return_invoice.html",
@@ -2123,7 +2126,7 @@ def delete_hold(id):
     return redirect("/pending-bills")
 
 # ---------------- CANCEL RETURN BILL ----------------
-@app.route("/return-bill/delete/<int:id>")
+@app.route("/return-bill/delete/<int:id>", methods=["POST"])
 @login_required
 @invoice_access_required
 def delete_return_bill(id):
@@ -2133,6 +2136,8 @@ def delete_return_bill(id):
         return redirect("/return-bills")
 
     items = ReturnItem.query.filter_by(return_id=id).all()
+    item_medicines = {}
+    required_stock = {}
     for it in items:
         med = None
         if it.medicine_id:
@@ -2142,12 +2147,23 @@ def delete_return_bill(id):
         if not med:
             flash(f"Medicine not found for {it.medicine_name} ({it.batch}).", "danger")
             return redirect("/return-bills")
-        if med.qty < it.qty:
-            flash(f"Cannot cancel: stock for {med.name} ({med.batch}) is less than return qty.", "danger")
+        item_medicines[it.id] = med
+        required_stock[med.id] = {
+            "med": med,
+            "qty": required_stock.get(med.id, {}).get("qty", 0) + to_int(it.qty)
+        }
+
+    for entry in required_stock.values():
+        med = entry["med"]
+        if to_int(med.qty) < entry["qty"]:
+            flash(
+                f"Cannot cancel: stock for {med.name} ({med.batch}) is less than total return qty.",
+                "danger"
+            )
             return redirect("/return-bills")
 
     for it in items:
-        med = Medicine.query.get(it.medicine_id) if it.medicine_id else Medicine.query.filter_by(name=it.medicine_name, batch=it.batch).first()
+        med = item_medicines.get(it.id)
         if not med:
             continue
         if it.invoice_item_id:

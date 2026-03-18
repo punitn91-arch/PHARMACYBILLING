@@ -39,6 +39,21 @@
         font-size: 18px;
         margin: 0 6px;
     }
+
+    .actions form {
+        display: inline;
+        margin: 0;
+    }
+
+    .actions button {
+        border: 0;
+        background: transparent;
+        color: #d63384;
+        cursor: pointer;
+        font-size: 16px;
+        margin: 0 6px;
+        padding: 0;
+    }
 </style>
 
 <h2>Return Bills</h2>
@@ -76,13 +91,12 @@
             <a href="/return-invoice/{{ r.id }}" title="View Return Bill">View</a>
             <a href="/return-invoice/{{ r.id }}?print=1" target="_blank" title="Print Return Bill">Print</a>
             {% if not r.is_cancelled %}
-            <a class="delete"
-               href="/return-bill/delete/{{ r.id }}"
-               data-async-action="true"
-               onclick="return confirm('Cancel this return bill? Stock will be reversed.')"
-               title="Delete Return Bill">
-                Delete
-            </a>
+            <form method="POST"
+                  action="/return-bill/delete/{{ r.id }}"
+                  data-async-action="true"
+                  onsubmit="return confirm('Cancel this return bill? Stock will be reversed.')">
+                <button class="delete" type="submit" title="Delete Return Bill">Delete</button>
+            </form>
             {% else %}
             <span class="delete" style="opacity:0.5;">Deleted</span>
             {% endif %}
