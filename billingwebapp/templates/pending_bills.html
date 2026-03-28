@@ -87,7 +87,7 @@
         <th>ID</th>
         <th>Patient Name</th>
         <th>Mobile</th>
-        <th>Date & Time</th>
+        <th>Date</th>
         <th>Action</th>
     </tr>
 
@@ -97,8 +97,7 @@
         <td><b>{{ b.customer }}</b></td>
         <td>{{ b.mobile }}</td>
         <td>
-            {{ b.created_at.strftime('%d-%m-%Y') }} <br>
-            <small>{{ b.created_at.strftime('%I:%M %p') }}</small>
+            {{ b.created_at.strftime('%d-%m-%Y') }}
         </td>
         <td>
             <!-- RESTORE BILL -->

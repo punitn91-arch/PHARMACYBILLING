@@ -215,7 +215,6 @@
     </div>
 
     <form method="GET" action="{{ url_for('appointments') }}" class="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-6">
-        <input type="hidden" name="search" value="{{ search_query }}">
         <input type="hidden" name="quick_filter" value="{{ quick_filter }}">
 
         <div>
@@ -250,6 +249,11 @@
         <div id="appointmentDateRangeToBox">
             <label for="appointment_to_date" class="mb-1 block text-xs font-medium text-slate-500">To Date</label>
             <input id="appointment_to_date" type="date" name="appointment_to_date" value="{{ report_filters.appointment_to_date }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
+        </div>
+
+        <div class="md:col-span-2 xl:col-span-2">
+            <label for="appointment_search" class="mb-1 block text-xs font-medium text-slate-500">Search Name / Mobile</label>
+            <input id="appointment_search" type="text" name="search" value="{{ search_query }}" placeholder="Patient name or mobile" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
         </div>
 
         <div class="md:col-span-2 xl:col-span-6 flex flex-wrap items-center gap-1.5 pt-0.5">
@@ -331,7 +335,7 @@
                                         <button type="submit" {% if row_status != 'BOOKED' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40">Check In</button>
                                     </form>
                                     <form method="POST" action="{{ url_for('mark_appointment_paid', id=a.id) }}" data-async-action="true">
-                                        <button type="submit" {% if pay_status == 'PAID' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Paid</button>
+                                        <button type="submit" {% if pay_status == 'PAID' or row_status == 'CANCELLED' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Paid</button>
                                     </form>
                                     <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
                                         <input type="hidden" name="status" value="COMPLETED">
@@ -523,6 +527,8 @@ document.addEventListener('app:async-success', function (event) {
 
     const url = String(detail.actionUrl || '').toLowerCase();
     const paymentCell = row.children[5];
+    const discountCell = row.children[6];
+    const feeCell = row.children[7];
     const statusCell = row.children[8];
     const paidBtn = row.querySelector("form[action*='/payment/paid'] button");
     const completedInput = row.querySelector("form input[name='status'][value='COMPLETED']");
@@ -567,8 +573,14 @@ document.addEventListener('app:async-success', function (event) {
 
     if (newStatus === 'COMPLETED' || newStatus === 'CANCELLED') {
         if (checkInBtn) checkInBtn.disabled = true;
+        if (paidBtn) paidBtn.disabled = true;
         if (completedBtn) completedBtn.disabled = true;
         if (cancelBtn) cancelBtn.disabled = true;
+        if (newStatus === 'CANCELLED') {
+            if (paymentCell) paymentCell.innerHTML = appointmentPaymentBadge('UNPAID');
+            if (discountCell) discountCell.textContent = 'Rs 0.00';
+            if (feeCell) feeCell.textContent = 'Rs 0.00';
+        }
     }
 });
 

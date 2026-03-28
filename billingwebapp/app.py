@@ -206,9 +206,8 @@ def find_medicine_for_hold(name, batch=""):
             return med
     return Medicine.query.filter_by(name=name).first()
 
-def build_hold_items_from_form(form):
-    items = []
-
+def build_hold_rows_from_form(form, include_partial=False):
+    rows = []
     meds_list = form.getlist("medicine_name")
     qty_list = form.getlist("qty[]")
     if not qty_list:
@@ -236,19 +235,19 @@ def build_hold_items_from_form(form):
 
     for idx in range(row_count):
         name = (meds_list[idx] if idx < len(meds_list) else "").strip().upper()
-        if not name:
-            continue
-
         qty_val = to_int_safe(qty_list[idx] if idx < len(qty_list) else 0, 0)
-        if qty_val <= 0:
-            continue
-
         batch = (batch_overrides[idx] if idx < len(batch_overrides) else "").strip()
+        batch_mode = "MANUAL" if batch else "AUTO"
         expiry = (expiry_list[idx] if idx < len(expiry_list) else "").strip()
         qoh_raw = qoh_list[idx] if idx < len(qoh_list) else ""
         mrp_raw = mrp_list[idx] if idx < len(mrp_list) else ""
         discount_raw = discount_list[idx] if idx < len(discount_list) else ""
         net_raw = net_list[idx] if idx < len(net_list) else ""
+
+        if not name:
+            continue
+        if qty_val <= 0 and not include_partial:
+            continue
 
         qoh = to_float_safe(qoh_raw, 0)
         mrp = to_float_safe(mrp_raw, 0)
@@ -257,7 +256,7 @@ def build_hold_items_from_form(form):
 
         med = find_medicine_for_hold(name, batch)
         if med:
-            if not batch:
+            if not batch and not include_partial:
                 batch = med.batch or ""
             if not expiry:
                 expiry = med.expiry or ""
@@ -275,8 +274,9 @@ def build_hold_items_from_form(form):
         if discount_amount < 0:
             discount_amount = 0
 
-        items.append({
+        rows.append({
             "name": name,
+            "batch_mode": batch_mode,
             "batch": batch,
             "expiry": expiry,
             "qoh": round(qoh, 2),
@@ -288,7 +288,11 @@ def build_hold_items_from_form(form):
             "amount": round(line_amount, 2)
         })
 
-    return items
+    return rows
+
+
+def build_hold_items_from_form(form):
+    return build_hold_rows_from_form(form, include_partial=False)
 
 def build_hold_totals_from_form(form, items):
     subtotal_raw = form.get("subtotal")
@@ -317,70 +321,80 @@ def build_hold_totals_from_form(form, items):
 def normalize_hold_bill_data(hold_bill):
     payload = hold_bill.data if isinstance(hold_bill.data, (dict, list)) else {}
     raw_items = []
+    raw_draft_items = []
     totals = {}
     header = {}
 
     if isinstance(payload, dict):
         header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
         raw_items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        raw_draft_items = payload.get("draft_items") if isinstance(payload.get("draft_items"), list) else []
         if not raw_items and isinstance(payload.get("cart"), list):
             raw_items = payload.get("cart")
         totals = payload.get("totals") if isinstance(payload.get("totals"), dict) else {}
     elif isinstance(payload, list):
         raw_items = payload
 
-    items = []
-    for raw in raw_items:
-        if not isinstance(raw, dict):
-            continue
-        name = (raw.get("name") or raw.get("medicine_name") or "").strip().upper()
-        if not name:
-            continue
-        qty_val = to_int_safe(raw.get("qty"), 0)
-        if qty_val <= 0:
-            continue
-        batch = (raw.get("batch") or "").strip()
-        expiry = (raw.get("expiry") or "").strip()
-        qoh_source = raw.get("qoh", raw.get("stock", ""))
-        mrp_source = raw.get("mrp", raw.get("price", ""))
-        qoh = to_float_safe(qoh_source, 0)
-        mrp = to_float_safe(mrp_source, 0)
-        discount_percent = to_float_safe(raw.get("discount_percent", raw.get("discount", 0)), 0)
-        net_amount = to_float_safe(raw.get("net_amount", raw.get("net", raw.get("amount", 0))), 0)
+    def normalize_rows(raw_list, allow_zero_qty=False):
+        normalized = []
+        for raw in raw_list:
+            if not isinstance(raw, dict):
+                continue
+            name = (raw.get("name") or raw.get("medicine_name") or "").strip().upper()
+            if not name:
+                continue
+            batch_mode = (raw.get("batch_mode") or "").strip().upper()
+            qty_val = to_int_safe(raw.get("qty"), 0)
+            if qty_val < 0:
+                qty_val = 0
+            if qty_val <= 0 and not allow_zero_qty:
+                continue
+            batch = (raw.get("batch") or "").strip()
+            expiry = (raw.get("expiry") or "").strip()
+            qoh_source = raw.get("qoh", raw.get("stock", ""))
+            mrp_source = raw.get("mrp", raw.get("price", ""))
+            qoh = to_float_safe(qoh_source, 0)
+            mrp = to_float_safe(mrp_source, 0)
+            discount_percent = to_float_safe(raw.get("discount_percent", raw.get("discount", 0)), 0)
+            net_amount = to_float_safe(raw.get("net_amount", raw.get("net", raw.get("amount", 0))), 0)
 
-        med = find_medicine_for_hold(name, batch)
-        if med:
-            if not batch:
-                batch = med.batch or ""
-            if not expiry:
-                expiry = med.expiry or ""
-            if qoh_source in (None, "", " "):
-                qoh = to_float_safe(med.qty, 0)
-            if mrp_source in (None, "", " "):
-                mrp = to_float_safe(med.mrp, 0)
+            med = find_medicine_for_hold(name, batch)
+            if med:
+                if not batch and batch_mode != "AUTO":
+                    batch = med.batch or ""
+                if not expiry:
+                    expiry = med.expiry or ""
+                if qoh_source in (None, "", " "):
+                    qoh = to_float_safe(med.qty, 0)
+                if mrp_source in (None, "", " "):
+                    mrp = to_float_safe(med.mrp, 0)
 
-        line_amount = qty_val * mrp
-        if net_amount <= 0:
-            net_amount = line_amount - (line_amount * discount_percent / 100)
-        discount_amount = line_amount - net_amount
-        if discount_amount < 0:
-            discount_amount = 0
+            line_amount = qty_val * mrp
+            if net_amount <= 0:
+                net_amount = line_amount - (line_amount * discount_percent / 100)
+            discount_amount = line_amount - net_amount
+            if discount_amount < 0:
+                discount_amount = 0
 
-        items.append({
-            "name": name,
-            "batch": batch,
-            "expiry": expiry,
-            "qoh": round(qoh, 2),
-            "qty": qty_val,
-            "mrp": round(mrp, 2),
-            "discount_percent": round(discount_percent, 2),
-            "discount_amount": round(discount_amount, 2),
-            "net_amount": round(net_amount, 2),
-            "amount": round(line_amount, 2)
-        })
+            normalized.append({
+                "name": name,
+                "batch_mode": batch_mode,
+                "batch": batch,
+                "expiry": expiry,
+                "qoh": round(qoh, 2),
+                "qty": qty_val,
+                "mrp": round(mrp, 2),
+                "discount_percent": round(discount_percent, 2),
+                "discount_amount": round(discount_amount, 2),
+                "net_amount": round(net_amount, 2),
+                "amount": round(line_amount, 2)
+            })
+        return normalized
 
-    subtotal = to_float_safe(totals.get("subtotal"), round(sum(i["net_amount"] for i in items), 2))
-    discount = to_float_safe(totals.get("discount"), round(sum(i["discount_amount"] for i in items), 2))
+    items = normalize_rows(raw_draft_items or raw_items, allow_zero_qty=bool(raw_draft_items))
+    finalized_items = normalize_rows(raw_items, allow_zero_qty=False)
+    subtotal = to_float_safe(totals.get("subtotal"), round(sum(i["net_amount"] for i in finalized_items), 2))
+    discount = to_float_safe(totals.get("discount"), round(sum(i["discount_amount"] for i in finalized_items), 2))
     cgst = to_float_safe(totals.get("cgst"), round(subtotal * 0.025, 2))
     sgst = to_float_safe(totals.get("sgst"), round(subtotal * 0.025, 2))
     net_total = to_float_safe(totals.get("net_total"), subtotal)
@@ -463,6 +477,134 @@ def get_low_stock_items(limit=LOW_STOCK_LIMIT, target_stock=LOW_STOCK_TARGET, mi
 
     low_items.sort(key=lambda item: item["name"].lower())
     return low_items
+
+
+def medicine_pack_display(med):
+    if med.pack_type and med.pack_qty:
+        return f"{med.pack_type} of {med.pack_qty}"
+    if med.pack_type:
+        return med.pack_type
+    if med.pack_qty:
+        return str(med.pack_qty)
+    return "-"
+
+
+def medicine_expiry_display(expiry):
+    raw = (expiry or "").strip()
+    exp_dt = parse_expiry_date(raw)
+    if exp_dt:
+        return exp_dt.strftime("%m/%Y"), exp_dt
+    return raw or "-", None
+
+
+def build_medicine_master_groups(show_archived=False):
+    today = date.today()
+    medicines = Medicine.query.order_by(
+        db.func.lower(Medicine.name).asc(),
+        Medicine.batch.asc(),
+        Medicine.id.asc()
+    ).all()
+
+    grouped = {}
+    stats = {
+        "visible_medicine_count": 0,
+        "visible_batch_count": 0,
+        "archived_batch_count": 0,
+        "hidden_archived_batch_count": 0,
+        "total_stock": 0
+    }
+
+    for med in medicines:
+        name = (med.name or "").strip()
+        if not name:
+            continue
+
+        key = name.lower()
+        group = grouped.get(key)
+        if not group:
+            group = {
+                "name": name,
+                "total_stock": 0,
+                "total_batches": 0,
+                "active_batches": 0,
+                "archived_batches": 0,
+                "visible_stock": 0,
+                "next_expiry": "-",
+                "next_expiry_sort": date.max,
+                "batches": [],
+                "search_text": name.lower()
+            }
+            grouped[key] = group
+
+        qty = to_int(med.qty)
+        is_archived = qty <= 0
+        expiry_display, expiry_sort = medicine_expiry_display(med.expiry)
+        is_expired = bool(expiry_sort and expiry_sort < today)
+        status = "Archived" if is_archived else ("Expired" if is_expired else "Active")
+
+        group["total_batches"] += 1
+        group["total_stock"] += qty
+        stats["total_stock"] += qty
+
+        if is_archived:
+            group["archived_batches"] += 1
+            stats["archived_batch_count"] += 1
+            if not show_archived:
+                stats["hidden_archived_batch_count"] += 1
+        else:
+            group["active_batches"] += 1
+            if expiry_sort and expiry_sort < group["next_expiry_sort"]:
+                group["next_expiry_sort"] = expiry_sort
+                group["next_expiry"] = expiry_display
+
+        group["search_text"] += " " + " ".join(
+            part.lower()
+            for part in (
+                med.batch or "",
+                medicine_pack_display(med),
+                expiry_display,
+                status
+            )
+            if part
+        )
+
+        if is_archived and not show_archived:
+            continue
+
+        batch_row = {
+            "id": med.id,
+            "batch": (med.batch or "").strip() or "-",
+            "pack": medicine_pack_display(med),
+            "expiry": expiry_display,
+            "expiry_sort": expiry_sort or date.max,
+            "mrp": to_float(med.mrp),
+            "qty": qty,
+            "status": status,
+            "status_class": "archived" if is_archived else ("expired" if is_expired else "active")
+        }
+        group["batches"].append(batch_row)
+        group["visible_stock"] += qty
+        stats["visible_batch_count"] += 1
+
+    groups = []
+    for group in grouped.values():
+        if not group["batches"]:
+            continue
+        group["batches"].sort(
+            key=lambda item: (
+                item["status"] != "Active",
+                item["expiry_sort"],
+                item["batch"].lower(),
+                item["id"]
+            )
+        )
+        if group["next_expiry"] == "-" and group["batches"]:
+            group["next_expiry"] = group["batches"][0]["expiry"]
+        groups.append(group)
+
+    groups.sort(key=lambda item: item["name"].lower())
+    stats["visible_medicine_count"] = len(groups)
+    return groups, stats
 
 def generate_vendor_note_no(note_type):
     prefix = "VN-DN-" if note_type == "DEBIT" else "VN-CN-"
@@ -659,6 +801,7 @@ def get_doctor_suggestions():
 APPOINTMENT_STATUSES = ("BOOKED", "CHECKED_IN", "COMPLETED", "CANCELLED")
 APPOINTMENT_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD")
 APPOINTMENT_PAYMENT_STATUSES = ("PAID", "UNPAID")
+APPOINTMENT_CONSULTATION_FEES = ("600", "1000")
 APPOINTMENT_DEFAULT_DOCTOR = "GENERAL"
 APPOINTMENT_GENDERS = ("MALE", "FEMALE", "OTHER")
 
@@ -1312,12 +1455,180 @@ def medicines():
     ):
         flash("Access denied", "danger")
         return redirect("/")
-    medicines = Medicine.query.order_by(
-        db.func.lower(Medicine.name).asc(),
-        Medicine.batch.asc(),
-        Medicine.id.asc()
+    show_archived = (request.args.get("show_archived") or "").strip().lower() in {"1", "true", "yes", "on"}
+    medicine_groups, medicine_stats = build_medicine_master_groups(show_archived=show_archived)
+    return render_template(
+        "medicines.html",
+        medicine_groups=medicine_groups,
+        medicine_stats=medicine_stats,
+        show_archived=show_archived
+    )
+
+def build_patient_medicine_usage_report(
+    from_date_raw,
+    to_date_raw,
+    search_query=""
+):
+    from_date_raw = (from_date_raw or "").strip()
+    to_date_raw = (to_date_raw or "").strip()
+    search_filter = (search_query or "").strip()
+    search_query = search_filter.lower()
+    search_digits = normalize_patient_mobile(search_filter)
+
+    if not from_date_raw or not to_date_raw:
+        return [], [], None, "Please select both from date and to date."
+
+    try:
+        start = datetime.strptime(from_date_raw, "%Y-%m-%d")
+        end = datetime.strptime(to_date_raw, "%Y-%m-%d")
+    except ValueError:
+        return [], [], None, "Please enter valid from/to dates."
+
+    if end < start:
+        return [], [], None, "To date must be greater than or equal to from date."
+
+    end_exclusive = end + timedelta(days=1)
+    invoices = Invoice.query.filter(
+        Invoice.created_at >= start,
+        Invoice.created_at < end_exclusive
+    ).order_by(
+        Invoice.created_at.asc(),
+        Invoice.id.asc()
     ).all()
-    return render_template("medicines.html", medicines=medicines)
+
+    invoice_map = {invoice.id: invoice for invoice in invoices}
+    invoice_ids = list(invoice_map.keys())
+    items = []
+    if invoice_ids:
+        items = InvoiceItem.query.filter(
+            InvoiceItem.invoice_id.in_(invoice_ids)
+        ).order_by(
+            InvoiceItem.invoice_id.asc(),
+            InvoiceItem.id.asc()
+        ).all()
+
+    grouped = {}
+    for item in items:
+        invoice = invoice_map.get(item.invoice_id)
+        if not invoice:
+            continue
+
+        medicine_name = (item.name or "").strip()
+        if not medicine_name:
+            continue
+
+        patient_name = (invoice.customer or "").strip() or "Walk-in"
+        mobile = (invoice.mobile or "").strip()
+        mobile_digits = normalize_patient_mobile(mobile)
+
+        if search_query:
+            search_haystack = " ".join([
+                patient_name.lower(),
+                mobile.lower(),
+                medicine_name.lower()
+            ])
+            matches_search = search_query in search_haystack
+            if not matches_search and search_digits and len(search_digits) >= 3:
+                matches_search = search_digits in mobile_digits
+            if not matches_search:
+                continue
+
+        mobile_key = normalize_patient_mobile(mobile) or mobile.lower()
+        patient_key = f"{patient_name.lower()}||{mobile_key}"
+
+        patient_entry = grouped.get(patient_key)
+        if not patient_entry:
+            patient_entry = {
+                "patient_name": patient_name,
+                "mobile": mobile or "-",
+                "invoice_ids": set(),
+                "invoice_nos": set(),
+                "total_qty": 0,
+                "medicines": {}
+            }
+            grouped[patient_key] = patient_entry
+
+        patient_entry["invoice_ids"].add(invoice.id)
+        patient_entry["invoice_nos"].add(invoice.invoice_no or f"INV-{invoice.id}")
+
+        qty = to_int(item.qty)
+        patient_entry["total_qty"] += qty
+
+        medicine_key = medicine_name.upper()
+        medicine_entry = patient_entry["medicines"].get(medicine_key)
+        if not medicine_entry:
+            medicine_entry = {
+                "medicine": medicine_name,
+                "invoice_ids": set(),
+                "invoice_nos": set(),
+                "total_qty": 0,
+                "last_purchase_at": None
+            }
+            patient_entry["medicines"][medicine_key] = medicine_entry
+
+        medicine_entry["invoice_ids"].add(invoice.id)
+        medicine_entry["invoice_nos"].add(invoice.invoice_no or f"INV-{invoice.id}")
+        medicine_entry["total_qty"] += qty
+        if not medicine_entry["last_purchase_at"] or (
+            invoice.created_at and invoice.created_at > medicine_entry["last_purchase_at"]
+        ):
+            medicine_entry["last_purchase_at"] = invoice.created_at
+
+    patients = []
+    detail_rows = []
+    total_purchase_count = 0
+    total_qty = 0
+
+    for patient_entry in sorted(
+        grouped.values(),
+        key=lambda row: ((row["patient_name"] or "").lower(), (row["mobile"] or "").lower())
+    ):
+        medicine_rows = []
+        patient_purchase_count = 0
+
+        for medicine_entry in sorted(
+            patient_entry["medicines"].values(),
+            key=lambda row: (-row["total_qty"], (row["medicine"] or "").lower())
+        ):
+            purchase_count = len(medicine_entry["invoice_ids"])
+            patient_purchase_count += purchase_count
+            total_purchase_count += purchase_count
+
+            row = {
+                "patient_name": patient_entry["patient_name"],
+                "mobile": patient_entry["mobile"],
+                "medicine": medicine_entry["medicine"],
+                "purchase_count": purchase_count,
+                "total_qty": medicine_entry["total_qty"],
+                "last_purchase_date": medicine_entry["last_purchase_at"].strftime("%d-%m-%Y") if medicine_entry["last_purchase_at"] else "-",
+                "invoice_nos": ", ".join(sorted(medicine_entry["invoice_nos"]))
+            }
+            medicine_rows.append(row)
+            detail_rows.append(row)
+
+        patient_total_qty = patient_entry["total_qty"]
+        total_qty += patient_total_qty
+        patients.append({
+            "patient_name": patient_entry["patient_name"],
+            "mobile": patient_entry["mobile"],
+            "invoice_count": len(patient_entry["invoice_ids"]),
+            "purchase_count": patient_purchase_count,
+            "distinct_medicines": len(medicine_rows),
+            "total_qty": patient_total_qty,
+            "invoice_nos": ", ".join(sorted(patient_entry["invoice_nos"])),
+            "medicines": medicine_rows
+        })
+
+    summary = {
+        "from_date": from_date_raw,
+        "to_date": to_date_raw,
+        "search_filter": search_filter,
+        "patient_count": len(patients),
+        "patient_medicine_count": len(detail_rows),
+        "purchase_count": total_purchase_count,
+        "total_qty": total_qty
+    }
+    return patients, detail_rows, summary, None
 
 @app.route("/medicines/add", methods=["GET", "POST"])
 @login_required
@@ -2047,6 +2358,7 @@ def return_invoice(id):
 @invoice_access_required
 def hold_bill():
     items = build_hold_items_from_form(request.form)
+    draft_items = build_hold_rows_from_form(request.form, include_partial=True)
     hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0)
 
     customer = (request.form.get("customer") or "").strip()
@@ -2071,6 +2383,7 @@ def hold_bill():
             "sale_type": sale_type,
             "payment_mode": payment_mode
         },
+        "draft_items": draft_items,
         "items": items,
         "totals": build_hold_totals_from_form(request.form, items)
     }
@@ -4051,12 +4364,18 @@ def build_appointment_form_data(appt=None):
         "appointment_time": "",
         "payment_mode": "CASH",
         "doctor_discount": "0",
-        "consultation_fee": "0",
+        "consultation_fee": APPOINTMENT_CONSULTATION_FEES[0],
         "symptoms": "",
         "previous_visit_notes": "",
         "notes": ""
     }
     if appt:
+        consultation_fee = to_float_safe(appt.consultation_fee, 0)
+        consultation_fee_value = APPOINTMENT_CONSULTATION_FEES[0]
+        for allowed_fee in APPOINTMENT_CONSULTATION_FEES:
+            if abs(consultation_fee - float(allowed_fee)) < 0.01:
+                consultation_fee_value = allowed_fee
+                break
         form_data.update({
             "patient_name": appt.patient_name or "",
             "mobile": appt.mobile or "",
@@ -4065,7 +4384,7 @@ def build_appointment_form_data(appt=None):
             "appointment_time": appt.appointment_time.strftime("%H:%M") if appt.appointment_time else "",
             "payment_mode": (appt.payment_mode or "CASH").strip().upper(),
             "doctor_discount": str(appt.doctor_discount or 0),
-            "consultation_fee": str(appt.consultation_fee or 0),
+            "consultation_fee": consultation_fee_value,
             "symptoms": appt.symptoms or "",
             "previous_visit_notes": appt.previous_visit_notes or "",
             "notes": appt.notes or ""
@@ -4113,12 +4432,10 @@ def validate_appointment_form(form_data):
     if doctor_discount < 0:
         return None, "Doctor discount cannot be negative."
 
-    try:
-        consultation_fee = float(form_data["consultation_fee"] or 0)
-    except ValueError:
-        return None, "Consultation fee should be a valid number."
-    if consultation_fee < 0:
-        return None, "Consultation fee cannot be negative."
+    consultation_fee_raw = (form_data["consultation_fee"] or "").strip()
+    if consultation_fee_raw not in APPOINTMENT_CONSULTATION_FEES:
+        return None, "Consultation fee must be 600 or 1000."
+    consultation_fee = float(consultation_fee_raw)
 
     return {
         "appointment_date": appt_date,
@@ -4146,6 +4463,7 @@ def add_appointment():
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=False
             )
@@ -4158,6 +4476,7 @@ def add_appointment():
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=False
             )
@@ -4207,6 +4526,7 @@ def add_appointment():
                     form_data=form_data,
                     payment_modes=APPOINTMENT_PAYMENT_MODES,
                     genders=APPOINTMENT_GENDERS,
+                    consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                     patient_suggestions=patient_suggestions,
                     edit_mode=False
                 )
@@ -4232,6 +4552,7 @@ def add_appointment():
                     form_data=form_data,
                     payment_modes=APPOINTMENT_PAYMENT_MODES,
                     genders=APPOINTMENT_GENDERS,
+                    consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                     patient_suggestions=patient_suggestions,
                     edit_mode=False
                 )
@@ -4242,6 +4563,7 @@ def add_appointment():
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=False
             )
@@ -4258,6 +4580,7 @@ def add_appointment():
         form_data=form_data,
         payment_modes=APPOINTMENT_PAYMENT_MODES,
         genders=APPOINTMENT_GENDERS,
+        consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
         patient_suggestions=patient_suggestions,
         edit_mode=False
     )
@@ -4278,6 +4601,7 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4291,6 +4615,7 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4338,6 +4663,7 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4361,6 +4687,7 @@ def edit_appointment(id):
                 form_data=form_data,
                 payment_modes=APPOINTMENT_PAYMENT_MODES,
                 genders=APPOINTMENT_GENDERS,
+                consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
                 patient_suggestions=patient_suggestions,
                 edit_mode=True,
                 appt_id=appointment.id
@@ -4378,6 +4705,7 @@ def edit_appointment(id):
         form_data=form_data,
         payment_modes=APPOINTMENT_PAYMENT_MODES,
         genders=APPOINTMENT_GENDERS,
+        consultation_fee_options=APPOINTMENT_CONSULTATION_FEES,
         patient_suggestions=patient_suggestions,
         edit_mode=True,
         appt_id=appointment.id
@@ -4404,6 +4732,10 @@ def update_appointment_status(id):
         flash("Mark payment as PAID before completing appointment.", "danger")
         return redirect(request.referrer or url_for("appointments"))
 
+    if new_status == "CANCELLED" and (appointment.payment_status or "").strip().upper() == "PAID":
+        flash("Paid appointment cannot be cancelled directly. Handle refund first.", "danger")
+        return redirect(request.referrer or url_for("appointments"))
+
     now = datetime.utcnow()
     appointment.status = new_status
     if new_status == "CHECKED_IN":
@@ -4413,6 +4745,9 @@ def update_appointment_status(id):
         appointment.checked_in_at = appointment.checked_in_at or now
     elif new_status == "CANCELLED":
         appointment.cancelled_at = now
+        appointment.payment_status = "UNPAID"
+        appointment.doctor_discount = 0
+        appointment.consultation_fee = 0
 
     db.session.commit()
     flash("Appointment status updated.", "success")
@@ -4429,6 +4764,9 @@ def update_appointment_status(id):
 def mark_appointment_paid(id):
     appointment = Appointment.query.get_or_404(id)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
+    if (appointment.status or "").strip().upper() == "CANCELLED":
+        flash("Cancelled appointment cannot be marked as paid.", "danger")
+        return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
     if (appointment.payment_status or "").strip().upper() == "PAID":
         flash("Appointment is already marked as paid.", "info")
         return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
@@ -4463,6 +4801,9 @@ def reports():
     medicine_summary = []
     fast_movers = []
     medicine_totals = None
+    patient_medicine_patients = []
+    patient_medicine_rows = []
+    patient_medicine_summary = None
     report_filters = {
         "month": "",
         "year": "",
@@ -4470,6 +4811,7 @@ def reports():
         "to_date": "",
         "patient": "",
         "mobile": "",
+        "search_query": "",
         "medicine_query": "",
         "top_n": "10"
     }
@@ -4567,6 +4909,18 @@ def reports():
                     invoices = Invoice.query.filter(
                         Invoice.mobile.ilike(f"%{mobile_raw}%")
                     ).all()
+
+        # PATIENT MEDICINE USAGE
+        elif report_type == "patient_medicine":
+            patient_medicine_patients, patient_medicine_rows, patient_medicine_summary, usage_error = (
+                build_patient_medicine_usage_report(
+                    report_filters["from_date"],
+                    report_filters["to_date"],
+                    search_query=report_filters["search_query"]
+                )
+            )
+            if usage_error:
+                flash(usage_error, "danger")
 
         # PROFIT / LOSS (FIFO)
         elif report_type == "profit":
@@ -4778,6 +5132,9 @@ def reports():
         medicine_summary=medicine_summary,
         fast_movers=fast_movers,
         medicine_totals=medicine_totals,
+        patient_medicine_patients=patient_medicine_patients,
+        patient_medicine_rows=patient_medicine_rows,
+        patient_medicine_summary=patient_medicine_summary,
         report_filters=report_filters
     )
 
@@ -4919,6 +5276,58 @@ def export_excel():
                 applied_filter = f"mobile ({mobile_raw})"
             else:
                 applied_filter = "mobile (blank, exported all)"
+        elif report_type == "patient_medicine":
+            patients, detail_rows, usage_summary, _usage_error = build_patient_medicine_usage_report(
+                from_date,
+                to_date,
+                search_query=request.args.get("search_query")
+            )
+
+            patient_rows = [{
+                "Patient Name": row["patient_name"],
+                "Mobile": row["mobile"],
+                "Invoice Count": row["invoice_count"],
+                "Purchase Count": row["purchase_count"],
+                "Distinct Medicines": row["distinct_medicines"],
+                "Total Qty": row["total_qty"],
+                "Invoice Nos": row["invoice_nos"]
+            } for row in patients]
+
+            medicine_rows = [{
+                "Patient Name": row["patient_name"],
+                "Mobile": row["mobile"],
+                "Medicine": row["medicine"],
+                "Purchase Count": row["purchase_count"],
+                "Total Qty": row["total_qty"],
+                "Last Purchase Date": row["last_purchase_date"],
+                "Invoice Nos": row["invoice_nos"]
+            } for row in detail_rows]
+
+            summary_rows = [{
+                "From Date": usage_summary["from_date"] if usage_summary else from_date,
+                "To Date": usage_summary["to_date"] if usage_summary else to_date,
+                "Search Filter": usage_summary["search_filter"] if usage_summary else (request.args.get("search_query") or ""),
+                "Patients": usage_summary["patient_count"] if usage_summary else 0,
+                "Patient-Medicine Rows": usage_summary["patient_medicine_count"] if usage_summary else 0,
+                "Purchase Count": usage_summary["purchase_count"] if usage_summary else 0,
+                "Total Qty": usage_summary["total_qty"] if usage_summary else 0
+            }]
+
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Summary", index=False)
+                pd.DataFrame(patient_rows).to_excel(writer, sheet_name="Patients", index=False)
+                pd.DataFrame(medicine_rows).to_excel(writer, sheet_name="PatientMedicines", index=False)
+            output.seek(0)
+
+            filename = f"Patient_Medicine_Usage_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            return send_file(
+                output,
+                as_attachment=True,
+                download_name=filename,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                max_age=0
+            )
         elif report_type:
             applied_filter = f"{report_type} (not invoice list type, exported all)"
 

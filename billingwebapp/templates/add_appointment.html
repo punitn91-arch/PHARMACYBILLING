@@ -81,7 +81,11 @@
 
                 <div>
                     <label for="consultation_fee" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Consultation Fee (Rs)</label>
-                    <input id="consultation_fee" name="consultation_fee" type="number" min="0" step="0.01" value="{{ form_data.consultation_fee }}" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                    <select id="consultation_fee" name="consultation_fee" class="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-800 outline-none transition duration-150 focus:border-brand focus:ring-2 focus:ring-blue-100">
+                        {% for fee in consultation_fee_options %}
+                        <option value="{{ fee }}" {% if form_data.consultation_fee == fee %}selected{% endif %}>{{ fee }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
 
                 <div>

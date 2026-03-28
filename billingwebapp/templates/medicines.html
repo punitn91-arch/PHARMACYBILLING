@@ -2,137 +2,998 @@
 {% block title %}Medicine Master{% endblock %}
 
 {% block body %}
-
 <style>
-.card {
-    background: white;
-    padding: 15px;
-    border-radius: 6px;
-    box-shadow: 0 0 6px #cfd8e3;
+.master-shell {
+    display: grid;
+    gap: 18px;
 }
 
-table {
+.page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.page-title {
+    margin: 0;
+    color: #0f4fbf;
+    font-size: 28px;
+}
+
+.page-note {
+    margin: 8px 0 0;
+    color: #607089;
+    font-size: 14px;
+    max-width: 720px;
+}
+
+.page-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-export,
+.chip-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.btn-primary {
+    background: #0f62fe;
+    color: #fff;
+}
+
+.btn-secondary,
+.chip-link {
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.btn-export {
+    background: #198754;
+    color: #fff;
+}
+
+.management-panel {
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+}
+
+.search-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 1.8fr) minmax(190px, 0.9fr) auto;
+    gap: 12px;
+    align-items: end;
+}
+
+.field-stack {
+    display: grid;
+    gap: 6px;
+}
+
+.field-stack label {
+    color: #52627a;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.search-input,
+.sort-select {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 11px 13px;
+    font-size: 14px;
+    background: #fff;
+    color: #10223e;
+}
+
+.search-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.filter-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.filter-chip {
+    border: 1px solid #d7e3f3;
+    background: #fff;
+    color: #35507a;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.filter-chip.active {
+    background: #0f62fe;
+    border-color: #0f62fe;
+    color: #fff;
+}
+
+.results-note {
+    color: #607089;
+    font-size: 13px;
+}
+
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.stat-pill {
+    display: grid;
+    gap: 4px;
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    padding: 14px 16px;
+}
+
+.stat-pill small {
+    color: #607089;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.stat-pill strong {
+    color: #10223e;
+    font-size: 24px;
+}
+
+.list-shell {
+    background: #fff;
+    border-radius: 16px;
+    border: 1px solid #dbe4f0;
+    overflow: hidden;
+}
+
+.list-head {
+    display: grid;
+    grid-template-columns: minmax(260px, 2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(200px, 1.2fr) 120px;
+    gap: 12px;
+    align-items: center;
+    padding: 13px 18px;
+    background: #0d6efd;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.group-list {
+    display: grid;
+}
+
+.medicine-group {
+    border-top: 1px solid #edf2f8;
+}
+
+.medicine-group:first-child {
+    border-top: 0;
+}
+
+.medicine-group.search-hit {
+    background: #f7fbff;
+}
+
+.medicine-group details {
+    display: block;
+}
+
+.medicine-group summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 16px 18px;
+}
+
+.medicine-group summary::-webkit-details-marker {
+    display: none;
+}
+
+.group-summary {
+    display: grid;
+    grid-template-columns: minmax(260px, 2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(200px, 1.2fr) 120px;
+    gap: 12px;
+    align-items: center;
+}
+
+.medicine-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    min-width: 0;
+}
+
+.chevron {
+    color: #0f62fe;
+    font-size: 16px;
+    line-height: 1.2;
+    transition: transform 0.18s ease;
+    margin-top: 2px;
+}
+
+.medicine-group details[open] .chevron {
+    transform: rotate(90deg);
+}
+
+.medicine-name {
+    color: #10223e;
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1.3;
+}
+
+.medicine-meta {
+    margin-top: 4px;
+    color: #607089;
+    font-size: 13px;
+}
+
+.summary-metric {
+    display: grid;
+    gap: 4px;
+}
+
+.summary-metric span {
+    color: #607089;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.summary-metric strong {
+    color: #10223e;
+    font-size: 18px;
+}
+
+.summary-flags {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.state-pill,
+.mini-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.state-ok {
+    background: #e8f7ee;
+    color: #157347;
+}
+
+.state-low {
+    background: #fff4d8;
+    color: #9a6700;
+}
+
+.state-expired {
+    background: #fdecec;
+    color: #c92a2a;
+}
+
+.state-out {
+    background: #eef2f7;
+    color: #52627a;
+}
+
+.mini-pill {
+    background: #eef4ff;
+    color: #35507a;
+}
+
+.mini-pill.muted {
+    background: #eef2f7;
+    color: #52627a;
+}
+
+.expand-button {
+    text-align: right;
+}
+
+.expand-button span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 100px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid #d7e3f3;
+    background: #f7fbff;
+    color: #0f62fe;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.batch-panel {
+    padding: 0 18px 18px 46px;
+    background: #fbfdff;
+}
+
+.batch-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding-top: 2px;
+}
+
+.batch-stats {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.batch-table {
     width: 100%;
     border-collapse: collapse;
+    border: 1px solid #e6edf7;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fff;
 }
 
-th {
-    background: #0d6efd;
-    color: white;
-    padding: 10px;
-}
-
-td {
-    padding: 10px;
-    border-bottom: 1px solid #ddd;
+.batch-table th,
+.batch-table td {
+    padding: 11px 12px;
+    border-bottom: 1px solid #e8edf5;
     text-align: center;
+    font-size: 14px;
 }
 
-.add-btn {
-    background: #198754;
-    color: white;
-    padding: 8px 14px;
+.batch-table th {
+    background: #eff5ff;
+    color: #23406c;
+    font-weight: 700;
+}
+
+.batch-table td:first-child,
+.batch-table th:first-child {
+    text-align: left;
+}
+
+.batch-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.inline-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 700;
     text-decoration: none;
-    border-radius: 4px;
+    background: #eef4ff;
+    color: #21406d;
+    margin: 0 4px;
+}
+
+.inline-link.danger {
+    background: #fdecec;
+    color: #c92a2a;
+}
+
+.empty-state {
+    padding: 36px 18px;
+    text-align: center;
+    color: #607089;
+}
+
+.empty-state strong {
+    display: block;
+    color: #10223e;
+    font-size: 16px;
+    margin-bottom: 6px;
+}
+
+@media (max-width: 1180px) {
+    .search-grid {
+        grid-template-columns: 1fr 220px;
+    }
+
+    .search-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
+
+    .stats-row {
+        grid-template-columns: repeat(2, minmax(150px, 1fr));
+    }
+
+    .list-head,
+    .group-summary {
+        grid-template-columns: minmax(220px, 1.7fr) minmax(110px, 0.8fr) minmax(120px, 0.9fr) minmax(180px, 1.1fr) 110px;
+    }
+}
+
+@media (max-width: 860px) {
+    .page-actions,
+    .search-actions {
+        width: 100%;
+    }
+
+    .search-grid,
+    .stats-row {
+        grid-template-columns: 1fr;
+    }
+
+    .list-head {
+        display: none;
+    }
+
+    .group-summary {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .expand-button {
+        text-align: left;
+    }
+
+    .batch-panel {
+        padding: 0 12px 14px;
+        overflow-x: auto;
+    }
+
+    .batch-table {
+        min-width: 760px;
+    }
 }
 </style>
 
-<div class="card">
-    <h2>💊 Medicine Master</h2>
-
-    <div style="text-align:right; margin-bottom:10px;">
-        {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
-<a href="/medicines/export" class="add-btn-success" style="margin-left:10px;">
-    📥 Export Excel
-</a>
-{% endif %}
-        <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
-        <input type="text"
-           id="medicineSearch"
-           placeholder="🔍 Search medicine..."
-           onkeyup="searchMedicine()"
-           style="padding:8px; width:250px; border-radius:5px; border:1px solid #ccc;">
-</div>
-
+<div class="master-shell">
+    <div class="page-head">
+        <div>
+            <h2 class="page-title">Medicine Master</h2>
+            <p class="page-note">Simple view on top, full batch detail only when you open a medicine. Search fast, filter risky items, then work batch-wise only when needed.</p>
+        </div>
+        <div class="page-actions">
+            {% if session.get("role") == "admin" or session.get("can_add_medicine") %}
+            <a href="/medicines/add" class="btn-primary">Add Batch</a>
+            {% endif %}
+            {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
+            <a href="/medicines/export" class="btn-export">Export Excel</a>
+            {% endif %}
+        </div>
     </div>
 
-    <table id="medicineTable">
-        <tr>
-            <th>#</th>
-            <th>Medicine Name</th>
-            <th>Batch</th>
-            <th>Pack</th>
-            <th>Expiry</th>
-            <th>MRP</th>
-            <th>Stock</th>
-            <th>Action</th>
-        </tr>
+    <section class="management-panel">
+        <div class="search-grid">
+            <div class="field-stack">
+                <label for="medicineSearch">Search Medicine</label>
+                <input class="search-input" type="text" id="medicineSearch" placeholder="Search by medicine name, batch, pack or status">
+            </div>
 
-        {% for m in medicines %}
-        <tr class="medicine-row">
-            <td>{{ loop.index }}</td>
-            <td>{{ m.name }}</td>
-            <td>{{ m.batch }}</td>
-            <td>
-                {% if m.pack_type and m.pack_qty %}
-                    {{ m.pack_type }} of {{ m.pack_qty }}
-                {% elif m.pack_type %}
-                    {{ m.pack_type }}
-                {% elif m.pack_qty %}
-                    {{ m.pack_qty }}
+            <div class="field-stack">
+                <label for="medicineSort">Sort By</label>
+                <select class="sort-select" id="medicineSort">
+                    <option value="name">Name A-Z</option>
+                    <option value="stock_desc">Stock High to Low</option>
+                    <option value="expiry_asc">Nearest Expiry</option>
+                </select>
+            </div>
+
+            <div class="search-actions">
+                <button type="button" class="btn-secondary" onclick="toggleAllMedicineGroups(true)">Expand All</button>
+                <button type="button" class="btn-secondary" onclick="toggleAllMedicineGroups(false)">Collapse All</button>
+                {% if show_archived %}
+                <a href="/medicines" class="chip-link">Hide Zero Stock</a>
                 {% else %}
-                    -
+                <a href="/medicines?show_archived=1" class="chip-link">Show Zero Stock</a>
                 {% endif %}
-            </td>
-            <td>{{ m.expiry[5:7] }}/{{ m.expiry[0:4] }}</td>
-            <td>₹{{ m.mrp }}</td>
-            <td>{{ m.qty }}</td>
-            <td>
-    <!-- EDIT -->
-    {% if session.get("role") == "admin" or session.get("can_edit_medicine") %}
-<a href="/medicines/edit/{{ m.id }}" title="Edit">
-        ✏️
-    </a>
-{% endif %}
+            </div>
+        </div>
 
-    <!-- DELETE -->
-    {% if session.get("role") == "admin" or session.get("can_delete_medicine") %}
-<a href="/medicines/delete/{{ m.id }}"
-       data-async-action="true"
-       onclick="return confirm('Delete this medicine?')"
-       title="Delete">
-        🗑️
-    </a>
-{% endif %}
-</td>
-        </tr>
-        {% endfor %}
-    </table>
-    <script>
-function searchMedicine() {
-    let input = document.getElementById("medicineSearch").value.toLowerCase();
-    let rows = document.querySelectorAll(".medicine-row");
+        <div class="field-stack">
+            <label>Quick Filters</label>
+            <div class="filter-row" id="medicineQuickFilters">
+                <button type="button" class="filter-chip active" data-filter="all">All</button>
+                <button type="button" class="filter-chip" data-filter="attention">Needs Attention</button>
+                <button type="button" class="filter-chip" data-filter="low_stock">Low Stock</button>
+                <button type="button" class="filter-chip" data-filter="expiring">Expiring Soon</button>
+                <button type="button" class="filter-chip" data-filter="multi_batch">Multi Batch</button>
+                <button type="button" class="filter-chip" data-filter="out_of_stock">Out of Stock</button>
+            </div>
+        </div>
 
-    rows.forEach(row => {
-        let name = row.children[1].innerText.toLowerCase();
-        let batch = row.children[2].innerText.toLowerCase();
-        let pack = row.children[3].innerText.toLowerCase();
-        let haystack = `${name} ${batch} ${pack}`;
+        <div class="results-note" id="medicineResultsNote">
+            Showing {{ medicine_stats.visible_medicine_count }} medicines in the current view.
+            {% if not show_archived and medicine_stats.hidden_archived_batch_count %}
+            {{ medicine_stats.hidden_archived_batch_count }} zero-stock batches are hidden.
+            {% endif %}
+        </div>
+    </section>
 
-        if (haystack.includes(input) && input !== "") {
-            row.style.display = "";
-            row.style.backgroundColor = "#cfe2ff";   // BLUE highlight
-            row.style.fontWeight = "bold";
-        } else if (input === "") {
-            row.style.display = "";
-            row.style.backgroundColor = "";
-            row.style.fontWeight = "";
-        } else {
-            row.style.display = "none";
+    <div class="stats-row">
+        <div class="stat-pill">
+            <small>Visible Medicines</small>
+            <strong>{{ medicine_stats.visible_medicine_count }}</strong>
+        </div>
+        <div class="stat-pill">
+            <small>Visible Batches</small>
+            <strong>{{ medicine_stats.visible_batch_count }}</strong>
+        </div>
+        <div class="stat-pill">
+            <small>{% if show_archived %}Zero Stock Batches{% else %}Hidden Zero Stock{% endif %}</small>
+            <strong>{{ medicine_stats.archived_batch_count if show_archived else medicine_stats.hidden_archived_batch_count }}</strong>
+        </div>
+        <div class="stat-pill">
+            <small>Total Stock</small>
+            <strong>{{ medicine_stats.total_stock }}</strong>
+        </div>
+    </div>
+
+    <section class="list-shell">
+        <div class="list-head">
+            <div>Medicine</div>
+            <div>Available Stock</div>
+            <div>Next Expiry</div>
+            <div>Health / Batch View</div>
+            <div>Details</div>
+        </div>
+
+        <div class="group-list" id="medicineGroupList">
+            {% if medicine_groups %}
+                {% for group in medicine_groups %}
+                {% set display_stock = group.visible_stock if not show_archived else group.total_stock %}
+                {% set expired_count = group.batches | selectattr("status_class", "equalto", "expired") | list | length %}
+                {% set out_of_stock = display_stock <= 0 %}
+                {% set low_stock = (not out_of_stock) and display_stock <= 10 %}
+                {% set expiry_iso = group.next_expiry_sort.isoformat() if group.next_expiry_sort.year < 9999 else "" %}
+                <div
+                    class="medicine-group"
+                    data-search="{{ group.search_text }}"
+                    data-name="{{ group.name|lower }}"
+                    data-stock="{{ display_stock }}"
+                    data-batches="{{ group.batches|length }}"
+                    data-expiry="{{ expiry_iso }}"
+                    data-has-expired="{{ 1 if expired_count else 0 }}"
+                    data-out-of-stock="{{ 1 if out_of_stock else 0 }}"
+                    data-low-stock="{{ 1 if low_stock else 0 }}"
+                >
+                    <details>
+                        <summary>
+                            <div class="group-summary">
+                                <div class="medicine-main">
+                                    <span class="chevron">&#9656;</span>
+                                    <div>
+                                        <div class="medicine-name">{{ group.name }}</div>
+                                        <div class="medicine-meta js-meta-line">
+                                            {{ group.batches|length }} visible batch{{ "" if group.batches|length == 1 else "es" }}
+                                            · {{ group.active_batches }} active
+                                            {% if group.archived_batches %}
+                                            · {{ group.archived_batches }} archived
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="summary-metric">
+                                    <span>Available Stock</span>
+                                    <strong class="js-stock-value">{{ display_stock }}</strong>
+                                </div>
+
+                                <div class="summary-metric">
+                                    <span>Next Expiry</span>
+                                    <strong class="js-next-expiry-value">{{ group.next_expiry }}</strong>
+                                </div>
+
+                                <div class="summary-flags js-status-flags">
+                                    {% if out_of_stock %}
+                                    <span class="state-pill state-out">Out of stock</span>
+                                    {% elif expired_count %}
+                                    <span class="state-pill state-expired">{{ expired_count }} expired</span>
+                                    {% elif low_stock %}
+                                    <span class="state-pill state-low">Low stock</span>
+                                    {% else %}
+                                    <span class="state-pill state-ok">Healthy</span>
+                                    {% endif %}
+                                    <span class="mini-pill">{{ group.batches|length }} batch{{ "" if group.batches|length == 1 else "es" }}</span>
+                                    {% if group.archived_batches %}
+                                    <span class="mini-pill muted">{{ group.archived_batches }} archived</span>
+                                    {% endif %}
+                                </div>
+
+                                <div class="expand-button">
+                                    <span>View Batches</span>
+                                </div>
+                            </div>
+                        </summary>
+
+                        <div class="batch-panel">
+                            <div class="batch-toolbar">
+                                <div class="batch-stats">
+                                    <span class="mini-pill">Visible batches: <strong class="js-batch-count">{{ group.batches|length }}</strong></span>
+                                    <span class="mini-pill">Active: <strong class="js-active-count">{{ group.active_batches }}</strong></span>
+                                    <span class="mini-pill">Stock: <strong class="js-batch-stock">{{ display_stock }}</strong></span>
+                                </div>
+                            </div>
+
+                            <table class="batch-table">
+                                <thead>
+                                    <tr>
+                                        <th>Batch</th>
+                                        <th>Pack</th>
+                                        <th>Expiry</th>
+                                        <th>MRP</th>
+                                        <th>Stock</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for batch in group.batches %}
+                                    {% set batch_expiry_iso = batch.expiry_sort.isoformat() if batch.expiry_sort.year < 9999 else "" %}
+                                    <tr
+                                        class="batch-row"
+                                        data-qty="{{ batch.qty }}"
+                                        data-status="{{ batch.status_class }}"
+                                        data-expiry="{{ batch_expiry_iso }}"
+                                        data-expiry-label="{{ batch.expiry }}"
+                                    >
+                                        <td>{{ batch.batch }}</td>
+                                        <td>{{ batch.pack }}</td>
+                                        <td>{{ batch.expiry }}</td>
+                                        <td>₹{{ "%.3f"|format(batch.mrp or 0) }}</td>
+                                        <td>{{ batch.qty }}</td>
+                                        <td><span class="state-pill {% if batch.status_class == 'active' %}state-ok{% elif batch.status_class == 'expired' %}state-expired{% else %}state-out{% endif %}">{{ batch.status }}</span></td>
+                                        <td>
+                                            {% if session.get("role") == "admin" or session.get("can_edit_medicine") %}
+                                            <a class="inline-link" href="/medicines/edit/{{ batch.id }}" title="Edit">Edit</a>
+                                            {% endif %}
+                                            {% if session.get("role") == "admin" or session.get("can_delete_medicine") %}
+                                            <a
+                                                class="inline-link danger"
+                                                href="/medicines/delete/{{ batch.id }}"
+                                                data-async-action="true"
+                                                onclick="return confirm('Delete this batch?')"
+                                                title="Delete"
+                                            >Delete</a>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    <strong>No medicines found</strong>
+                    {% if show_archived %}
+                    There are no medicine batches available right now.
+                    {% else %}
+                    No active batches found. Use Show Zero Stock if you want to inspect archived batches.
+                    {% endif %}
+                </div>
+            {% endif %}
+
+            <div class="empty-state" id="medicineEmptyFiltered" hidden>
+                <strong>No medicines match the current filters</strong>
+                Try clearing the search or switching to a different quick filter.
+            </div>
+        </div>
+    </section>
+</div>
+
+<script>
+const EXPIRY_SOON_DAYS = 90;
+
+function getMedicineGroups() {
+    return Array.from(document.querySelectorAll(".medicine-group"));
+}
+
+function getActiveMedicineFilter() {
+    const activeButton = document.querySelector(".filter-chip.active");
+    return activeButton ? activeButton.dataset.filter : "all";
+}
+
+function normalizeDate(dateValue) {
+    if (!dateValue) return null;
+    const parsed = new Date(`${dateValue}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isExpiringSoon(expiryValue) {
+    const expiryDate = normalizeDate(expiryValue);
+    if (!expiryDate) return false;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((expiryDate - today) / 86400000);
+    return diffDays >= 0 && diffDays <= EXPIRY_SOON_DAYS;
+}
+
+function parseNumberAttr(element, attrName) {
+    return Number(element.dataset[attrName] || 0);
+}
+
+function matchesMedicineFilter(group, filterKey) {
+    const stock = parseNumberAttr(group, "stock");
+    const batchCount = parseNumberAttr(group, "batches");
+    const hasExpired = group.dataset.hasExpired === "1";
+    const outOfStock = group.dataset.outOfStock === "1";
+    const lowStock = group.dataset.lowStock === "1";
+    const expiringSoon = isExpiringSoon(group.dataset.expiry || "");
+
+    if (filterKey === "attention") {
+        return outOfStock || lowStock || hasExpired || expiringSoon;
+    }
+    if (filterKey === "low_stock") {
+        return lowStock;
+    }
+    if (filterKey === "expiring") {
+        return expiringSoon;
+    }
+    if (filterKey === "multi_batch") {
+        return batchCount > 1;
+    }
+    if (filterKey === "out_of_stock") {
+        return outOfStock || stock <= 0;
+    }
+    return true;
+}
+
+function sortMedicineGroups(groups, sortKey) {
+    const sorted = [...groups];
+    sorted.sort((left, right) => {
+        if (sortKey === "stock_desc") {
+            return parseNumberAttr(right, "stock") - parseNumberAttr(left, "stock")
+                || (left.dataset.name || "").localeCompare(right.dataset.name || "");
+        }
+
+        if (sortKey === "expiry_asc") {
+            const leftExpiry = left.dataset.expiry || "9999-12-31";
+            const rightExpiry = right.dataset.expiry || "9999-12-31";
+            return leftExpiry.localeCompare(rightExpiry)
+                || (left.dataset.name || "").localeCompare(right.dataset.name || "");
+        }
+
+        return (left.dataset.name || "").localeCompare(right.dataset.name || "");
+    });
+    return sorted;
+}
+
+function updateMedicineResultsNote(visibleCount, totalCount) {
+    const note = document.getElementById("medicineResultsNote");
+    if (!note) return;
+
+    const filterKey = getActiveMedicineFilter();
+    const filterLabelMap = {
+        all: "all medicines",
+        attention: "attention-needed medicines",
+        low_stock: "low stock medicines",
+        expiring: "expiring soon medicines",
+        multi_batch: "multi-batch medicines",
+        out_of_stock: "out of stock medicines"
+    };
+
+    const label = filterLabelMap[filterKey] || "medicines";
+    note.textContent = `Showing ${visibleCount} of ${totalCount} ${label}.`;
+}
+
+function updateMedicineMasterView() {
+    const searchInput = document.getElementById("medicineSearch");
+    const sortSelect = document.getElementById("medicineSort");
+    const groupList = document.getElementById("medicineGroupList");
+    const emptyState = document.getElementById("medicineEmptyFiltered");
+    if (!groupList || !searchInput || !sortSelect) return;
+
+    const query = (searchInput.value || "").trim().toLowerCase();
+    const filterKey = getActiveMedicineFilter();
+    const groups = getMedicineGroups();
+    const sortedGroups = sortMedicineGroups(groups, sortSelect.value);
+
+    sortedGroups.forEach((group) => {
+        groupList.insertBefore(group, emptyState || null);
+    });
+
+    let visibleCount = 0;
+    groups.forEach((group) => {
+        const haystack = (group.dataset.search || "").toLowerCase();
+        const matchSearch = !query || haystack.includes(query);
+        const matchFilter = matchesMedicineFilter(group, filterKey);
+        const shouldShow = matchSearch && matchFilter;
+
+        group.style.display = shouldShow ? "" : "none";
+        group.classList.toggle("search-hit", !!query && shouldShow);
+
+        const details = group.querySelector("details");
+        if (details && query && shouldShow) {
+            details.open = true;
+        }
+
+        if (shouldShow) {
+            visibleCount += 1;
+        }
+    });
+
+    if (emptyState) {
+        emptyState.hidden = visibleCount !== 0 || groups.length === 0;
+    }
+    updateMedicineResultsNote(visibleCount, groups.length);
+}
+
+function toggleAllMedicineGroups(shouldOpen) {
+    getMedicineGroups().forEach((group) => {
+        if (group.style.display === "none") return;
+        const details = group.querySelector("details");
+        if (details) {
+            details.open = shouldOpen;
         }
     });
 }
-</script>
-</div>
 
+function buildMedicineStatusFlags(batchCount, archivedCount, expiredCount, outOfStock, lowStock) {
+    const parts = [];
+    if (outOfStock) {
+        parts.push('<span class="state-pill state-out">Out of stock</span>');
+    } else if (expiredCount > 0) {
+        parts.push(`<span class="state-pill state-expired">${expiredCount} expired</span>`);
+    } else if (lowStock) {
+        parts.push('<span class="state-pill state-low">Low stock</span>');
+    } else {
+        parts.push('<span class="state-pill state-ok">Healthy</span>');
+    }
+
+    parts.push(`<span class="mini-pill">${batchCount} batch${batchCount === 1 ? "" : "es"}</span>`);
+    if (archivedCount > 0) {
+        parts.push(`<span class="mini-pill muted">${archivedCount} archived</span>`);
+    }
+    return parts.join("");
+}
+
+function refreshMedicineGroupAfterDelete(group) {
+    if (!group) return;
+
+    const rows = Array.from(group.querySelectorAll(".batch-row"));
+    if (!rows.length) {
+        group.remove();
+        updateMedicineMasterView();
+        return;
+    }
+
+    let stock = 0;
+    let activeCount = 0;
+    let archivedCount = 0;
+    let expiredCount = 0;
+    let nextExpiryValue = "";
+    let nextExpiryLabel = "-";
+
+    rows.forEach((row) => {
+        const qty = Number(row.dataset.qty || 0);
+        const status = row.dataset.status || "";
+        const expiryValue = row.dataset.expiry || "";
+        const expiryLabel = row.dataset.expiryLabel || "-";
+
+        stock += qty;
+
+        if (status === "archived") {
+            archivedCount += 1;
+        } else {
+            activeCount += 1;
+            if (status === "expired") {
+                expiredCount += 1;
+            }
+        }
+
+        if (!nextExpiryValue && expiryValue) {
+            nextExpiryValue = expiryValue;
+            nextExpiryLabel = expiryLabel;
+        } else if (expiryValue && expiryValue < nextExpiryValue) {
+            nextExpiryValue = expiryValue;
+            nextExpiryLabel = expiryLabel;
+        }
+    });
+
+    const lowStock = stock > 0 && stock <= 10;
+    const outOfStock = stock <= 0;
+
+    group.dataset.stock = String(stock);
+    group.dataset.batches = String(rows.length);
+    group.dataset.expiry = nextExpiryValue;
+    group.dataset.hasExpired = expiredCount > 0 ? "1" : "0";
+    group.dataset.outOfStock = outOfStock ? "1" : "0";
+    group.dataset.lowStock = lowStock ? "1" : "0";
+
+    const stockValue = group.querySelector(".js-stock-value");
+    if (stockValue) stockValue.textContent = String(stock);
+
+    const nextExpiryValueBox = group.querySelector(".js-next-expiry-value");
+    if (nextExpiryValueBox) nextExpiryValueBox.textContent = nextExpiryLabel;
+
+    const metaLine = group.querySelector(".js-meta-line");
+    if (metaLine) {
+        metaLine.textContent = `${rows.length} visible batch${rows.length === 1 ? "" : "es"} · ${activeCount} active${archivedCount ? ` · ${archivedCount} archived` : ""}`;
+    }
+
+    const statusFlags = group.querySelector(".js-status-flags");
+    if (statusFlags) {
+        statusFlags.innerHTML = buildMedicineStatusFlags(rows.length, archivedCount, expiredCount, outOfStock, lowStock);
+    }
+
+    const batchCount = group.querySelector(".js-batch-count");
+    if (batchCount) batchCount.textContent = String(rows.length);
+
+    const activeCountBox = group.querySelector(".js-active-count");
+    if (activeCountBox) activeCountBox.textContent = String(activeCount);
+
+    const batchStock = group.querySelector(".js-batch-stock");
+    if (batchStock) batchStock.textContent = String(stock);
+
+    updateMedicineMasterView();
+}
+
+document.querySelectorAll(".filter-chip").forEach((button) => {
+    button.addEventListener("click", function () {
+        document.querySelectorAll(".filter-chip").forEach((chip) => chip.classList.remove("active"));
+        button.classList.add("active");
+        updateMedicineMasterView();
+    });
+});
+
+document.getElementById("medicineSearch").addEventListener("input", updateMedicineMasterView);
+document.getElementById("medicineSort").addEventListener("change", updateMedicineMasterView);
+
+document.addEventListener("app:async-success", function (event) {
+    const detail = event.detail || {};
+    const trigger = detail.trigger;
+    if (!trigger || !trigger.closest) return;
+
+    const group = trigger.closest(".medicine-group");
+    if (!group) return;
+
+    const actionUrl = String(detail.actionUrl || "").toLowerCase();
+    if (!actionUrl.includes("/medicines/delete/")) return;
+
+    refreshMedicineGroupAfterDelete(group);
+});
+
+updateMedicineMasterView();
+</script>
 {% endblock %}
