@@ -307,6 +307,7 @@ class VendorPurchase(db.Model):
     vendor_id = db.Column(db.Integer, nullable=False)
     purchase_no = db.Column(db.String(30), unique=True)
     invoice_no = db.Column(db.String(60))
+    bill_attachment_ref = db.Column(db.String(255))
     purchase_date = db.Column(db.DateTime, default=datetime.utcnow)
     payment_mode = db.Column(db.String(30))
     payment_status = db.Column(db.String(30))

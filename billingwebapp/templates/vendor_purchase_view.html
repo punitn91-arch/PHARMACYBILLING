@@ -38,6 +38,27 @@
     align-items: center;
 }
 
+.attachment-panel {
+    margin-top: 14px;
+    padding: 12px;
+    background: #f8fbff;
+    border: 1px solid #dce8fb;
+    border-radius: 8px;
+}
+
+.attachment-panel strong {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.attachment-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
@@ -107,6 +128,22 @@ td {
 
     <div class="actions">
         <a class="btn" href="/vendor/edit/{{ purchase.vendor_id }}">Back to Vendor</a>
+        {% if purchase.bill_attachment_ref %}
+        <a class="btn" href="/vendor/purchase/{{ purchase.id }}/bill-file" target="_blank">View Bill Photo</a>
+        {% endif %}
+    </div>
+
+    <div class="attachment-panel">
+        <strong>Bill Photo / PDF</strong>
+        {% if purchase.bill_attachment_ref %}
+        <div>Current file: <a href="/vendor/purchase/{{ purchase.id }}/bill-file" target="_blank">{{ purchase.bill_attachment_ref }}</a></div>
+        {% else %}
+        <div>No bill photo uploaded for this purchase yet.</div>
+        {% endif %}
+        <form method="POST" action="/vendor/purchase/{{ purchase.id }}/bill-file/upload" enctype="multipart/form-data" class="attachment-form">
+            <input type="file" name="bill_attachment_file" accept=".pdf,.png,.jpg,.jpeg" required>
+            <button class="btn" type="submit">{% if purchase.bill_attachment_ref %}Replace Bill Photo{% else %}Upload Bill Photo{% endif %}</button>
+        </form>
     </div>
 </div>
 

@@ -318,7 +318,7 @@ td {
 <div class="card" style="margin-top:16px;">
     <h3>Purchased Medicines</h3>
 
-    <form method="POST" action="/vendor/{{ vendor.id }}/purchase" id="purchaseForm" onsubmit="return confirm('Save purchase and update stock?')">
+    <form method="POST" action="/vendor/{{ vendor.id }}/purchase" id="purchaseForm" enctype="multipart/form-data" onsubmit="return confirm('Save purchase and update stock?')">
         <div class="grid">
             <div>
                 <label>Bill / Invoice No</label>
@@ -348,6 +348,10 @@ td {
             <div>
                 <label>Paid Amount (for Partial)</label>
                 <input type="number" step="any" inputmode="decimal" class="decimal-input" name="paid_amount" value="0">
+            </div>
+            <div class="full">
+                <label>Bill Photo / PDF</label>
+                <input type="file" name="bill_attachment_file" accept=".pdf,.png,.jpg,.jpeg">
             </div>
         </div>
 
@@ -437,6 +441,7 @@ td {
             <th>Bill Date</th>
             <th>Bill Amount</th>
             <th>Payment Status</th>
+            <th>Bill File</th>
             <th>Actions</th>
         </tr>
         {% for b in purchase_bills %}
@@ -445,6 +450,13 @@ td {
             <td>{{ b.purchase_date.strftime('%d-%m-%Y') if b.purchase_date else '-' }}</td>
             <td>{{ b.total_amount or 0 }}</td>
             <td><span class="badge">{{ b.payment_status or '-' }}</span></td>
+            <td>
+                {% if b.bill_attachment_ref %}
+                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}/bill-file" target="_blank">View Photo</a>
+                {% else %}
+                <span class="badge">No Photo</span>
+                {% endif %}
+            </td>
             <td>
                 <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}">View</a>
                 <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=edit">Edit</a>
@@ -674,6 +686,8 @@ if (newBillBtn) {
         if (form) {
             form.querySelector("input[name='invoice_no']").value = "";
             form.querySelector("input[name='paid_amount']").value = "0";
+            let billFile = form.querySelector("input[name='bill_attachment_file']");
+            if (billFile) billFile.value = "";
             form.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
             let dateInput = form.querySelector("input[name='purchase_date']");
             if (dateInput) {

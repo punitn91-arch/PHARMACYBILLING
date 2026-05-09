@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory
 from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry
 from datetime import datetime, time, timedelta, date
 from functools import wraps
@@ -98,10 +98,41 @@ UPLOAD_FOLDER = ensure_writable_dir(
     os.path.join(APP_BASE_DIR, "static", "uploads", "vendors"),
     os.path.join(TMP_BASE_DIR, "uploads", "vendors")
 )
+VENDOR_BILL_UPLOAD_FOLDER = ensure_writable_dir(
+    os.path.join(APP_BASE_DIR, "static", "uploads", "vendor_bills"),
+    os.path.join(TMP_BASE_DIR, "uploads", "vendor_bills")
+)
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def save_uploaded_file(file_storage, upload_dir, prefix):
+    if not file_storage or not (file_storage.filename or "").strip():
+        return ""
+    if not allowed_file(file_storage.filename):
+        raise ValueError("Only PDF, JPG and PNG files are allowed")
+    original_name = secure_filename(file_storage.filename)
+    name_root, ext = os.path.splitext(original_name)
+    safe_root = secure_filename(name_root)[:80] or "file"
+    stamp = clinic_now().strftime("%Y%m%d%H%M%S")
+    token = secrets.token_hex(4)
+    saved_name = f"{prefix}_{stamp}_{token}_{safe_root}{ext.lower()}"
+    file_storage.save(os.path.join(upload_dir, saved_name))
+    return saved_name
+
+
+def delete_uploaded_file(upload_dir, filename):
+    cleaned_name = (filename or "").strip()
+    if not cleaned_name:
+        return
+    file_path = os.path.join(upload_dir, cleaned_name)
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
 
 def is_async_request():
     return request.headers.get("X-Requested-With") == "XMLHttpRequest"
@@ -1038,6 +1069,7 @@ with app.app_context():
         ensure_column("vendor", "pincode", "TEXT")
         ensure_column("vendor", "account_holder_name", "TEXT")
         ensure_column("vendor_purchase", "invoice_no", "TEXT")
+        ensure_column("vendor_purchase", "bill_attachment_ref", "TEXT")
         ensure_column("vendor_purchase", "paid_amount", "REAL")
 
         ensure_column("return_bill", "return_no", "TEXT")
@@ -3035,6 +3067,10 @@ def add_vendor_purchase(id):
     payment_mode = request.form.get("payment_mode") or vendor.default_payment_mode or "CASH"
     payment_status = request.form.get("payment_status") or vendor.payment_status or "Unpaid"
     paid_amount = to_float(request.form.get("paid_amount"))
+    bill_attachment_file = request.files.get("bill_attachment_file")
+    if bill_attachment_file and (bill_attachment_file.filename or "").strip() and not allowed_file(bill_attachment_file.filename):
+        flash("Bill photo must be PDF, JPG or PNG", "danger")
+        return redirect(f"/vendor/edit/{vendor.id}")
 
     names = request.form.getlist("medicine_name")
     compositions = request.form.getlist("composition")
@@ -3138,6 +3174,12 @@ def add_vendor_purchase(id):
     db.session.add(purchase)
     db.session.flush()
     purchase.purchase_no = f"PB-{purchase.id:06d}"
+    if bill_attachment_file and (bill_attachment_file.filename or "").strip():
+        purchase.bill_attachment_ref = save_uploaded_file(
+            bill_attachment_file,
+            VENDOR_BILL_UPLOAD_FOLDER,
+            f"vendorbill_{vendor.id}_{purchase.id}"
+        )
 
     for item in line_items:
         med = find_medicine_by_name_batch(item["name"], item["batch"])
@@ -3237,6 +3279,44 @@ def view_vendor_purchase(purchase_id):
         mode=mode
     )
 
+@app.route("/vendor/purchase/<int:purchase_id>/bill-file")
+@login_required
+@inventory_access_required
+def view_vendor_purchase_bill_file(purchase_id):
+    purchase = VendorPurchase.query.get_or_404(purchase_id)
+    filename = (purchase.bill_attachment_ref or "").strip()
+    if not filename:
+        return "No bill photo uploaded for this purchase.", 404
+    file_path = os.path.join(VENDOR_BILL_UPLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        return "Bill photo file not found on server.", 404
+    return send_from_directory(VENDOR_BILL_UPLOAD_FOLDER, filename, as_attachment=False)
+
+@app.route("/vendor/purchase/<int:purchase_id>/bill-file/upload", methods=["POST"])
+@login_required
+@inventory_access_required
+def upload_vendor_purchase_bill_file(purchase_id):
+    purchase = VendorPurchase.query.get_or_404(purchase_id)
+    bill_attachment_file = request.files.get("bill_attachment_file")
+    if not bill_attachment_file or not (bill_attachment_file.filename or "").strip():
+        flash("Please choose a bill photo or PDF to upload", "danger")
+        return redirect(url_for("view_vendor_purchase", purchase_id=purchase.id))
+    if not allowed_file(bill_attachment_file.filename):
+        flash("Bill photo must be PDF, JPG or PNG", "danger")
+        return redirect(url_for("view_vendor_purchase", purchase_id=purchase.id))
+
+    old_attachment = purchase.bill_attachment_ref or ""
+    purchase.bill_attachment_ref = save_uploaded_file(
+        bill_attachment_file,
+        VENDOR_BILL_UPLOAD_FOLDER,
+        f"vendorbill_{purchase.vendor_id}_{purchase.id}"
+    )
+    db.session.commit()
+    if old_attachment and old_attachment != purchase.bill_attachment_ref:
+        delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, old_attachment)
+    flash("Bill photo uploaded successfully", "success")
+    return redirect(url_for("view_vendor_purchase", purchase_id=purchase.id))
+
 @app.route("/vendor/purchase/delete/<int:purchase_id>")
 @login_required
 @inventory_access_required
@@ -3278,6 +3358,7 @@ def delete_vendor_purchase(purchase_id):
 
     purchase_total = to_float(purchase.total_amount)
     status = (purchase.payment_status or "").strip().lower()
+    bill_attachment_ref = purchase.bill_attachment_ref or ""
     raw_paid_amount = getattr(purchase, "paid_amount", None)
     paid_amount = to_float(raw_paid_amount)
     if paid_amount < 0:
@@ -3351,6 +3432,8 @@ def delete_vendor_purchase(purchase_id):
     db.session.delete(purchase)
 
     db.session.commit()
+    if bill_attachment_ref:
+        delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, bill_attachment_ref)
     if legacy_partial_unknown:
         flash(
             f"Bill {bill_no} deleted. Outstanding balance for old partial bill was not auto-adjusted (paid amount missing).",
