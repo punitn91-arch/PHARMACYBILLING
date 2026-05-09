@@ -375,11 +375,6 @@ td {
                 <tr class="purchase-row">
                     <td>
                         <input type="text" name="medicine_name" list="medicineList">
-                        <datalist id="medicineList">
-                            {% for m in medicines %}
-                            <option value="{{ m.name }}"></option>
-                            {% endfor %}
-                        </datalist>
                     </td>
                     <td><input type="text" name="composition"></td>
                     <td><input type="text" name="company"></td>
@@ -410,6 +405,11 @@ td {
             </tbody>
         </table>
         </div>
+        <datalist id="medicineList">
+            {% for medicine_name in medicine_names %}
+            <option value="{{ medicine_name }}"></option>
+            {% endfor %}
+        </datalist>
 
         <div class="purchase-actions">
             <div class="left-actions">

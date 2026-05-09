@@ -185,6 +185,20 @@ def parse_pack_qty(val):
     except ValueError:
         return None
 
+
+def normalize_medicine_name(value):
+    return " ".join(str(value or "").strip().split())
+
+
+def build_medicine_name_suggestions(medicines):
+    unique_names = {}
+    for med in medicines:
+        cleaned_name = normalize_medicine_name(getattr(med, "name", ""))
+        if not cleaned_name:
+            continue
+        unique_names.setdefault(cleaned_name.casefold(), cleaned_name)
+    return sorted(unique_names.values(), key=str.lower)
+
 def to_int_safe(val, default=0):
     try:
         return int(str(val).strip())
@@ -2897,7 +2911,7 @@ def add_vendor():
         flash("Vendor added successfully", "success")
         return redirect("/vendor")
 
-    return render_template("vendor_form.html", vendor=None)
+    return render_template("vendor_form.html", vendor=None, medicine_names=[])
 
 @app.route("/vendor/edit/<int:id>", methods=["GET", "POST"])
 @login_required
@@ -2963,6 +2977,7 @@ def edit_vendor(id):
         return redirect("/vendor")
 
     medicines = Medicine.query.order_by(Medicine.name).all()
+    medicine_names = build_medicine_name_suggestions(medicines)
     purchase_items = VendorPurchaseItem.query.filter_by(vendor_id=v.id).order_by(VendorPurchaseItem.created_at.desc()).limit(50).all()
     today = date.today()
     for item in purchase_items:
@@ -2991,6 +3006,7 @@ def edit_vendor(id):
         "vendor_form.html",
         vendor=v,
         medicines=medicines,
+        medicine_names=medicine_names,
         purchase_items=purchase_items,
         last_rates=last_rates,
         purchase_bills=purchase_bills
