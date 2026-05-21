@@ -37,6 +37,42 @@
         font-size: 16px;
     }
 
+    .password-field {
+        width: 90%;
+        margin: 10px auto 0;
+        position: relative;
+    }
+
+    .password-field .login-input {
+        width: 100%;
+        margin: 0;
+        padding-right: 46px;
+    }
+
+    .toggle-password {
+        position: absolute;
+        top: 50%;
+        right: 12px;
+        transform: translateY(-50%);
+        border: none;
+        background: transparent;
+        padding: 0;
+        cursor: pointer;
+        color: #666;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .toggle-password:hover {
+        color: #007bff;
+    }
+
+    .toggle-password svg {
+        width: 20px;
+        height: 20px;
+    }
+
     .login-btn {
         width: 95%;
         background: #007bff;
@@ -62,11 +98,42 @@
 
     <form method="POST" autocomplete="off">
         <input type="text" name="username" placeholder="Username" class="login-input" autocomplete="off" required>
-        <input type="password" name="password" placeholder="Password" class="login-input" autocomplete="new-password" required>
+        <div class="password-field">
+            <input type="password" name="password" id="password" placeholder="Password" class="login-input" autocomplete="new-password" required>
+            <button type="button" class="toggle-password" id="togglePassword" aria-label="Show password" aria-pressed="false">
+                <svg id="eyeOpen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <svg id="eyeClosed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="display: none;">
+                    <path d="M3 3l18 18"></path>
+                    <path d="M10.6 10.7a3 3 0 0 0 4.2 4.2"></path>
+                    <path d="M9.4 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7a21.7 21.7 0 0 1-5 5.8"></path>
+                    <path d="M6.7 6.7A21.5 21.5 0 0 0 1 12s4 7 11 7a10.7 10.7 0 0 0 5.3-1.3"></path>
+                </svg>
+            </button>
+        </div>
 
         <button type="submit" class="login-btn">Login</button>
     </form>
 
 </div>
+
+<script>
+    const passwordInput = document.getElementById("password");
+    const togglePassword = document.getElementById("togglePassword");
+    const eyeOpen = document.getElementById("eyeOpen");
+    const eyeClosed = document.getElementById("eyeClosed");
+
+    togglePassword.addEventListener("click", function () {
+        const showPassword = passwordInput.type === "password";
+
+        passwordInput.type = showPassword ? "text" : "password";
+        togglePassword.setAttribute("aria-label", showPassword ? "Hide password" : "Show password");
+        togglePassword.setAttribute("aria-pressed", showPassword ? "true" : "false");
+        eyeOpen.style.display = showPassword ? "none" : "block";
+        eyeClosed.style.display = showPassword ? "block" : "none";
+    });
+</script>
 
 {% endblock %}
