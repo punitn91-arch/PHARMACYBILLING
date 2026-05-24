@@ -11,6 +11,13 @@
     border-radius: 6px;
     box-shadow: 0 0 6px #cfd8e3;
 }
+.field-label {
+    display: block;
+    margin-bottom: 6px;
+    color: #2f3f56;
+    font-size: 14px;
+    font-weight: 600;
+}
 
 input {
     width: 100%;
@@ -35,9 +42,16 @@ button {
     <h2>➕ Add Medicine</h2>
 
     <form method="POST">
-        <input type="text" name="name" placeholder="Medicine Name" required>
-        <input type="text" name="batch" placeholder="Batch" required>
-        <input type="date" name="expiry" required>
+        <label class="field-label" for="medicineName">Medicine Name</label>
+        <input type="text" id="medicineName" name="name" placeholder="Medicine Name" required>
+
+        <label class="field-label" for="medicineBatch">Batch</label>
+        <input type="text" id="medicineBatch" name="batch" placeholder="Batch" required>
+
+        <label class="field-label" for="medicineExpiry">Expiry Date</label>
+        <input type="date" id="medicineExpiry" name="expiry" required>
+
+        <label class="field-label" for="packType">Pack Type</label>
         <select name="pack_type" id="packType">
             <option value="">Select Pack Type</option>
             <option>Strip</option>
@@ -48,15 +62,21 @@ button {
             <option>Vial</option>
             <option>Unit</option>
         </select>
-        <label id="packQtyLabel">Units per Pack</label>
-        <input type="number" name="pack_qty" min="1" step="1" placeholder="e.g. 10">
-        <input type="number" name="mrp" placeholder="MRP" required>
-        <label>Discount (%)</label>
+
+        <label class="field-label" id="packQtyLabel" for="packQty">Units per Pack</label>
+        <input type="number" id="packQty" name="pack_qty" min="1" step="1" placeholder="e.g. 10">
+
+        <label class="field-label" for="medicineMrp">MRP</label>
+        <input type="number" id="medicineMrp" name="mrp" placeholder="MRP" required>
+
+        <label class="field-label" for="discountPercent">Discount (%)</label>
 <input type="number" name="discount_percent"
+       id="discountPercent"
        min="0" max="100" value="{{ medicine.discount_percent if medicine else 0 }}"
        required>
 
-        <input type="number" name="qty" placeholder="Stock Qty" required>
+        <label class="field-label" for="stockQty">Stock Qty</label>
+        <input type="number" id="stockQty" name="qty" placeholder="Stock Qty" required>
 
         <button type="submit">Save Medicine</button>
     </form>

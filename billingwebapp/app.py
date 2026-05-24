@@ -1,7 +1,7 @@
 # app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory
 from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry
-from datetime import datetime, time, timedelta, date
+from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
 import webbrowser
 import threading
@@ -806,6 +806,32 @@ def parse_date(val):
     except ValueError:
         return None
 
+def get_clinic_tzinfo():
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(APP_TIMEZONE)
+        except Exception:
+            return None
+    return None
+
+def local_date_range_to_storage_bounds(start_date, end_date=None):
+    if not start_date:
+        return None, None
+    end_date = end_date or start_date
+    start_local = datetime.combine(start_date, time.min)
+    end_local_exclusive = datetime.combine(end_date + timedelta(days=1), time.min)
+    tzinfo = get_clinic_tzinfo()
+    if not tzinfo:
+        return start_local, end_local_exclusive
+    start_utc = start_local.replace(tzinfo=tzinfo).astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_local_exclusive.replace(tzinfo=tzinfo).astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, end_utc
+
+def local_month_to_storage_bounds(year, month):
+    month_start = date(year, month, 1)
+    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return local_date_range_to_storage_bounds(month_start, next_month - timedelta(days=1))
+
 def parse_time_value(val):
     if not val:
         return None
@@ -869,6 +895,31 @@ def find_medicine_by_name_batch(name, batch):
         db.func.lower(Medicine.name) == n.lower(),
         db.func.lower(Medicine.batch) == b.lower()
     ).first()
+
+def find_medicine_discount_template(name, pack_type="", pack_qty=None, exclude_medicine_id=None):
+    normalized_name = normalize_medicine_name(name)
+    if not normalized_name:
+        return None
+
+    base_query = Medicine.query.filter(
+        db.func.lower(db.func.trim(Medicine.name)) == normalized_name.lower()
+    )
+    if exclude_medicine_id:
+        base_query = base_query.filter(Medicine.id != exclude_medicine_id)
+
+    exact_query = base_query
+    normalized_pack_type = (pack_type or "").strip().lower()
+    if normalized_pack_type:
+        exact_query = exact_query.filter(
+            db.func.lower(db.func.coalesce(Medicine.pack_type, "")) == normalized_pack_type
+        )
+    if pack_qty is not None:
+        exact_query = exact_query.filter(Medicine.pack_qty == pack_qty)
+
+    template = exact_query.order_by(Medicine.created_at.desc(), Medicine.id.desc()).first()
+    if template:
+        return template
+    return base_query.order_by(Medicine.created_at.desc(), Medicine.id.desc()).first()
 
 def normalize_expiry(val):
     if not val:
@@ -1546,19 +1597,18 @@ def build_patient_medicine_usage_report(
     if not from_date_raw or not to_date_raw:
         return [], [], None, "Please select both from date and to date."
 
-    try:
-        start = datetime.strptime(from_date_raw, "%Y-%m-%d")
-        end = datetime.strptime(to_date_raw, "%Y-%m-%d")
-    except ValueError:
+    start_date = parse_date(from_date_raw)
+    end_date = parse_date(to_date_raw)
+    if not start_date or not end_date:
         return [], [], None, "Please enter valid from/to dates."
 
-    if end < start:
+    if end_date < start_date:
         return [], [], None, "To date must be greater than or equal to from date."
 
-    end_exclusive = end + timedelta(days=1)
+    start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
     invoices = Invoice.query.filter(
-        Invoice.created_at >= start,
-        Invoice.created_at < end_exclusive
+        Invoice.created_at >= start_bound,
+        Invoice.created_at < end_bound
     ).order_by(
         Invoice.created_at.asc(),
         Invoice.id.asc()
@@ -1697,6 +1747,218 @@ def build_patient_medicine_usage_report(
         "total_qty": total_qty
     }
     return patients, detail_rows, summary, None
+
+def build_profit_report_summary(from_date_raw, to_date_raw):
+    start_date = parse_date(from_date_raw)
+    end_date = parse_date(to_date_raw)
+
+    if not from_date_raw or not to_date_raw:
+        return None, "Please select from and to dates"
+    if not start_date or not end_date:
+        return None, "Please enter valid from and to dates."
+    if end_date < start_date:
+        return None, "To date must be greater than or equal to from date."
+
+    start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
+
+    sales_total = db.session.query(db.func.coalesce(db.func.sum(Invoice.subtotal), 0)).filter(
+        Invoice.created_at >= start_bound,
+        Invoice.created_at < end_bound
+    ).scalar() or 0
+    returns_total = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.net_amount), 0)).join(
+        Return, ReturnItem.return_id == Return.id
+    ).filter(
+        Return.created_at >= start_bound,
+        Return.created_at < end_bound,
+        Return.is_cancelled == False
+    ).scalar() or 0
+    cogs = db.session.query(db.func.coalesce(db.func.sum(InvoiceItem.cost_amount), 0)).join(
+        Invoice, InvoiceItem.invoice_id == Invoice.id
+    ).filter(
+        Invoice.created_at >= start_bound,
+        Invoice.created_at < end_bound
+    ).scalar() or 0
+    return_cogs = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.cost_amount), 0)).join(
+        Return, ReturnItem.return_id == Return.id
+    ).filter(
+        Return.created_at >= start_bound,
+        Return.created_at < end_bound,
+        Return.is_cancelled == False
+    ).scalar() or 0
+
+    net_sales = sales_total - returns_total
+    net_cogs = cogs - return_cogs
+    gross_profit = net_sales - net_cogs
+    gross_profit_percentage = (gross_profit / net_sales * 100) if net_sales else 0
+
+    return {
+        "from_date": start_date.isoformat(),
+        "to_date": end_date.isoformat(),
+        "sales_total": round(sales_total, 2),
+        "returns_total": round(returns_total, 2),
+        "net_sales": round(net_sales, 2),
+        "cogs": round(cogs, 2),
+        "return_cogs": round(return_cogs, 2),
+        "net_cogs": round(net_cogs, 2),
+        "gross_profit": round(gross_profit, 2),
+        "gross_profit_percentage": round(gross_profit_percentage, 2)
+    }, None
+
+def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query="", top_n=10):
+    from_date_raw = (from_date_raw or "").strip()
+    to_date_raw = (to_date_raw or "").strip()
+    query_text = (medicine_query or "").strip().lower()
+    top_n = to_int_safe(top_n, 10)
+    if top_n < 1:
+        top_n = 10
+    if top_n > 100:
+        top_n = 100
+
+    errors = []
+    start_date = parse_date(from_date_raw) if from_date_raw else None
+    end_date = parse_date(to_date_raw) if to_date_raw else None
+    if from_date_raw and not start_date:
+        errors.append("Invalid from date")
+    if to_date_raw and not end_date:
+        errors.append("Invalid to date")
+
+    result = {
+        "medicine_summary": [],
+        "fast_movers": [],
+        "medicine_totals": None,
+        "top_n": top_n
+    }
+
+    if start_date and end_date and end_date < start_date:
+        errors.append("To date must be greater than or equal to from date")
+        return result, errors
+
+    start_bound = None
+    end_bound = None
+    if start_date:
+        start_bound, _ = local_date_range_to_storage_bounds(start_date, start_date)
+    if end_date:
+        _, end_bound = local_date_range_to_storage_bounds(end_date, end_date)
+
+    period_days = 0
+    if start_date and end_date:
+        period_days = (end_date - start_date).days + 1
+    elif start_date and not end_date:
+        period_days = (clinic_now().date() - start_date).days + 1
+    elif end_date and not start_date:
+        period_days = 1
+
+    rows = {}
+    med_name_by_id = {m.id: (m.name or "").strip() for m in Medicine.query.all()}
+
+    def get_row(name):
+        key = (name or "").strip().upper()
+        if not key:
+            return None
+        if key not in rows:
+            rows[key] = {
+                "medicine": key,
+                "purchase_qty": 0,
+                "free_qty": 0,
+                "inward_qty": 0,
+                "sold_qty": 0,
+                "return_qty": 0,
+                "net_sold_qty": 0,
+                "current_stock": 0,
+                "purchase_value": 0.0,
+                "sales_value": 0.0,
+                "avg_daily_sale": 0.0
+            }
+        return rows[key]
+
+    for med in Medicine.query.all():
+        row = get_row(med.name)
+        if not row:
+            continue
+        row["current_stock"] += to_int(med.qty)
+
+    purchase_query = VendorPurchaseItem.query
+    if start_bound:
+        purchase_query = purchase_query.filter(VendorPurchaseItem.created_at >= start_bound)
+    if end_bound:
+        purchase_query = purchase_query.filter(VendorPurchaseItem.created_at < end_bound)
+    for item in purchase_query.all():
+        med_name = (item.medicine_name or med_name_by_id.get(item.medicine_id) or "").strip()
+        row = get_row(med_name)
+        if not row:
+            continue
+        qty = to_int(item.qty)
+        free_qty = to_int(item.free_qty)
+        row["purchase_qty"] += qty
+        row["free_qty"] += free_qty
+        row["inward_qty"] += qty + free_qty
+        row["purchase_value"] += to_float(item.total_value)
+
+    sales_query = InvoiceItem.query.join(Invoice, InvoiceItem.invoice_id == Invoice.id)
+    if start_bound:
+        sales_query = sales_query.filter(Invoice.created_at >= start_bound)
+    if end_bound:
+        sales_query = sales_query.filter(Invoice.created_at < end_bound)
+    for item in sales_query.all():
+        row = get_row(item.name)
+        if not row:
+            continue
+        row["sold_qty"] += to_int(item.qty)
+        sales_value = item.net_amount if item.net_amount not in (None, 0) else item.amount
+        row["sales_value"] += to_float(sales_value)
+
+    return_query = ReturnItem.query.join(Return, ReturnItem.return_id == Return.id).filter(
+        Return.is_cancelled == False
+    )
+    if start_bound:
+        return_query = return_query.filter(Return.created_at >= start_bound)
+    if end_bound:
+        return_query = return_query.filter(Return.created_at < end_bound)
+    for item in return_query.all():
+        row = get_row(item.medicine_name)
+        if not row:
+            continue
+        row["return_qty"] += to_int(item.qty)
+
+    for row in rows.values():
+        row["net_sold_qty"] = row["sold_qty"] - row["return_qty"]
+        if period_days > 0:
+            row["avg_daily_sale"] = round(row["net_sold_qty"] / period_days, 2)
+        else:
+            row["avg_daily_sale"] = round(float(row["net_sold_qty"]), 2)
+        row["purchase_value"] = round(row["purchase_value"], 2)
+        row["sales_value"] = round(row["sales_value"], 2)
+
+    medicine_summary = list(rows.values())
+    if query_text:
+        medicine_summary = [
+            row for row in medicine_summary
+            if query_text in (row["medicine"] or "").lower()
+        ]
+    medicine_summary.sort(key=lambda row: (row["medicine"] or "").lower())
+
+    fast_movers = [row for row in medicine_summary if row["net_sold_qty"] > 0]
+    fast_movers.sort(
+        key=lambda row: (row["avg_daily_sale"], row["net_sold_qty"], row["sales_value"]),
+        reverse=True
+    )
+
+    result["medicine_summary"] = medicine_summary
+    result["fast_movers"] = fast_movers[:top_n]
+    result["medicine_totals"] = {
+        "count": len(medicine_summary),
+        "purchase_qty": sum(row["purchase_qty"] for row in medicine_summary),
+        "free_qty": sum(row["free_qty"] for row in medicine_summary),
+        "inward_qty": sum(row["inward_qty"] for row in medicine_summary),
+        "sold_qty": sum(row["sold_qty"] for row in medicine_summary),
+        "return_qty": sum(row["return_qty"] for row in medicine_summary),
+        "net_sold_qty": sum(row["net_sold_qty"] for row in medicine_summary),
+        "current_stock": sum(row["current_stock"] for row in medicine_summary),
+        "purchase_value": round(sum(row["purchase_value"] for row in medicine_summary), 2),
+        "sales_value": round(sum(row["sales_value"] for row in medicine_summary), 2),
+        "period_days": period_days
+    }
+    return result, errors
 
 @app.route("/medicines/add", methods=["GET", "POST"])
 @login_required
@@ -3206,6 +3468,11 @@ def add_vendor_purchase(id):
     for item in line_items:
         med = find_medicine_by_name_batch(item["name"], item["batch"])
         if not med:
+            discount_template = find_medicine_discount_template(
+                item["name"],
+                item["pack_type"],
+                item.get("pack_qty")
+            )
             med = Medicine(
                 name=item["name"],
                 composition=item["composition"],
@@ -3216,7 +3483,13 @@ def add_vendor_purchase(id):
                 expiry=item["expiry"],
                 mrp=item["mrp"] or 0,
                 qty=0,
-                discount_percent=int(item["discount_percent"] or 0)
+                # Keep selling discount in sync across new batches of the same medicine.
+                discount_percent=int(
+                    to_float_safe(
+                        getattr(discount_template, "discount_percent", item["discount_percent"]),
+                        item["discount_percent"]
+                    ) or 0
+                )
             )
             db.session.add(med)
             db.session.flush()
@@ -3544,7 +3817,6 @@ def edit_vendor_purchase_item(item_id):
             med.composition = composition
             med.company = company
             med.pack_type = pack_type
-            med.discount_percent = int(discount_percent or 0)
             if pack_qty_raw:
                 med.pack_qty = pack_qty
 
@@ -4980,12 +5252,11 @@ def reports():
         # DAILY
         if report_type == "daily":
             today = clinic_now().date()
-            start = datetime.combine(today, time.min)
-            end = datetime.combine(today, time.max)
+            start_bound, end_bound = local_date_range_to_storage_bounds(today, today)
 
             invoices = Invoice.query.filter(
-                Invoice.created_at >= start,
-                Invoice.created_at <= end
+                Invoice.created_at >= start_bound,
+                Invoice.created_at < end_bound
             ).all()
 
         # MONTHLY
@@ -4995,9 +5266,10 @@ def reports():
             if month < 1 or month > 12 or year < 1900:
                 flash("Please enter a valid month and year.", "danger")
             else:
+                start_bound, end_bound = local_month_to_storage_bounds(year, month)
                 invoices = Invoice.query.filter(
-                    db.extract("month", Invoice.created_at) == month,
-                    db.extract("year", Invoice.created_at) == year
+                    Invoice.created_at >= start_bound,
+                    Invoice.created_at < end_bound
                 ).all()
 
         # CUSTOM DATE
@@ -5006,12 +5278,14 @@ def reports():
             to_date = request.form.get("to_date")
 
             if from_date and to_date:
-                try:
-                    from_dt = datetime.strptime(from_date, "%Y-%m-%d")
-                    to_dt = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                except ValueError:
+                from_date_value = parse_date(from_date)
+                to_date_value = parse_date(to_date)
+                if not from_date_value or not to_date_value:
                     flash("Please enter valid from/to dates.", "danger")
+                elif to_date_value < from_date_value:
+                    flash("To date must be greater than or equal to from date.", "danger")
                 else:
+                    from_dt, to_dt = local_date_range_to_storage_bounds(from_date_value, to_date_value)
                     invoices = Invoice.query.filter(
                         Invoice.created_at >= from_dt,
                         Invoice.created_at < to_dt
@@ -5078,202 +5352,27 @@ def reports():
 
         # PROFIT / LOSS (FIFO)
         elif report_type == "profit":
-            from_date = request.form.get("from_date")
-            to_date = request.form.get("to_date")
-            if not from_date or not to_date:
-                flash("Please select from and to dates", "danger")
-            else:
-                start = datetime.strptime(from_date, "%Y-%m-%d")
-                end = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                sales_total = db.session.query(db.func.coalesce(db.func.sum(Invoice.subtotal), 0)).filter(
-                    Invoice.created_at >= start,
-                    Invoice.created_at < end
-                ).scalar() or 0
-                returns_total = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.net_amount), 0)).join(
-                    Return, ReturnItem.return_id == Return.id
-                ).filter(
-                    Return.created_at >= start,
-                    Return.created_at < end,
-                    Return.is_cancelled == False
-                ).scalar() or 0
-                cogs = db.session.query(db.func.coalesce(db.func.sum(InvoiceItem.cost_amount), 0)).join(
-                    Invoice, InvoiceItem.invoice_id == Invoice.id
-                ).filter(
-                    Invoice.created_at >= start,
-                    Invoice.created_at < end
-                ).scalar() or 0
-                return_cogs = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.cost_amount), 0)).join(
-                    Return, ReturnItem.return_id == Return.id
-                ).filter(
-                    Return.created_at >= start,
-                    Return.created_at < end,
-                    Return.is_cancelled == False
-                ).scalar() or 0
-
-                net_sales = sales_total - returns_total
-                net_cogs = cogs - return_cogs
-                gross_profit = net_sales - net_cogs
-                gross_profit_percentage = (gross_profit / net_sales * 100) if net_sales else 0
-
-                profit_summary = {
-                    "from_date": from_date,
-                    "to_date": to_date,
-                    "sales_total": round(sales_total, 2),
-                    "returns_total": round(returns_total, 2),
-                    "net_sales": round(net_sales, 2),
-                    "cogs": round(cogs, 2),
-                    "return_cogs": round(return_cogs, 2),
-                    "net_cogs": round(net_cogs, 2),
-                    "gross_profit": round(gross_profit, 2),
-                    "gross_profit_percentage": round(gross_profit_percentage, 2)
-                }
+            profit_summary, profit_error = build_profit_report_summary(
+                request.form.get("from_date"),
+                request.form.get("to_date")
+            )
+            if profit_error:
+                flash(profit_error, "danger")
 
         # MEDICINE SUMMARY / FAST MOVERS
         elif report_type == "medicine":
-            from_date = report_filters["from_date"]
-            to_date = report_filters["to_date"]
-            q = report_filters["medicine_query"].lower()
-            top_n = to_int_safe(report_filters["top_n"], 10)
-            if top_n < 1:
-                top_n = 10
-            if top_n > 100:
-                top_n = 100
-            report_filters["top_n"] = str(top_n)
-
-            start = None
-            end = None
-            if from_date:
-                try:
-                    start = datetime.strptime(from_date, "%Y-%m-%d")
-                except ValueError:
-                    flash("Invalid from date", "danger")
-            if to_date:
-                try:
-                    end = datetime.strptime(to_date, "%Y-%m-%d")
-                except ValueError:
-                    flash("Invalid to date", "danger")
-
-            if start and end and end < start:
-                flash("To date must be greater than or equal to from date", "danger")
-            else:
-                end_exclusive = (end + timedelta(days=1)) if end else None
-                period_days = 0
-                if start and end:
-                    period_days = (end.date() - start.date()).days + 1
-                elif start and not end:
-                    period_days = (clinic_now().date() - start.date()).days + 1
-                elif end and not start:
-                    period_days = 1
-
-                rows = {}
-                med_name_by_id = {m.id: (m.name or "").strip() for m in Medicine.query.all()}
-
-                def get_row(name):
-                    key = (name or "").strip().upper()
-                    if not key:
-                        return None
-                    if key not in rows:
-                        rows[key] = {
-                            "medicine": key,
-                            "purchase_qty": 0,
-                            "free_qty": 0,
-                            "inward_qty": 0,
-                            "sold_qty": 0,
-                            "return_qty": 0,
-                            "net_sold_qty": 0,
-                            "current_stock": 0,
-                            "purchase_value": 0.0,
-                            "sales_value": 0.0,
-                            "avg_daily_sale": 0.0
-                        }
-                    return rows[key]
-
-                for med in Medicine.query.all():
-                    row = get_row(med.name)
-                    if not row:
-                        continue
-                    row["current_stock"] += to_int(med.qty)
-
-                purchase_query = VendorPurchaseItem.query
-                if start:
-                    purchase_query = purchase_query.filter(VendorPurchaseItem.created_at >= start)
-                if end_exclusive:
-                    purchase_query = purchase_query.filter(VendorPurchaseItem.created_at < end_exclusive)
-                for item in purchase_query.all():
-                    med_name = (item.medicine_name or med_name_by_id.get(item.medicine_id) or "").strip()
-                    row = get_row(med_name)
-                    if not row:
-                        continue
-                    qty = to_int(item.qty)
-                    free_qty = to_int(item.free_qty)
-                    row["purchase_qty"] += qty
-                    row["free_qty"] += free_qty
-                    row["inward_qty"] += qty + free_qty
-                    row["purchase_value"] += to_float(item.total_value)
-
-                sales_query = InvoiceItem.query.join(Invoice, InvoiceItem.invoice_id == Invoice.id)
-                if start:
-                    sales_query = sales_query.filter(Invoice.created_at >= start)
-                if end_exclusive:
-                    sales_query = sales_query.filter(Invoice.created_at < end_exclusive)
-                for item in sales_query.all():
-                    row = get_row(item.name)
-                    if not row:
-                        continue
-                    row["sold_qty"] += to_int(item.qty)
-                    sales_value = item.net_amount if item.net_amount not in (None, 0) else item.amount
-                    row["sales_value"] += to_float(sales_value)
-
-                return_query = ReturnItem.query.join(Return, ReturnItem.return_id == Return.id).filter(
-                    Return.is_cancelled == False
-                )
-                if start:
-                    return_query = return_query.filter(Return.created_at >= start)
-                if end_exclusive:
-                    return_query = return_query.filter(Return.created_at < end_exclusive)
-                for item in return_query.all():
-                    row = get_row(item.medicine_name)
-                    if not row:
-                        continue
-                    row["return_qty"] += to_int(item.qty)
-
-                for row in rows.values():
-                    row["net_sold_qty"] = row["sold_qty"] - row["return_qty"]
-                    if period_days > 0:
-                        row["avg_daily_sale"] = round(row["net_sold_qty"] / period_days, 2)
-                    else:
-                        row["avg_daily_sale"] = round(float(row["net_sold_qty"]), 2)
-                    row["purchase_value"] = round(row["purchase_value"], 2)
-                    row["sales_value"] = round(row["sales_value"], 2)
-
-                medicine_summary = list(rows.values())
-                if q:
-                    medicine_summary = [
-                        r for r in medicine_summary
-                        if q in (r["medicine"] or "").lower()
-                    ]
-                medicine_summary.sort(key=lambda x: (x["medicine"] or "").lower())
-
-                movers = [r for r in medicine_summary if r["net_sold_qty"] > 0]
-                movers.sort(
-                    key=lambda x: (x["avg_daily_sale"], x["net_sold_qty"], x["sales_value"]),
-                    reverse=True
-                )
-                fast_movers = movers[:top_n]
-
-                medicine_totals = {
-                    "count": len(medicine_summary),
-                    "purchase_qty": sum(r["purchase_qty"] for r in medicine_summary),
-                    "free_qty": sum(r["free_qty"] for r in medicine_summary),
-                    "inward_qty": sum(r["inward_qty"] for r in medicine_summary),
-                    "sold_qty": sum(r["sold_qty"] for r in medicine_summary),
-                    "return_qty": sum(r["return_qty"] for r in medicine_summary),
-                    "net_sold_qty": sum(r["net_sold_qty"] for r in medicine_summary),
-                    "current_stock": sum(r["current_stock"] for r in medicine_summary),
-                    "purchase_value": round(sum(r["purchase_value"] for r in medicine_summary), 2),
-                    "sales_value": round(sum(r["sales_value"] for r in medicine_summary), 2),
-                    "period_days": period_days
-                }
+            medicine_report, medicine_errors = build_medicine_report_data(
+                report_filters["from_date"],
+                report_filters["to_date"],
+                medicine_query=report_filters["medicine_query"],
+                top_n=report_filters["top_n"]
+            )
+            for error in medicine_errors:
+                flash(error, "danger")
+            report_filters["top_n"] = str(medicine_report["top_n"])
+            medicine_summary = medicine_report["medicine_summary"]
+            fast_movers = medicine_report["fast_movers"]
+            medicine_totals = medicine_report["medicine_totals"]
 
         total = sum(i.total for i in invoices)
 
@@ -5367,31 +5466,35 @@ def export_excel():
         to_date = (request.args.get("to_date") or "").strip()
         patient = (request.args.get("patient") or "").strip()
         mobile_raw = (request.args.get("mobile") or "").strip()
+        search_query = (request.args.get("search_query") or "").strip()
+        medicine_query = (request.args.get("medicine_query") or "").strip()
+        top_n = request.args.get("top_n")
 
         query = Invoice.query
         applied_filter = "all"
         if report_type == "daily":
             today = clinic_now().date()
-            start = datetime.combine(today, time.min)
-            end = datetime.combine(today, time.max)
-            query = query.filter(Invoice.created_at >= start, Invoice.created_at <= end)
+            start_bound, end_bound = local_date_range_to_storage_bounds(today, today)
+            query = query.filter(Invoice.created_at >= start_bound, Invoice.created_at < end_bound)
             applied_filter = f"daily ({today.isoformat()})"
         elif report_type == "monthly":
             if month >= 1 and month <= 12 and year >= 1900:
+                start_bound, end_bound = local_month_to_storage_bounds(year, month)
                 query = query.filter(
-                    db.extract("month", Invoice.created_at) == month,
-                    db.extract("year", Invoice.created_at) == year
+                    Invoice.created_at >= start_bound,
+                    Invoice.created_at < end_bound
                 )
                 applied_filter = f"monthly ({year}-{month:02d})"
             else:
                 applied_filter = "monthly (invalid month/year, exported all)"
         elif report_type == "custom":
-            try:
-                from_dt = datetime.strptime(from_date, "%Y-%m-%d")
-                to_dt = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+            from_date_value = parse_date(from_date)
+            to_date_value = parse_date(to_date)
+            if from_date_value and to_date_value and to_date_value >= from_date_value:
+                from_dt, to_dt = local_date_range_to_storage_bounds(from_date_value, to_date_value)
                 query = query.filter(Invoice.created_at >= from_dt, Invoice.created_at < to_dt)
                 applied_filter = f"custom ({from_date} to {to_date})"
-            except ValueError:
+            else:
                 applied_filter = "custom (invalid dates, exported all)"
         elif report_type == "patient":
             if patient:
@@ -5430,11 +5533,117 @@ def export_excel():
                 applied_filter = f"mobile ({mobile_raw})"
             else:
                 applied_filter = "mobile (blank, exported all)"
+        elif report_type == "profit":
+            profit_summary, profit_error = build_profit_report_summary(from_date, to_date)
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                if profit_summary:
+                    pd.DataFrame([{
+                        "From Date": profit_summary["from_date"],
+                        "To Date": profit_summary["to_date"],
+                        "Sales (ex GST)": profit_summary["sales_total"],
+                        "Returns (ex GST)": profit_summary["returns_total"],
+                        "Net Sales": profit_summary["net_sales"],
+                        "COGS": profit_summary["cogs"],
+                        "Return COGS": profit_summary["return_cogs"],
+                        "Net COGS": profit_summary["net_cogs"],
+                        "Gross Profit": profit_summary["gross_profit"],
+                        "Gross Profit %": profit_summary["gross_profit_percentage"]
+                    }]).to_excel(writer, sheet_name="ProfitSummary", index=False)
+                else:
+                    pd.DataFrame([{"Error": profit_error or "Unable to build profit report."}]).to_excel(
+                        writer,
+                        sheet_name="ProfitSummary",
+                        index=False
+                    )
+            output.seek(0)
+            filename = f"Profit_Report_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            return send_file(
+                output,
+                as_attachment=True,
+                download_name=filename,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                max_age=0
+            )
+        elif report_type == "medicine":
+            medicine_report, medicine_errors = build_medicine_report_data(
+                from_date,
+                to_date,
+                medicine_query=medicine_query,
+                top_n=top_n
+            )
+            totals = medicine_report["medicine_totals"] or {
+                "count": 0,
+                "purchase_qty": 0,
+                "free_qty": 0,
+                "inward_qty": 0,
+                "sold_qty": 0,
+                "return_qty": 0,
+                "net_sold_qty": 0,
+                "current_stock": 0,
+                "purchase_value": 0.0,
+                "sales_value": 0.0,
+                "period_days": 0
+            }
+            summary_rows = [{
+                "From Date": from_date,
+                "To Date": to_date,
+                "Medicine Filter": medicine_query,
+                "Top N": medicine_report["top_n"],
+                "Medicines": totals["count"],
+                "Purchase Qty": totals["purchase_qty"],
+                "Free Qty": totals["free_qty"],
+                "Inward Qty": totals["inward_qty"],
+                "Sold Qty": totals["sold_qty"],
+                "Return Qty": totals["return_qty"],
+                "Net Sold Qty": totals["net_sold_qty"],
+                "Current Stock": totals["current_stock"],
+                "Purchase Value": totals["purchase_value"],
+                "Sales Value": totals["sales_value"],
+                "Period Days": totals["period_days"],
+                "Errors": " | ".join(medicine_errors)
+            }]
+            movement_rows = [{
+                "Medicine": row["medicine"],
+                "Purchased": row["purchase_qty"],
+                "Free": row["free_qty"],
+                "Inward": row["inward_qty"],
+                "Sold": row["sold_qty"],
+                "Returned": row["return_qty"],
+                "Net Sold": row["net_sold_qty"],
+                "Current Stock": row["current_stock"],
+                "Purchase Value": row["purchase_value"],
+                "Sales Value": row["sales_value"],
+                "Avg Daily Sale": row["avg_daily_sale"]
+            } for row in medicine_report["medicine_summary"]]
+            fast_rows = [{
+                "Rank": idx + 1,
+                "Medicine": row["medicine"],
+                "Net Sold": row["net_sold_qty"],
+                "Avg Daily Sale": row["avg_daily_sale"],
+                "Current Stock": row["current_stock"],
+                "Sales Value": row["sales_value"]
+            } for idx, row in enumerate(medicine_report["fast_movers"])]
+
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Summary", index=False)
+                pd.DataFrame(movement_rows).to_excel(writer, sheet_name="MedicineMovement", index=False)
+                pd.DataFrame(fast_rows).to_excel(writer, sheet_name="FastMovers", index=False)
+            output.seek(0)
+            filename = f"Medicine_Report_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            return send_file(
+                output,
+                as_attachment=True,
+                download_name=filename,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                max_age=0
+            )
         elif report_type == "patient_medicine":
             patients, detail_rows, usage_summary, _usage_error = build_patient_medicine_usage_report(
                 from_date,
                 to_date,
-                search_query=request.args.get("search_query")
+                search_query=search_query
             )
 
             patient_rows = [{

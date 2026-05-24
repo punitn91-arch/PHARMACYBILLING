@@ -11,6 +11,13 @@
     border-radius: 6px;
     box-shadow: 0 0 6px #cfd8e3;
 }
+.field-label {
+    display: block;
+    margin-bottom: 6px;
+    color: #2f3f56;
+    font-size: 14px;
+    font-weight: 600;
+}
 input {
     width: 100%;
     padding: 8px;
@@ -34,9 +41,16 @@ button {
     <h2>✏️ Edit Medicine</h2>
 
     <form method="POST">
-        <input type="text" name="name" value="{{ med.name }}" required>
-        <input type="text" name="batch" value="{{ med.batch }}" required>
-        <input type="date" name="expiry" value="{{ med.expiry }}" required>
+        <label class="field-label" for="medicineName">Medicine Name</label>
+        <input type="text" id="medicineName" name="name" value="{{ med.name }}" required>
+
+        <label class="field-label" for="medicineBatch">Batch</label>
+        <input type="text" id="medicineBatch" name="batch" value="{{ med.batch }}" required>
+
+        <label class="field-label" for="medicineExpiry">Expiry Date</label>
+        <input type="date" id="medicineExpiry" name="expiry" value="{{ med.expiry }}" required>
+
+        <label class="field-label" for="packType">Pack Type</label>
         <select name="pack_type" id="packType">
             <option value="" {% if not med.pack_type %}selected{% endif %}>Select Pack Type</option>
             <option {% if med.pack_type == 'Strip' %}selected{% endif %}>Strip</option>
@@ -47,18 +61,23 @@ button {
             <option {% if med.pack_type == 'Vial' %}selected{% endif %}>Vial</option>
             <option {% if med.pack_type == 'Unit' %}selected{% endif %}>Unit</option>
         </select>
-        <label id="packQtyLabel">Units per Pack</label>
-        <input type="number" name="pack_qty" min="1" step="1" value="{{ med.pack_qty or '' }}">
-        <input type="number" name="mrp" value="{{ med.mrp }}" required>
-       <label>Discount (%)</label>
+
+        <label class="field-label" id="packQtyLabel" for="packQty">Units per Pack</label>
+        <input type="number" id="packQty" name="pack_qty" min="1" step="1" value="{{ med.pack_qty or '' }}">
+
+        <label class="field-label" for="medicineMrp">MRP</label>
+        <input type="number" id="medicineMrp" name="mrp" value="{{ med.mrp }}" required>
+
+       <label class="field-label" for="discountPercent">Discount (%)</label>
 <input type="number"
+       id="discountPercent"
        name="discount_percent"
        value="{{ med.discount_percent }}"
        min="0"
        max="100">
 
-
-        <input type="number" name="qty" value="{{ med.qty }}" required>
+        <label class="field-label" for="stockQty">Stock Qty</label>
+        <input type="number" id="stockQty" name="qty" value="{{ med.qty }}" required>
         
 
         <button type="submit">Update Medicine</button>
