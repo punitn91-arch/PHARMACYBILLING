@@ -4419,31 +4419,14 @@ def appointments():
     payload = build_appointment_report_payload(request.args, flash_errors=True)
     appointments = payload["appointments"]
     list_only = (request.args.get("view") or "").strip().lower() == "list"
-
-    today = date.today()
-    today_appointments = Appointment.query.filter(
-        Appointment.appointment_date == today
-    ).all()
-    today_counts = {
-        "BOOKED": 0,
-        "CHECKED_IN": 0,
-        "COMPLETED": 0,
-        "CANCELLED": 0
-    }
-    for appt in today_appointments:
-        st = (appt.status or "").strip().upper()
-        if st in today_counts:
-            today_counts[st] += 1
-
-    today_revenue_breakdown = calculate_appointment_revenue_breakdown(today, today)
-    today_revenue = today_revenue_breakdown["total"]
-    week_start = today - timedelta(days=today.weekday())
-    week_end = week_start + timedelta(days=6)
-    week_revenue = calculate_appointment_revenue(week_start, week_end)
-    month_start = today.replace(day=1)
-    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
-    month_end = next_month - timedelta(days=1)
-    month_revenue = calculate_appointment_revenue(month_start, month_end)
+    summary_payload = payload
+    if payload["search_query"]:
+        summary_payload = build_appointment_report_payload(
+            request.args,
+            flash_errors=False,
+            include_search=False
+        )
+    appointment_summary = build_appointment_summary(summary_payload["appointments"])
 
     calendar_days = build_appointment_calendar_days(
         appointments,
@@ -4462,11 +4445,10 @@ def appointments():
         search_query=payload["search_query"],
         calendar_view=payload["calendar_view"],
         calendar_days=calendar_days,
-        today_counts=today_counts,
-        today_revenue=today_revenue,
-        today_revenue_breakdown=today_revenue_breakdown,
-        week_revenue=week_revenue,
-        month_revenue=month_revenue
+        summary_label=summary_payload["report_label"],
+        summary_counts=appointment_summary["counts"],
+        summary_revenue=appointment_summary["revenue"],
+        summary_revenue_breakdown=appointment_summary["revenue_breakdown"]
     )
 
 def normalize_patient_mobile(raw_mobile):
@@ -4479,6 +4461,49 @@ def appointment_net_amount(appt):
     discount = to_float_safe(appt.doctor_discount, 0)
     net = fee - discount
     return round(net if net > 0 else 0, 2)
+
+def build_appointment_summary(appointments):
+    counts = {
+        "BOOKED": 0,
+        "CHECKED_IN": 0,
+        "COMPLETED": 0,
+        "CANCELLED": 0
+    }
+    cash_total = 0.0
+    online_total = 0.0
+    cash_count = 0
+    online_count = 0
+
+    for appt in appointments:
+        status = (appt.status or "").strip().upper()
+        if status in counts:
+            counts[status] += 1
+
+        payment_status = (appt.payment_status or "UNPAID").strip().upper()
+        if payment_status != "PAID":
+            continue
+
+        net_amount = appointment_net_amount(appt)
+        if is_cash_payment_mode(appt.payment_mode):
+            cash_total += net_amount
+            cash_count += 1
+        else:
+            online_total += net_amount
+            online_count += 1
+
+    cash_total = round(cash_total, 2)
+    online_total = round(online_total, 2)
+    return {
+        "counts": counts,
+        "revenue": round(cash_total + online_total, 2),
+        "revenue_breakdown": {
+            "cash_total": cash_total,
+            "online_total": online_total,
+            "cash_count": cash_count,
+            "online_count": online_count,
+            "total": round(cash_total + online_total, 2)
+        }
+    }
 
 def calculate_appointment_revenue(from_date=None, to_date=None):
     query = Appointment.query.filter(
@@ -4680,7 +4705,7 @@ def build_appointment_calendar_days(appointments, calendar_view, focus_date):
         })
     return days
 
-def build_appointment_report_payload(args, flash_errors=False):
+def build_appointment_report_payload(args, flash_errors=False, include_search=True):
     today = date.today()
     legacy_date = parse_date(args.get("date"))
     report_type = (args.get("appointment_report_type") or "day").strip().lower()
@@ -4746,7 +4771,7 @@ def build_appointment_report_payload(args, flash_errors=False):
                 db.extract("month", Appointment.appointment_date) == month,
                 db.extract("year", Appointment.appointment_date) == year
             )
-            report_label = f"{year}-{month:02d}"
+            report_label = date(year, month, 1).strftime("%B %Y")
             focus_date = date(year, month, 1)
         elif report_type == "date_range":
             start_date = parse_date(from_date_raw)
@@ -4777,7 +4802,7 @@ def build_appointment_report_payload(args, flash_errors=False):
             report_label = selected_date.strftime("%d-%m-%Y")
             focus_date = selected_date
 
-    if search_query:
+    if include_search and search_query:
         like = f"%{search_query}%"
         query = query.filter(or_(
             Appointment.appointment_no.ilike(like),
