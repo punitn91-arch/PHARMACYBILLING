@@ -186,6 +186,9 @@ def to_int(val):
 def to_float(val):
     return float(val) if val not in (None, "", " ") else 0.0
 
+def is_cash_payment_mode(value):
+    return ((value or "CASH").strip().upper() or "CASH") == "CASH"
+
 def to_decimal(val, default="0"):
     if val in (None, "", " "):
         return Decimal(default)
@@ -1402,8 +1405,23 @@ def index():
         db.func.date(Invoice.created_at) == today
     ).all()
 
-    today_sale = sum(i.total for i in today_invoices)
-    bills_today = len(today_invoices)
+    cash_today_sale = 0
+    online_today_sale = 0
+    cash_bills_today = 0
+    online_bills_today = 0
+
+    for invoice in today_invoices:
+        total_amount = invoice.total or 0
+        # Treat every non-cash payment mode as online so existing flows keep working.
+        if is_cash_payment_mode(invoice.payment_mode):
+            cash_today_sale += total_amount
+            cash_bills_today += 1
+        else:
+            online_today_sale += total_amount
+            online_bills_today += 1
+
+    today_sale = cash_today_sale + online_today_sale
+    bills_today = cash_bills_today + online_bills_today
 
     # ---------- LOW STOCK ----------
     low_stock_count = len(get_low_stock_items(limit=LOW_STOCK_LIMIT))
@@ -1446,6 +1464,10 @@ def index():
         "index.html",
         today_sale=today_sale,
         bills_today=bills_today,
+        cash_today_sale=cash_today_sale,
+        online_today_sale=online_today_sale,
+        cash_bills_today=cash_bills_today,
+        online_bills_today=online_bills_today,
         low_stock=low_stock_count,
         expiring_soon=expiring_soon,
         inventory_value=inventory_value,

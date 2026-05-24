@@ -32,6 +32,48 @@
     margin-top: 4px;
 }
 
+.sale-breakdown {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.sale-split {
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.sale-split.cash {
+    background: #f2fbf5;
+    border: 1px solid #d6efdd;
+}
+
+.sale-split.online {
+    background: #f1f7ff;
+    border: 1px solid #d8e7ff;
+}
+
+.sale-label {
+    font-size: 11px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.sale-amount {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 4px;
+}
+
+.sale-meta {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    color: #556070;
+}
+
 .green { color: #198754; }
 .red { color: #dc3545; }
 .orange { color: #fd7e14; }
@@ -50,6 +92,18 @@
     max-width: 520px;
 }
 
+@media (max-width: 1100px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .sale-breakdown {
+        grid-template-columns: 1fr;
+    }
+}
+
 </style>
 
 <!-- TOP DASHBOARD CARDS -->
@@ -59,6 +113,18 @@
         <div class="card-title">Today's Sale</div>
         <div class="card-value blue">₹ {{ "%.3f"|format((today_sale or 0)|float) }}</div>
         <small>Bills Today: {{ bills_today }}</small>
+        <div class="sale-breakdown">
+            <div class="sale-split cash">
+                <div class="sale-label">Cash</div>
+                <div class="sale-amount green">₹ {{ "%.3f"|format((cash_today_sale or 0)|float) }}</div>
+                <small class="sale-meta">Bills: {{ cash_bills_today }}</small>
+            </div>
+            <div class="sale-split online">
+                <div class="sale-label">Online</div>
+                <div class="sale-amount blue">₹ {{ "%.3f"|format((online_today_sale or 0)|float) }}</div>
+                <small class="sale-meta">Bills: {{ online_bills_today }}</small>
+            </div>
+        </div>
     </div>
 
     <a href="/low-stock" class="card-link">
