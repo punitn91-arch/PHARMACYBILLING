@@ -1865,8 +1865,15 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
                 "return_qty": 0,
                 "net_sold_qty": 0,
                 "current_stock": 0,
-                "purchase_value": 0.0,
+                "inward_purchase_value": 0.0,
+                "gross_sales_value": 0.0,
+                "return_sales_value": 0.0,
                 "sales_value": 0.0,
+                "purchase_amount": 0.0,
+                "return_purchase_amount": 0.0,
+                "net_purchase_amount": 0.0,
+                "net_profit": 0.0,
+                "profit_percent": 0.0,
                 "avg_daily_sale": 0.0
             }
         return rows[key]
@@ -1892,7 +1899,7 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
         row["purchase_qty"] += qty
         row["free_qty"] += free_qty
         row["inward_qty"] += qty + free_qty
-        row["purchase_value"] += to_float(item.total_value)
+        row["inward_purchase_value"] += to_float(item.total_value)
 
     sales_query = InvoiceItem.query.join(Invoice, InvoiceItem.invoice_id == Invoice.id)
     if start_bound:
@@ -1905,7 +1912,8 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
             continue
         row["sold_qty"] += to_int(item.qty)
         sales_value = item.net_amount if item.net_amount not in (None, 0) else item.amount
-        row["sales_value"] += to_float(sales_value)
+        row["gross_sales_value"] += to_float(sales_value)
+        row["purchase_amount"] += to_float(item.cost_amount)
 
     return_query = ReturnItem.query.join(Return, ReturnItem.return_id == Return.id).filter(
         Return.is_cancelled == False
@@ -1919,15 +1927,28 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
         if not row:
             continue
         row["return_qty"] += to_int(item.qty)
+        return_sales_value = item.net_amount if item.net_amount not in (None, 0) else item.amount
+        row["return_sales_value"] += to_float(return_sales_value)
+        row["return_purchase_amount"] += to_float(item.cost_amount)
 
     for row in rows.values():
         row["net_sold_qty"] = row["sold_qty"] - row["return_qty"]
+        row["sales_value"] = row["gross_sales_value"] - row["return_sales_value"]
+        row["net_purchase_amount"] = row["purchase_amount"] - row["return_purchase_amount"]
+        row["net_profit"] = row["sales_value"] - row["net_purchase_amount"]
+        row["profit_percent"] = round((row["net_profit"] / row["sales_value"] * 100), 2) if row["sales_value"] else 0.0
         if period_days > 0:
             row["avg_daily_sale"] = round(row["net_sold_qty"] / period_days, 2)
         else:
             row["avg_daily_sale"] = round(float(row["net_sold_qty"]), 2)
-        row["purchase_value"] = round(row["purchase_value"], 2)
+        row["inward_purchase_value"] = round(row["inward_purchase_value"], 2)
+        row["gross_sales_value"] = round(row["gross_sales_value"], 2)
+        row["return_sales_value"] = round(row["return_sales_value"], 2)
+        row["purchase_amount"] = round(row["purchase_amount"], 2)
+        row["return_purchase_amount"] = round(row["return_purchase_amount"], 2)
+        row["net_purchase_amount"] = round(row["net_purchase_amount"], 2)
         row["sales_value"] = round(row["sales_value"], 2)
+        row["net_profit"] = round(row["net_profit"], 2)
 
     medicine_summary = list(rows.values())
     if query_text:
@@ -1954,8 +1975,14 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
         "return_qty": sum(row["return_qty"] for row in medicine_summary),
         "net_sold_qty": sum(row["net_sold_qty"] for row in medicine_summary),
         "current_stock": sum(row["current_stock"] for row in medicine_summary),
-        "purchase_value": round(sum(row["purchase_value"] for row in medicine_summary), 2),
+        "inward_purchase_value": round(sum(row["inward_purchase_value"] for row in medicine_summary), 2),
+        "gross_sales_value": round(sum(row["gross_sales_value"] for row in medicine_summary), 2),
+        "return_sales_value": round(sum(row["return_sales_value"] for row in medicine_summary), 2),
+        "purchase_amount": round(sum(row["purchase_amount"] for row in medicine_summary), 2),
+        "return_purchase_amount": round(sum(row["return_purchase_amount"] for row in medicine_summary), 2),
+        "net_purchase_amount": round(sum(row["net_purchase_amount"] for row in medicine_summary), 2),
         "sales_value": round(sum(row["sales_value"] for row in medicine_summary), 2),
+        "net_profit": round(sum(row["net_profit"] for row in medicine_summary), 2),
         "period_days": period_days
     }
     return result, errors
@@ -5581,8 +5608,14 @@ def export_excel():
                 "return_qty": 0,
                 "net_sold_qty": 0,
                 "current_stock": 0,
-                "purchase_value": 0.0,
+                "inward_purchase_value": 0.0,
+                "purchase_amount": 0.0,
+                "return_purchase_amount": 0.0,
+                "net_purchase_amount": 0.0,
+                "gross_sales_value": 0.0,
+                "return_sales_value": 0.0,
                 "sales_value": 0.0,
+                "net_profit": 0.0,
                 "period_days": 0
             }
             summary_rows = [{
@@ -5598,8 +5631,10 @@ def export_excel():
                 "Return Qty": totals["return_qty"],
                 "Net Sold Qty": totals["net_sold_qty"],
                 "Current Stock": totals["current_stock"],
-                "Purchase Value": totals["purchase_value"],
-                "Sales Value": totals["sales_value"],
+                "Inward Purchase Value": totals["inward_purchase_value"],
+                "Purchase Amount": totals["net_purchase_amount"],
+                "Sales Amount": totals["sales_value"],
+                "Net Profit": totals["net_profit"],
                 "Period Days": totals["period_days"],
                 "Errors": " | ".join(medicine_errors)
             }]
@@ -5612,8 +5647,11 @@ def export_excel():
                 "Returned": row["return_qty"],
                 "Net Sold": row["net_sold_qty"],
                 "Current Stock": row["current_stock"],
-                "Purchase Value": row["purchase_value"],
-                "Sales Value": row["sales_value"],
+                "Inward Purchase Value": row["inward_purchase_value"],
+                "Purchase Amount": row["net_purchase_amount"],
+                "Sales Amount": row["sales_value"],
+                "Net Profit": row["net_profit"],
+                "Profit %": row["profit_percent"],
                 "Avg Daily Sale": row["avg_daily_sale"]
             } for row in medicine_report["medicine_summary"]]
             fast_rows = [{
@@ -5622,7 +5660,8 @@ def export_excel():
                 "Net Sold": row["net_sold_qty"],
                 "Avg Daily Sale": row["avg_daily_sale"],
                 "Current Stock": row["current_stock"],
-                "Sales Value": row["sales_value"]
+                "Sales Amount": row["sales_value"],
+                "Net Profit": row["net_profit"]
             } for idx, row in enumerate(medicine_report["fast_movers"])]
 
             output = BytesIO()

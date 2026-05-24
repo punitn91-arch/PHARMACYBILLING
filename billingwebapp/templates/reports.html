@@ -466,7 +466,9 @@
             <div class="summary-pill"><small>Medicines</small><strong>{{ medicine_totals.count }}</strong></div>
             <div class="summary-pill"><small>Net Sold Qty</small><strong>{{ medicine_totals.net_sold_qty }}</strong></div>
             <div class="summary-pill"><small>Current Stock</small><strong>{{ medicine_totals.current_stock }}</strong></div>
-            <div class="summary-pill"><small>Sales Value</small><strong>Rs {{ medicine_totals.sales_value }}</strong></div>
+            <div class="summary-pill"><small>Sale Amount</small><strong>Rs {{ medicine_totals.sales_value }}</strong></div>
+            <div class="summary-pill"><small>Purchase Amount</small><strong>Rs {{ medicine_totals.net_purchase_amount }}</strong></div>
+            <div class="summary-pill"><small>Net Profit</small><strong>Rs {{ medicine_totals.net_profit }}</strong></div>
         </div>
     </section>
 
@@ -474,6 +476,7 @@
         <div class="section-head">
             <div>
                 <h3>Medicine Movement</h3>
+                <p>Purchase Amount is based on sold stock FIFO cost. Inward Purchase Value shows total inward purchase value for the selected period.</p>
             </div>
         </div>
         <table class="reports-table">
@@ -486,8 +489,11 @@
                 <th>Returned</th>
                 <th>Net Sold</th>
                 <th>Current Stock</th>
-                <th>Purchase Value</th>
-                <th>Sales Value</th>
+                <th>Inward Purchase Value</th>
+                <th>Purchase Amount</th>
+                <th>Sales Amount</th>
+                <th>Net Profit</th>
+                <th>Profit %</th>
                 <th>Avg Daily Sale</th>
             </tr>
             {% for m in medicine_summary %}
@@ -500,8 +506,11 @@
                 <td>{{ m.return_qty }}</td>
                 <td>{{ m.net_sold_qty }}</td>
                 <td>{{ m.current_stock }}</td>
-                <td>Rs {{ m.purchase_value }}</td>
+                <td>Rs {{ m.inward_purchase_value }}</td>
+                <td>Rs {{ m.net_purchase_amount }}</td>
                 <td>Rs {{ m.sales_value }}</td>
+                <td>Rs {{ m.net_profit }}</td>
+                <td>{{ m.profit_percent }}%</td>
                 <td>{{ m.avg_daily_sale }}</td>
             </tr>
             {% endfor %}
@@ -522,7 +531,8 @@
                 <th>Net Sold</th>
                 <th>Avg Daily Sale</th>
                 <th>Current Stock</th>
-                <th>Sales Value</th>
+                <th>Sales Amount</th>
+                <th>Net Profit</th>
             </tr>
             {% for m in fast_movers %}
             <tr>
@@ -532,6 +542,7 @@
                 <td>{{ m.avg_daily_sale }}</td>
                 <td>{{ m.current_stock }}</td>
                 <td>Rs {{ m.sales_value }}</td>
+                <td>Rs {{ m.net_profit }}</td>
             </tr>
             {% endfor %}
         </table>
