@@ -202,6 +202,18 @@
         </div>
         <p class="mt-4 text-2xl font-bold text-slate-900">{{ money(today_revenue) }}</p>
         <p class="mt-2 text-xs text-slate-400">Paid consultation net collection</p>
+        <div class="mt-4 grid grid-cols-1 gap-2">
+            <div class="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
+                <p class="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Cash</p>
+                <p class="mt-1 text-sm font-bold text-emerald-900">{{ money(today_revenue_breakdown.cash_total) }}</p>
+                <p class="mt-1 text-[11px] text-emerald-700">Paid appointments: {{ today_revenue_breakdown.cash_count }}</p>
+            </div>
+            <div class="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
+                <p class="text-[11px] font-semibold uppercase tracking-wide text-blue-700">Online</p>
+                <p class="mt-1 text-sm font-bold text-blue-900">{{ money(today_revenue_breakdown.online_total) }}</p>
+                <p class="mt-1 text-[11px] text-blue-700">Paid appointments: {{ today_revenue_breakdown.online_count }}</p>
+            </div>
+        </div>
     </article>
 </section>
 

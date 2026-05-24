@@ -4136,7 +4136,8 @@ def appointments():
         if st in today_counts:
             today_counts[st] += 1
 
-    today_revenue = calculate_appointment_revenue(today, today)
+    today_revenue_breakdown = calculate_appointment_revenue_breakdown(today, today)
+    today_revenue = today_revenue_breakdown["total"]
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     week_revenue = calculate_appointment_revenue(week_start, week_end)
@@ -4164,6 +4165,7 @@ def appointments():
         calendar_days=calendar_days,
         today_counts=today_counts,
         today_revenue=today_revenue,
+        today_revenue_breakdown=today_revenue_breakdown,
         week_revenue=week_revenue,
         month_revenue=month_revenue
     )
@@ -4191,6 +4193,37 @@ def calculate_appointment_revenue(from_date=None, to_date=None):
     for appt in query.all():
         total += appointment_net_amount(appt)
     return round(total, 2)
+
+def calculate_appointment_revenue_breakdown(from_date=None, to_date=None):
+    query = Appointment.query.filter(
+        db.func.upper(db.func.coalesce(Appointment.payment_status, "UNPAID")) == "PAID"
+    )
+    if from_date:
+        query = query.filter(Appointment.appointment_date >= from_date)
+    if to_date:
+        query = query.filter(Appointment.appointment_date <= to_date)
+
+    cash_total = 0.0
+    online_total = 0.0
+    cash_count = 0
+    online_count = 0
+
+    for appt in query.all():
+        net_amount = appointment_net_amount(appt)
+        if is_cash_payment_mode(appt.payment_mode):
+            cash_total += net_amount
+            cash_count += 1
+        else:
+            online_total += net_amount
+            online_count += 1
+
+    return {
+        "cash_total": round(cash_total, 2),
+        "online_total": round(online_total, 2),
+        "cash_count": cash_count,
+        "online_count": online_count,
+        "total": round(cash_total + online_total, 2)
+    }
 
 def get_next_daily_token(appt_date, exclude_appointment_id=None):
     query = db.session.query(db.func.max(Appointment.token_no)).filter(
