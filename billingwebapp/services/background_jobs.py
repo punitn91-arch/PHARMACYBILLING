@@ -8,8 +8,12 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from models import Appointment, Medicine
-from services.infra_safety import build_backup_snapshot
+try:
+    from ..models import Appointment, Medicine
+    from .infra_safety import build_backup_snapshot
+except ImportError:  # pragma: no cover - script/local fallback
+    from models import Appointment, Medicine
+    from services.infra_safety import build_backup_snapshot
 
 
 class BackgroundJobCoordinator:

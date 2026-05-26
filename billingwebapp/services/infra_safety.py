@@ -11,29 +11,54 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.sql.sqltypes import Boolean, Date, DateTime, Integer, Numeric, Time
 
-from models import (
-    Appointment,
-    AuditLog,
-    HoldBill,
-    Invoice,
-    InvoiceItem,
-    LoginSecurityEvent,
-    Medicine,
-    Patient,
-    Return,
-    ReturnItem,
-    SalesAllocation,
-    StockHistory,
-    User,
-    Vendor,
-    VendorLedgerEntry,
-    VendorNote,
-    VendorNoteAllocation,
-    VendorNoteItem,
-    VendorPurchase,
-    VendorPurchaseItem,
-    db,
-)
+try:
+    from ..models import (
+        Appointment,
+        AuditLog,
+        HoldBill,
+        Invoice,
+        InvoiceItem,
+        LoginSecurityEvent,
+        Medicine,
+        Patient,
+        Return,
+        ReturnItem,
+        SalesAllocation,
+        StockHistory,
+        User,
+        Vendor,
+        VendorLedgerEntry,
+        VendorNote,
+        VendorNoteAllocation,
+        VendorNoteItem,
+        VendorPurchase,
+        VendorPurchaseItem,
+        db,
+    )
+except ImportError:  # pragma: no cover - script/local fallback
+    from models import (
+        Appointment,
+        AuditLog,
+        HoldBill,
+        Invoice,
+        InvoiceItem,
+        LoginSecurityEvent,
+        Medicine,
+        Patient,
+        Return,
+        ReturnItem,
+        SalesAllocation,
+        StockHistory,
+        User,
+        Vendor,
+        VendorLedgerEntry,
+        VendorNote,
+        VendorNoteAllocation,
+        VendorNoteItem,
+        VendorPurchase,
+        VendorPurchaseItem,
+        db,
+    )
 
 
 BACKUP_MODEL_ORDER = [

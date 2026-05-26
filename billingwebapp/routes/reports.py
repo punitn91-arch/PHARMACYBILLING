@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from flask import flash, render_template
 
-from services.reports import build_reports_page_state
+try:
+    from ..services.reports import build_reports_page_state
+except ImportError:  # pragma: no cover - script/local fallback
+    from services.reports import build_reports_page_state
 
 
 def render_reports_page(

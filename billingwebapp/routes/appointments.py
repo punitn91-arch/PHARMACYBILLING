@@ -4,8 +4,12 @@ from datetime import date
 
 from flask import flash, redirect, render_template, request, url_for
 
-from models import Appointment, db
-from services.appointments import appointment_redirect_date, build_appointments_page_context
+try:
+    from ..models import Appointment, db
+    from ..services.appointments import appointment_redirect_date, build_appointments_page_context
+except ImportError:  # pragma: no cover - script/local fallback
+    from models import Appointment, db
+    from services.appointments import appointment_redirect_date, build_appointments_page_context
 
 
 def render_appointments_page(

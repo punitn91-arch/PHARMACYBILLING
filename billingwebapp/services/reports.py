@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from models import Invoice, db
+try:
+    from ..models import Invoice, db
+except ImportError:  # pragma: no cover - script/local fallback
+    from models import Invoice, db
 
 
 def default_report_filters():

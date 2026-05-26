@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from models import VendorPurchase, VendorPurchaseItem, db
+try:
+    from ..models import VendorPurchase, VendorPurchaseItem, db
+except ImportError:  # pragma: no cover - script/local fallback
+    from models import VendorPurchase, VendorPurchaseItem, db
 
 
 def build_billing_page_context(medicines):
@@ -80,4 +83,3 @@ def build_vendor_purchase_summary(vendors):
             "margin_percent": round(margin_percent, 2),
         })
     return purchase_summary
-

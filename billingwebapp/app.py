@@ -1,6 +1,5 @@
 # app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, g
-from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry, AuditLog, LoginSecurityEvent
 from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
 import json
@@ -21,31 +20,104 @@ try:
 except Exception:  # pragma: no cover
     Migrate = None
 
-from routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
-from routes.appointments import render_appointments_page
-from routes.billing import prepare_billing_context
-from routes.reports import render_reports_page
-from routes.vendors import render_vendor_reports_page
-from services.background_jobs import init_background_jobs, queue_report_export_job
-from services.infra_safety import (
-    build_backup_snapshot,
-    build_restore_commands,
-    ensure_runtime_indexes,
-    get_backup_summary,
-    list_backup_snapshots,
-    restore_backup_snapshot,
-)
-from services.monitoring import configure_monitoring
-from services.validation import (
-    ACCESS_PROFILE_PRESETS,
-    USER_PERMISSION_FIELDS,
-    derive_access_profile,
-    validate_billing_submission,
-    validate_mark_paid_transition,
-    validate_report_request,
-    validate_return_submission,
-    validate_user_form,
-)
+try:
+    from .models import (
+        db,
+        User,
+        Medicine,
+        StockHistory,
+        Invoice,
+        InvoiceItem,
+        Return,
+        ReturnItem,
+        HoldBill,
+        Patient,
+        Appointment,
+        Vendor,
+        VendorPurchase,
+        VendorPurchaseItem,
+        SalesAllocation,
+        VendorNote,
+        VendorNoteItem,
+        VendorNoteAllocation,
+        VendorLedgerEntry,
+        AuditLog,
+        LoginSecurityEvent,
+    )
+    from .routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
+    from .routes.appointments import render_appointments_page
+    from .routes.billing import prepare_billing_context
+    from .routes.reports import render_reports_page
+    from .routes.vendors import render_vendor_reports_page
+    from .services.background_jobs import init_background_jobs, queue_report_export_job
+    from .services.infra_safety import (
+        build_backup_snapshot,
+        build_restore_commands,
+        ensure_runtime_indexes,
+        get_backup_summary,
+        list_backup_snapshots,
+        restore_backup_snapshot,
+    )
+    from .services.monitoring import configure_monitoring
+    from .services.validation import (
+        ACCESS_PROFILE_PRESETS,
+        USER_PERMISSION_FIELDS,
+        derive_access_profile,
+        validate_billing_submission,
+        validate_mark_paid_transition,
+        validate_report_request,
+        validate_return_submission,
+        validate_user_form,
+    )
+except ImportError:  # pragma: no cover - script/local fallback
+    from models import (
+        db,
+        User,
+        Medicine,
+        StockHistory,
+        Invoice,
+        InvoiceItem,
+        Return,
+        ReturnItem,
+        HoldBill,
+        Patient,
+        Appointment,
+        Vendor,
+        VendorPurchase,
+        VendorPurchaseItem,
+        SalesAllocation,
+        VendorNote,
+        VendorNoteItem,
+        VendorNoteAllocation,
+        VendorLedgerEntry,
+        AuditLog,
+        LoginSecurityEvent,
+    )
+    from routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
+    from routes.appointments import render_appointments_page
+    from routes.billing import prepare_billing_context
+    from routes.reports import render_reports_page
+    from routes.vendors import render_vendor_reports_page
+    from services.background_jobs import init_background_jobs, queue_report_export_job
+    from services.infra_safety import (
+        build_backup_snapshot,
+        build_restore_commands,
+        ensure_runtime_indexes,
+        get_backup_summary,
+        list_backup_snapshots,
+        restore_backup_snapshot,
+    )
+    from services.monitoring import configure_monitoring
+    from services.validation import (
+        ACCESS_PROFILE_PRESETS,
+        USER_PERMISSION_FIELDS,
+        derive_access_profile,
+        validate_billing_submission,
+        validate_mark_paid_transition,
+        validate_report_request,
+        validate_return_submission,
+        validate_user_form,
+    )
 
 def open_browser():
     try:
