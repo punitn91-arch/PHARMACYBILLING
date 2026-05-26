@@ -154,6 +154,7 @@ td {
     <table>
         <tr>
             <th>Medicine</th>
+            <th>Barcode</th>
             <th>Batch</th>
             <th>Pack</th>
             <th>Expiry</th>
@@ -171,6 +172,7 @@ td {
         {% for it in items %}
         <tr>
             <td>{{ it.medicine_name }}</td>
+            <td>{{ it.barcode or '-' }}</td>
             <td>{{ it.batch }}</td>
             <td>
                 {% if it.pack_type and it.pack_qty %}

@@ -624,7 +624,7 @@ async function loadPurchaseItems() {
             return;
         }
         if (stats.unmatched > 0) {
-            setMessage(`${stats.total} items loaded. ${stats.unmatched} medicine match nahi hua, manually select karein.`, true);
+            setMessage(`${stats.total} items loaded. ${stats.unmatched} medicines could not be matched. Please select them manually.`, true);
             return;
         }
         setMessage(`${stats.total} medicines loaded from selected purchase bill.`);

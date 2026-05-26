@@ -163,14 +163,18 @@ td {
             </td>
             <td>
                 {% if v.attachment_ref %}
-                    <a href="/static/uploads/vendors/{{ v.attachment_ref }}" target="_blank">View</a>
+                    {% if '://' in v.attachment_ref %}
+                    <a href="{{ v.attachment_ref }}" target="_blank" rel="noopener">View</a>
+                    {% else %}
+                    <a href="/vendor/attachment/{{ v.attachment_ref }}" target="_blank" rel="noopener">View</a>
+                    {% endif %}
                 {% else %}
                     -
                 {% endif %}
             </td>
             <td>
                 <a href="/vendor/edit/{{ v.id }}" title="Edit">Edit</a> |
-                <a href="/vendor/delete/{{ v.id }}" data-async-action="true" onclick="return confirm('Delete this vendor?')" title="Delete">Delete</a>
+                <a href="/vendor/delete/{{ v.id }}" data-async-action="true" onclick="return confirm('Archive this vendor?')" title="Archive">Archive</a>
             </td>
         </tr>
         {% endfor %}

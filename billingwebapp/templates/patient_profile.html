@@ -1,0 +1,727 @@
+{% extends "base.html" %}
+{% block title %}Patient Profile{% endblock %}
+
+{% block body %}
+<style>
+.profile-shell {
+    display: grid;
+    gap: 18px;
+}
+
+.profile-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.profile-title {
+    margin: 0;
+    color: #0f4fbf;
+    font-size: 28px;
+}
+
+.profile-note {
+    margin: 8px 0 0;
+    color: #607089;
+}
+
+.back-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-decoration: none;
+    background: #eef4ff;
+    color: #21406d;
+    font-weight: 700;
+}
+
+.header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-decoration: none;
+    background: #0d6efd;
+    color: #fff;
+    font-weight: 700;
+    border: 0;
+    cursor: pointer;
+}
+
+.action-btn.secondary {
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.action-btn.success {
+    background: #198754;
+    color: #fff;
+}
+
+.overview-grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 16px;
+}
+
+.identity-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.identity-card,
+.stat-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.identity-card small,
+.stat-card small {
+    display: block;
+    color: #607089;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.identity-card strong,
+.stat-card strong {
+    display: block;
+    margin-top: 6px;
+    color: #10223e;
+    font-size: 22px;
+}
+
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.section-card {
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+    padding: 16px;
+}
+
+.section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.section-title {
+    margin: 0 0 12px;
+    color: #10223e;
+    font-size: 18px;
+}
+
+.notes-form {
+    display: grid;
+    gap: 10px;
+}
+
+.edit-form {
+    display: grid;
+    gap: 12px;
+}
+
+.edit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.field-stack {
+    display: grid;
+    gap: 6px;
+}
+
+.field-stack label,
+.check-label {
+    color: #607089;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.notes-form textarea {
+    min-height: 140px;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 12px;
+    resize: vertical;
+}
+
+.btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 10px;
+    padding: 10px 14px;
+    background: #0d6efd;
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.check-row input {
+    width: 16px;
+    height: 16px;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+    padding: 11px 12px;
+    border-bottom: 1px solid #e8eef6;
+    text-align: left;
+    vertical-align: top;
+}
+
+.data-table th {
+    background: #f4f8ff;
+    color: #35507a;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.linkish {
+    color: #0d6efd;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.muted {
+    color: #607089;
+}
+
+.split-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.empty-note {
+    color: #607089;
+    padding: 10px 0 2px;
+}
+
+.link-health-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.link-health-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.link-health-card small {
+    display: block;
+    color: #607089;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.link-health-card strong {
+    display: block;
+    margin-top: 6px;
+    color: #10223e;
+    font-size: 24px;
+}
+
+.duplicate-table td,
+.duplicate-table th {
+    text-align: left;
+}
+
+.mix-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.data-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: #f4f8ff;
+    color: #21406d;
+    font-weight: 700;
+    font-size: 12px;
+}
+
+.timeline-list {
+    display: grid;
+    gap: 12px;
+}
+
+.timeline-item {
+    border: 1px solid #e8eef6;
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: #fbfdff;
+}
+
+.timeline-item-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.timeline-type {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #2563eb;
+}
+
+.timeline-title {
+    margin-top: 4px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.timeline-meta {
+    margin-top: 4px;
+    color: #607089;
+    font-size: 13px;
+}
+
+@media (max-width: 980px) {
+    .overview-grid,
+    .split-grid,
+    .mix-grid,
+    .edit-grid,
+    .link-health-grid,
+    .identity-grid,
+    .stat-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="profile-shell">
+    <section class="section-card">
+        <div class="profile-head">
+            <div>
+                <h1 class="profile-title">{{ patient.name }}</h1>
+                <p class="profile-note">Patient profile hub for appointments, invoices, medicine purchase summary, and internal notes.</p>
+            </div>
+            <div class="header-actions">
+                <a class="back-link" href="{{ url_for('customer') }}">Back to Customer Master</a>
+                <a class="action-btn secondary" href="{{ url_for('appointments', appointment_report_type='all', search=profile_search_value, view='list') }}">Open All Appointments</a>
+                <a class="action-btn secondary" href="{{ url_for('invoices', search=profile_search_value) }}">Open All Invoices</a>
+                {% if management_enabled %}
+                <form method="post" action="{{ url_for('relink_patient_profile', patient_id=patient.id) }}">
+                    <button type="submit" class="action-btn success">Relink Matching Records</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <section class="overview-grid">
+        <div class="section-card">
+            <h2 class="section-title">Identity Snapshot</h2>
+            <div class="identity-grid">
+                <div class="identity-card">
+                    <small>Mobile</small>
+                    <strong>{{ patient.mobile or '-' }}</strong>
+                </div>
+                <div class="identity-card">
+                    <small>Gender</small>
+                    <strong>{{ patient.gender or '-' }}</strong>
+                </div>
+                <div class="identity-card">
+                    <small>Age</small>
+                    <strong>{{ patient.age or '-' }}</strong>
+                </div>
+                <div class="identity-card">
+                    <small>Last Updated</small>
+                    <strong>{{ patient.updated_at.strftime('%d-%m-%Y') if patient.updated_at else '-' }}</strong>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <h2 class="section-title">CRM Snapshot</h2>
+            <div class="stat-grid">
+                <div class="stat-card">
+                    <small>Appointments</small>
+                    <strong>{{ stats.appointment_count }}</strong>
+                </div>
+                <div class="stat-card">
+                    <small>Invoices</small>
+                    <strong>{{ stats.invoice_count }}</strong>
+                </div>
+                <div class="stat-card">
+                    <small>Medicines Bought</small>
+                    <strong>{{ stats.medicine_count }}</strong>
+                </div>
+                <div class="stat-card">
+                    <small>Total Billed</small>
+                    <strong>Rs {{ "%.2f"|format(stats.total_billed or 0) }}</strong>
+                </div>
+                <div class="stat-card">
+                    <small>Completed Visits</small>
+                    <strong>{{ stats.completed_visits }}</strong>
+                </div>
+                <div class="stat-card">
+                    <small>Cancelled Visits</small>
+                    <strong>{{ stats.cancelled_visits }}</strong>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="split-grid">
+        <div class="section-card">
+            <div class="section-head">
+                <h2 class="section-title">Patient Details</h2>
+                {% if management_enabled %}
+                <span class="muted">Changes can also sync linked appointments and invoices.</span>
+                {% endif %}
+            </div>
+            {% if management_enabled %}
+            <form method="post" action="{{ url_for('update_patient_profile', patient_id=patient.id) }}" class="edit-form">
+                <div class="edit-grid">
+                    <div class="field-stack">
+                        <label for="patientName">Patient Name</label>
+                        <input id="patientName" type="text" name="name" value="{{ patient.name or '' }}" required>
+                    </div>
+                    <div class="field-stack">
+                        <label for="patientMobile">Mobile</label>
+                        <input id="patientMobile" type="text" name="mobile" value="{{ patient.mobile or '' }}" placeholder="10 digit mobile">
+                    </div>
+                    <div class="field-stack">
+                        <label for="patientGender">Gender</label>
+                        <select id="patientGender" name="gender">
+                            <option value="">Select</option>
+                            <option value="MALE" {% if (patient.gender or '')|upper == 'MALE' %}selected{% endif %}>Male</option>
+                            <option value="FEMALE" {% if (patient.gender or '')|upper == 'FEMALE' %}selected{% endif %}>Female</option>
+                            <option value="OTHER" {% if (patient.gender or '')|upper == 'OTHER' %}selected{% endif %}>Other</option>
+                        </select>
+                    </div>
+                    <div class="field-stack">
+                        <label for="patientAge">Age</label>
+                        <input id="patientAge" type="number" min="0" name="age" value="{{ patient.age if patient.age is not none else '' }}">
+                    </div>
+                </div>
+                <label class="check-row">
+                    <input type="checkbox" name="sync_linked_records" value="1" checked>
+                    Sync same patient details across linked appointments and invoices
+                </label>
+                <div>
+                    <button type="submit" class="btn-primary">Update Patient</button>
+                </div>
+            </form>
+            {% else %}
+            <div class="empty-note">Patient identity cleanup controls are available for admin or billing management users.</div>
+            {% endif %}
+        </div>
+
+        <div class="section-card">
+            <div class="section-head">
+                <h2 class="section-title">Link Health</h2>
+                <span class="muted">Track linked vs orphan history for this patient.</span>
+            </div>
+            <div class="link-health-grid">
+                <div class="link-health-card">
+                    <small>Linked Appointments</small>
+                    <strong>{{ link_summary.linked_appointments }}</strong>
+                </div>
+                <div class="link-health-card">
+                    <small>Linked Invoices</small>
+                    <strong>{{ link_summary.linked_invoices }}</strong>
+                </div>
+                <div class="link-health-card">
+                    <small>Orphan Appointments</small>
+                    <strong>{{ link_summary.orphan_appointments }}</strong>
+                </div>
+                <div class="link-health-card">
+                    <small>Orphan Invoices</small>
+                    <strong>{{ link_summary.orphan_invoices }}</strong>
+                </div>
+            </div>
+            <div class="empty-note">If orphan counts are above zero, use <strong>Relink Matching Records</strong> to attach past history to this profile.</div>
+        </div>
+    </section>
+
+    {% if duplicate_candidates %}
+    <section class="section-card">
+        <div class="section-head">
+            <h2 class="section-title">Possible Duplicate Profiles</h2>
+            <span class="muted">These profiles have the same patient name and can be reviewed before merge.</span>
+        </div>
+        <table class="data-table duplicate-table">
+            <thead>
+                <tr>
+                    <th>Patient</th>
+                    <th>Mobile</th>
+                    <th>Updated</th>
+                    <th>Notes</th>
+                    {% if management_enabled %}
+                    <th>Merge</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for duplicate in duplicate_candidates %}
+                <tr>
+                    <td>
+                        <a class="linkish" href="{{ url_for('patient_profile', patient_id=duplicate.id) }}">{{ duplicate.name }}</a>
+                        <div class="muted">ID #{{ duplicate.id }}</div>
+                    </td>
+                    <td>{{ duplicate.mobile or '-' }}</td>
+                    <td>{{ duplicate.updated_at.strftime('%d-%m-%Y %I:%M %p') if duplicate.updated_at else '-' }}</td>
+                    <td>{{ (duplicate.notes or '-')[:100] }}{% if duplicate.notes and duplicate.notes|length > 100 %}...{% endif %}</td>
+                    {% if management_enabled %}
+                    <td>
+                        <form method="post" action="{{ url_for('merge_patient_profile', patient_id=patient.id) }}" onsubmit="return confirm('Merge this profile into the current patient?')">
+                            <input type="hidden" name="source_patient_id" value="{{ duplicate.id }}">
+                            <button type="submit" class="action-btn">Merge Into Current</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    <section class="split-grid">
+        <div class="section-card">
+            <h2 class="section-title">Patient Notes</h2>
+            <form method="post" action="{{ url_for('update_patient_notes', patient_id=patient.id) }}" class="notes-form">
+                <textarea name="notes" placeholder="Clinical reminders, follow-up notes, medicine preferences, family context...">{{ patient.notes or '' }}</textarea>
+                <button type="submit" class="btn-primary">Save Notes</button>
+            </form>
+        </div>
+
+        <div class="section-card">
+            <h2 class="section-title">Recent Activity</h2>
+            <div class="identity-grid">
+                <div class="identity-card">
+                    <small>Last Invoice</small>
+                    <strong>{{ stats.last_invoice_at.strftime('%d-%m-%Y') if stats.last_invoice_at else '-' }}</strong>
+                </div>
+                <div class="identity-card">
+                    <small>Last Appointment</small>
+                    <strong>{{ stats.last_appointment_at.strftime('%d-%m-%Y') if stats.last_appointment_at else '-' }}</strong>
+                </div>
+                <div class="identity-card">
+                    <small>Patient ID</small>
+                    <strong>#{{ patient.id }}</strong>
+                </div>
+                <div class="identity-card">
+                    <small>Payment Mix</small>
+                    <strong>{{ stats.cash_invoice_count }} / {{ stats.online_invoice_count }}</strong>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mix-grid">
+        <div class="section-card">
+            <h2 class="section-title">Visit Status Mix</h2>
+            <div class="chip-list">
+                {% for status, count in appointment_status_counts.items() if count %}
+                <span class="data-chip">{{ status.replace('_', ' ') }}: {{ count }}</span>
+                {% endfor %}
+                {% if stats.appointment_count == 0 %}
+                <span class="muted">No appointment status history found yet.</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="section-card">
+            <h2 class="section-title">Invoice Payment Mix</h2>
+            <div class="chip-list">
+                {% for mode, count in invoice_payment_counts.items() %}
+                <span class="data-chip">{{ mode }}: {{ count }}</span>
+                {% endfor %}
+                {% if not invoice_payment_counts %}
+                <span class="muted">No invoice payment history found yet.</span>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <section class="section-card">
+        <h2 class="section-title">Activity Timeline</h2>
+        {% if timeline %}
+        <div class="timeline-list">
+            {% for item in timeline %}
+            <div class="timeline-item">
+                <div class="timeline-item-head">
+                    <div>
+                        <div class="timeline-type">{{ item.type }}</div>
+                        <div class="timeline-title"><a class="linkish" href="{{ item.href }}">{{ item.title }}</a></div>
+                        <div class="timeline-meta">{{ item.subtitle }}</div>
+                    </div>
+                    <div class="muted">
+                        {{ item.occurred_at.strftime('%d-%m-%Y %I:%M %p') if item.occurred_at else '-' }}
+                    </div>
+                </div>
+                <div class="timeline-meta">Amount: Rs {{ "%.2f"|format(item.amount or 0) }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-note">No combined activity timeline found yet.</div>
+        {% endif %}
+    </section>
+
+    <section class="section-card">
+        <h2 class="section-title">Medicine Purchase Summary</h2>
+        {% if medicine_rows %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Medicine</th>
+                    <th>Qty</th>
+                    <th>Last Batch</th>
+                    <th>Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in medicine_rows %}
+                <tr>
+                    <td>{{ row.medicine }}</td>
+                    <td>{{ row.qty }}</td>
+                    <td>{{ row.last_batch or '-' }}</td>
+                    <td>Rs {{ "%.2f"|format(row.amount or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-note">No invoice-linked medicine history found yet.</div>
+        {% endif %}
+    </section>
+
+    <section class="split-grid">
+        <div class="section-card">
+            <h2 class="section-title">Appointments</h2>
+            {% if appointments %}
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>No</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                        <th>Fee</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for appt in appointments %}
+                    <tr>
+                        <td><a class="linkish" href="{{ url_for('edit_appointment', id=appt.id) }}">{{ appt.appointment_no }}</a></td>
+                        <td>{{ appt.appointment_date.strftime('%d-%m-%Y') if appt.appointment_date else '-' }}</td>
+                        <td><span class="status-pill">{{ (appt.status or 'BOOKED').replace('_', ' ') }}</span></td>
+                        <td>Rs {{ "%.2f"|format(appt.consultation_fee or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-note">No appointments found for this patient.</div>
+            {% endif %}
+        </div>
+
+        <div class="section-card">
+            <h2 class="section-title">Invoices</h2>
+            {% if invoices %}
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Invoice</th>
+                        <th>Date</th>
+                        <th>Payment</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for invoice in invoices %}
+                    <tr>
+                        <td><a class="linkish" href="{{ url_for('view_invoice', id=invoice.id) }}">{{ invoice.invoice_no }}</a></td>
+                        <td>{{ invoice.created_at.strftime('%d-%m-%Y') if invoice.created_at else '-' }}</td>
+                        <td><span class="status-pill">{{ invoice.payment_mode or 'CASH' }}</span></td>
+                        <td>Rs {{ "%.2f"|format(invoice.total or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-note">No invoice history found for this patient.</div>
+            {% endif %}
+        </div>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,561 @@
+{% extends "base.html" %}
+{% block title %}System Center{% endblock %}
+
+{% block body %}
+<style>
+.system-shell {
+    display: grid;
+    gap: 18px;
+}
+
+.system-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.system-title {
+    margin: 0;
+    color: #0f4fbf;
+    font-size: 28px;
+}
+
+.system-note {
+    margin: 8px 0 0;
+    color: #607089;
+    max-width: 820px;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.status-pill.ok {
+    background: #e6fbef;
+    color: #0a7d44;
+}
+
+.status-pill.degraded {
+    background: #fff4dd;
+    color: #936200;
+}
+
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.system-card {
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+    padding: 16px;
+}
+
+.system-card small {
+    display: block;
+    color: #607089;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.system-card strong {
+    display: block;
+    margin-top: 8px;
+    color: #10223e;
+    font-size: 22px;
+}
+
+.meta-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 16px;
+}
+
+.meta-list {
+    display: grid;
+    gap: 10px;
+}
+
+.meta-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #edf2f8;
+}
+
+.meta-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+}
+
+.meta-label {
+    color: #607089;
+    font-weight: 700;
+}
+
+.meta-value {
+    color: #10223e;
+    font-weight: 600;
+    text-align: right;
+}
+
+.storage-grid,
+.tracker-grid,
+.count-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.section-title {
+    margin: 0 0 12px;
+    color: #10223e;
+    font-size: 18px;
+}
+
+.tracker-block h3 {
+    margin: 0 0 10px;
+    color: #21406d;
+    font-size: 16px;
+}
+
+.tracker-list {
+    margin: 0;
+    padding-left: 18px;
+    color: #334155;
+    display: grid;
+    gap: 8px;
+}
+
+.tiny-note {
+    margin-top: 10px;
+    color: #607089;
+    font-size: 12px;
+}
+
+.action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-top: 14px;
+}
+
+.action-row form {
+    margin: 0;
+}
+
+.btn-action {
+    border: 0;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-weight: 700;
+    cursor: pointer;
+    background: #0f4fbf;
+    color: #fff;
+}
+
+.btn-action.secondary {
+    background: #e8f1ff;
+    color: #1e40af;
+}
+
+.code-block {
+    margin: 0;
+    padding: 12px;
+    border-radius: 12px;
+    background: #0f172a;
+    color: #e2e8f0;
+    overflow-x: auto;
+    font-size: 12px;
+}
+
+.snapshot-table,
+.security-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.snapshot-table th,
+.snapshot-table td,
+.security-table th,
+.security-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid #edf2f8;
+    text-align: left;
+    vertical-align: top;
+}
+
+.snapshot-table th,
+.security-table th {
+    color: #607089;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.mono-text {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+}
+
+.muted-text {
+    color: #607089;
+}
+
+@media (max-width: 1100px) {
+    .overview-grid,
+    .storage-grid,
+    .tracker-grid,
+    .count-grid,
+    .meta-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    .overview-grid,
+    .storage-grid,
+    .tracker-grid,
+    .count-grid,
+    .meta-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .meta-row {
+        flex-direction: column;
+    }
+
+    .meta-value {
+        text-align: left;
+    }
+}
+</style>
+
+<div class="system-shell">
+    <section class="card">
+        <div class="system-head">
+            <div>
+                <h1 class="system-title">System Center</h1>
+                <p class="system-note">Use this page to review app release details, database health, upload storage, row counts, and current upgrade coverage in one place. It does not change billing or appointment flows; it only improves system visibility.</p>
+            </div>
+            <span class="status-pill {{ 'ok' if system_health.status == 'ok' else 'degraded' }}">
+                {{ system_health.status }}
+            </span>
+        </div>
+    </section>
+
+    <section class="overview-grid">
+        <div class="system-card">
+            <small>Release</small>
+            <strong>{{ release_identifier }}</strong>
+        </div>
+        <div class="system-card">
+            <small>Checked At</small>
+            <strong>{{ system_health.checked_at }}</strong>
+        </div>
+        <div class="system-card">
+            <small>Environment</small>
+            <strong>{{ system_health.environment|title }}</strong>
+        </div>
+        <div class="system-card">
+            <small>Timezone</small>
+            <strong>{{ system_health.timezone }}</strong>
+        </div>
+    </section>
+
+    <section class="meta-grid">
+        <div class="system-card">
+            <h2 class="section-title">Database & Runtime</h2>
+            <div class="meta-list">
+                <div class="meta-row">
+                    <span class="meta-label">Database Backend</span>
+                    <span class="meta-value">{{ system_health.database.backend }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Database Target</span>
+                    <span class="meta-value">{{ system_health.database.target }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">DB Probe Latency</span>
+                    <span class="meta-value">{{ system_health.database.latency_ms if system_health.database.latency_ms is not none else '-' }} ms</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Max Upload Size</span>
+                    <span class="meta-value">{{ max_upload_mb }} MB</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Storage Root</span>
+                    <span class="meta-value">{{ system_health.storage.root_path }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Backup Root</span>
+                    <span class="meta-value">{{ system_health.backups.root_path }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Public Health URL</span>
+                    <span class="meta-value">/healthz and /readyz</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Flask-Migrate</span>
+                    <span class="meta-value">{{ 'Enabled' if migrate_enabled else 'Pending dependency install' }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Sentry</span>
+                    <span class="meta-value">{{ 'Configured' if sentry_configured else 'Not configured' }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Session Policy</span>
+                    <span class="meta-value">Idle timeout and absolute expiry enabled</span>
+                </div>
+            </div>
+            {% if system_health.database.error %}
+            <div class="tiny-note">Last database error: {{ system_health.database.error }}</div>
+            {% endif %}
+        </div>
+
+        <div class="system-card">
+            <h2 class="section-title">Core Counts</h2>
+            <div class="count-grid">
+                <div class="system-card">
+                    <small>Patients</small>
+                    <strong>{{ system_health.counts.patients }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Appointments</small>
+                    <strong>{{ system_health.counts.appointments }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Invoices</small>
+                    <strong>{{ system_health.counts.invoices }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Returns</small>
+                    <strong>{{ system_health.counts.returns }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Medicines</small>
+                    <strong>{{ system_health.counts.medicines }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Low Stock</small>
+                    <strong>{{ system_health.counts.low_stock_medicines }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Vendors</small>
+                    <strong>{{ system_health.counts.vendors }}</strong>
+                </div>
+                <div class="system-card">
+                    <small>Audit Events</small>
+                    <strong>{{ system_health.counts.audit_events }}</strong>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="storage-grid">
+        {% for label, storage in [('Vendor Uploads', system_health.storage.vendor_uploads), ('Vendor Bill Uploads', system_health.storage.vendor_bill_uploads)] %}
+        <div class="system-card">
+            <h2 class="section-title">{{ label }}</h2>
+            <div class="meta-list">
+                <div class="meta-row">
+                    <span class="meta-label">Status</span>
+                    <span class="meta-value">{{ 'Available' if storage.available else 'Missing' }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Files</span>
+                    <span class="meta-value">{{ storage.file_count }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Total Size</span>
+                    <span class="meta-value">{{ storage.total_size }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Latest File</span>
+                    <span class="meta-value">{{ storage.latest_file_at or '-' }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Path</span>
+                    <span class="meta-value">{{ storage.path }}</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+
+    <section class="meta-grid">
+        <div class="system-card">
+            <h2 class="section-title">Backup & Restore</h2>
+            <div class="meta-list">
+                <div class="meta-row">
+                    <span class="meta-label">Snapshots</span>
+                    <span class="meta-value">{{ system_health.backups.snapshot_count }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Latest Snapshot</span>
+                    <span class="meta-value">{{ system_health.backups.latest_snapshot or '-' }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Latest Created</span>
+                    <span class="meta-value">{{ system_health.backups.latest_created_at or '-' }}</span>
+                </div>
+            </div>
+            <div class="action-row">
+                <form method="POST" action="/system-center/backups/run">
+                    <button type="submit" class="btn-action">Run Snapshot Now</button>
+                </form>
+                <form method="POST" action="/system-center/backups/restore-drill">
+                    <input type="hidden" name="snapshot_name" value="latest">
+                    <button type="submit" class="btn-action secondary">Run Restore Drill</button>
+                </form>
+            </div>
+            <div class="tiny-note">Restore drill validates the selected snapshot without changing live data. Use the restore script only after taking a fresh backup.</div>
+        </div>
+
+        <div class="system-card">
+            <h2 class="section-title">Security Watch</h2>
+            <div class="meta-list">
+                <div class="meta-row">
+                    <span class="meta-label">Suspicious Logins (24h)</span>
+                    <span class="meta-value">{{ system_health.security.suspicious_logins_24h }}</span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">Failed Logins (24h)</span>
+                    <span class="meta-value">{{ system_health.security.failed_logins_24h }}</span>
+                </div>
+            </div>
+            <div class="tiny-note">Suspicious events include repeated failed attempts, disabled-user logins, and successful logins from a new IP or device signature.</div>
+        </div>
+    </section>
+
+    <section class="meta-grid">
+        <div class="system-card">
+            <h2 class="section-title">Restore Commands</h2>
+            <div class="meta-list">
+                <div class="meta-row">
+                    <span class="meta-label">Dry Run</span>
+                </div>
+            </div>
+            <pre class="code-block">{{ restore_commands.dry_run }}</pre>
+            <div class="tiny-note">Dry run reads the snapshot manifest and validates restore inputs without applying data changes.</div>
+            <div class="meta-list" style="margin-top: 12px;">
+                <div class="meta-row">
+                    <span class="meta-label">Apply Restore</span>
+                </div>
+            </div>
+            <pre class="code-block">{{ restore_commands.apply }}</pre>
+        </div>
+
+        <div class="system-card">
+            <h2 class="section-title">Recent Suspicious Logins</h2>
+            {% if recent_suspicious_logins %}
+            <table class="security-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Outcome</th>
+                        <th>Reason</th>
+                        <th>IP</th>
+                        <th>When</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in recent_suspicious_logins %}
+                    <tr>
+                        <td>{{ event.username or 'Unknown' }}</td>
+                        <td>{{ event.outcome }}</td>
+                        <td>{{ event.reason or '-' }}</td>
+                        <td class="mono-text">{{ event.ip_address or '-' }}</td>
+                        <td>{{ event.created_at.strftime('%d-%m-%Y %I:%M %p') if event.created_at else '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="muted-text">No suspicious login events recorded recently.</div>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="system-card">
+        <h2 class="section-title">Recent Backup Snapshots</h2>
+        {% if backup_snapshots %}
+        <table class="snapshot-table">
+            <thead>
+                <tr>
+                    <th>Snapshot</th>
+                    <th>Created At</th>
+                    <th>Rows</th>
+                    <th>Upload Archives</th>
+                    <th>Restore Drill</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for snapshot in backup_snapshots %}
+                <tr>
+                    <td class="mono-text">{{ snapshot.snapshot_name }}</td>
+                    <td>{{ snapshot.created_at or '-' }}</td>
+                    <td>{{ snapshot.table_counts.values()|list|sum }}</td>
+                    <td>{{ snapshot.upload_archives.keys()|list|join(', ') if snapshot.upload_archives else '-' }}</td>
+                    <td>
+                        <form method="POST" action="/system-center/backups/restore-drill">
+                            <input type="hidden" name="snapshot_name" value="{{ snapshot.snapshot_name }}">
+                            <button type="submit" class="btn-action secondary">Test Snapshot</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="muted-text">No snapshots created yet. Run a manual snapshot or enable nightly background jobs.</div>
+        {% endif %}
+    </section>
+
+    <section class="meta-grid">
+        <div class="system-card">
+            <h2 class="section-title">Background Jobs</h2>
+            {% if background_job_status %}
+            <div class="meta-list">
+                {% for job_name, status in background_job_status.items() %}
+                <div class="meta-row">
+                    <span class="meta-label">{{ job_name.replace('_', ' ').title() }}</span>
+                    <span class="meta-value">{{ status.last_status|default('idle') }}{% if status.last_run_at %} / {{ status.last_run_at }}{% endif %}</span>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="tiny-note">Jobs cover queued report exports, reminder outbox generation, DB backups, and expiry alert snapshots.</div>
+            {% else %}
+            <div class="tiny-note">Background jobs are registered but currently disabled for this environment.</div>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="tracker-grid">
+        {% for section in upgrade_tracker %}
+        <div class="system-card tracker-block">
+            <h3>{{ section.title }}</h3>
+            <ul class="tracker-list">
+                {% for item in section["items"] %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endfor %}
+    </section>
+</div>
+{% endblock %}

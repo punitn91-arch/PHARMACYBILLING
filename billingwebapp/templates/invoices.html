@@ -2,149 +2,222 @@
 {% block title %}Manage Invoices{% endblock %}
 
 {% block body %}
+{% macro money(v) -%}Rs {{ '%.2f'|format((v or 0)|float) }}{%- endmacro %}
 
-<style>
-    h2 {
-        margin-bottom: 15px;
-        color: #004aad;
-    }
+{% set ns = namespace(total_sales=0.0, cash=0, online=0, high=0) %}
+{% set show_admin_invoice_cards = session.get("role") == "admin" %}
+{% for i in invoices %}
+    {% set ns.total_sales = ns.total_sales + (i.total or 0) %}
+    {% if (i.payment_mode or 'CASH')|upper == 'CASH' %}
+        {% set ns.cash = ns.cash + 1 %}
+    {% else %}
+        {% set ns.online = ns.online + 1 %}
+    {% endif %}
+    {% if (i.total or 0) >= 1000 %}
+        {% set ns.high = ns.high + 1 %}
+    {% endif %}
+{% endfor %}
 
-    .filter-box {
-        background: white;
-        padding: 15px;
-        border-radius: 6px;
-        margin-bottom: 15px;
-        display: flex;
-        gap: 15px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
+<div class="app-page-stack invoice-page">
+    {% if show_admin_invoice_cards %}
+    <section class="app-stat-grid">
+        <article class="app-stat-card">
+            <div class="app-stat-label">Visible Invoices</div>
+            <div class="app-stat-value" id="visibleInvoiceCount">{{ invoices|length }}</div>
+            <div class="app-stat-sub">Current server-side result set</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Visible Sales</div>
+            <div class="app-stat-value">{{ money(ns.total_sales) }}</div>
+            <div class="app-stat-sub">Total amount in current result set</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Cash vs Online</div>
+            <div class="app-stat-value">{{ ns.cash }} / {{ ns.online }}</div>
+            <div class="app-stat-sub">Cash bills vs digital bills</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">High Value Bills</div>
+            <div class="app-stat-value">{{ ns.high }}</div>
+            <div class="app-stat-sub">Invoices above Rs 1000</div>
+        </article>
+    </section>
+    {% endif %}
 
-    .filter-box input {
-        padding: 8px;
-        font-size: 14px;
-    }
+    <section class="app-surface app-filter-bar{% if show_admin_invoice_cards %} app-sticky-panel{% else %} invoice-filter-panel--staff{% endif %}">
+        <form method="get" class="app-filter-grid">
+            <div class="app-field" style="grid-column: span 2;">
+                <label for="invoiceFrom">From Date</label>
+                <input id="invoiceFrom" type="date" name="from" value="{{ request.args.get('from', '') }}">
+            </div>
+            <div class="app-field" style="grid-column: span 2;">
+                <label for="invoiceTo">To Date</label>
+                <input id="invoiceTo" type="date" name="to" value="{{ request.args.get('to', '') }}">
+            </div>
+            <div class="app-field" style="grid-column: span 5;">
+                <label for="invoiceSearch">Search Invoice / Patient / Mobile</label>
+                <input id="invoiceSearch" type="text" name="search" value="{{ search_query or '' }}" placeholder="Invoice no, patient name, or mobile">
+                <div class="app-inline-help">Live filtering works instantly, and submit will narrow the server-side result set.</div>
+            </div>
+            <div class="app-actions" style="grid-column: span 3; justify-content:flex-end;">
+                <button type="submit" class="app-button">Apply Filters</button>
+                <a href="/invoices" class="app-button secondary">Reset</a>
+            </div>
+        </form>
 
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        background: white;
-        box-shadow: 0 0 8px rgba(0,0,0,0.1);
-    }
+        <div class="app-chip-row" id="invoiceQuickChips">
+            <button type="button" class="app-chip is-active" data-filter="all">All</button>
+            <button type="button" class="app-chip" data-filter="cash">Cash</button>
+            <button type="button" class="app-chip" data-filter="online">Online</button>
+            <button type="button" class="app-chip" data-filter="high">High Value</button>
+            <button type="button" class="app-chip" data-filter="today">Today</button>
+        </div>
 
-    th {
-        background: #0d6efd;
-        color: white;
-        padding: 10px;
-        font-size: 15px;
-    }
+        <div class="app-shortcut-note">
+            <span class="app-shortcut-kbd">Alt + N · new bill</span>
+            <span class="app-shortcut-kbd">Alt + F · focus invoice search</span>
+            <span class="app-shortcut-kbd">/ or Ctrl/Cmd + K · global search</span>
+        </div>
 
-    td {
-        padding: 10px;
-        border-bottom: 1px solid #ddd;
-        text-align: center;
-        font-size: 14px;
-    }
+        <div class="app-inline-help" id="invoiceResultsNote">Dense view active. Sticky filters and the table header keep context visible in large invoice lists.</div>
+    </section>
 
-    tr:hover {
-        background: #f3f8ff;
-    }
-
-    .actions a {
-        text-decoration: none;
-        font-size: 14px;
-        margin: 0 6px;
-        font-weight: 600;
-    }
-
-    .view { color: #0d6efd; }
-    .print { color: #198754; }
-    .delete {
-        color: #fff;
-        background: #6c757d;
-        padding: 6px 10px;
-        border-radius: 6px;
-        display: inline-block;
-    }
-    .edit { color: #fd7e14; }
-</style>
-
-<h2>Invoice List</h2>
-
-<!-- FILTER -->
-<div class="filter-box">
-    <form method="get">
-        <label>From:</label>
-        <input type="date" name="from" value="{{ request.args.get('from','') }}">
-
-        <label>To:</label>
-        <input type="date" name="to" value="{{ request.args.get('to','') }}">
-
-        <button type="submit">Filter</button>
-    </form>
-    <input type="text" id="invoiceSearch"
-       placeholder="Search by invoice / patient / mobile"
-       style="padding:8px; width:220px;">
+    <section class="app-table-shell">
+        <div class="app-table-scroll">
+            <table class="app-table" id="invoiceTable">
+                <thead>
+                    <tr>
+                        <th>Invoice No</th>
+                        <th>Patient</th>
+                        <th>Mobile</th>
+                        <th>Date</th>
+                        <th>Payment</th>
+                        <th>Total</th>
+                        <th>User</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if invoices %}
+                        {% for i in invoices %}
+                        {% set pay_mode = (i.payment_mode or 'CASH')|upper %}
+                        <tr
+                            data-payment="{{ pay_mode }}"
+                            data-total="{{ '%.2f'|format(i.total or 0) }}"
+                            data-date="{{ i.created_at.strftime('%Y-%m-%d') if i.created_at else '' }}"
+                        >
+                            <td>
+                                <strong>{{ i.invoice_no }}</strong>
+                                <div class="app-inline-help">Invoice record</div>
+                            </td>
+                            <td>
+                                <strong>{{ i.customer }}</strong>
+                                <div class="app-inline-help">Patient bill entry</div>
+                            </td>
+                            <td>{{ i.mobile or '-' }}</td>
+                            <td>{{ i.created_at.strftime('%d-%m-%Y') if i.created_at else '-' }}</td>
+                            <td>
+                                {% if pay_mode == 'CASH' %}
+                                <span class="app-badge success">Cash</span>
+                                {% else %}
+                                <span class="app-badge info">{{ pay_mode }}</span>
+                                {% endif %}
+                            </td>
+                            <td><strong>{{ money(i.total) }}</strong></td>
+                            <td>{{ i.created_by or '-' }}</td>
+                            <td>
+                                <div class="invoice-actions">
+                                    <a href="/invoice/{{ i.id }}">View</a>
+                                    <a href="/invoice/{{ i.id }}?print=1" target="_blank">Print</a>
+                                    <a href="/return-medicine?invoice_no={{ i.invoice_no }}">Return</a>
+                                    {% if session.get("role") == "admin" or session.get("can_edit_invoice") or session.get("can_invoice_action") %}
+                                    <a href="/invoice/edit/{{ i.id }}">Edit</a>
+                                    {% endif %}
+                                    {% if session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}
+                                    <a class="danger"
+                                       href="/delete-invoice/{{ i.id }}"
+                                       data-async-action="true"
+                                       onclick="return confirm('Delete invoice?')">Delete</a>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="8">
+                                <div class="app-empty">
+                                    <strong>No invoices found</strong>
+                                    Try a wider date range or clear the search filter.
+                                </div>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </div>
 
-<table id="invoiceTable">
-    <tr>
-        <th>Invoice No</th>
-        <th>Patient Name</th>
-        <th>Mobile</th>
-        <th>Date</th>
-        <th>Total</th>
-        <th>User</th>
-        <th>Action</th>
-    </tr>
-
-    {% for i in invoices %}
-    <tr>
-        <td>{{ i.invoice_no }}</td>
-        <td>{{ i.customer }}</td>
-        <td>{{ i.mobile }}</td>
-        <td>{{ i.created_at.strftime('%d-%m-%Y') }}</td>
-        <td>Rs {{ "%.2f"|format(i.total) }}</td>
-        <td><b>{{ i.created_by }}</b></td>
-        <td class="actions">
-            <a class="view" href="/invoice/{{ i.id }}" title="View Invoice">View</a>
-            <a class="print" href="/invoice/{{ i.id }}?print=1" target="_blank" title="Print Invoice">Print</a>
-            <a class="view" href="/return-medicine?invoice_no={{ i.invoice_no }}" title="Return Medicine">Return</a>
-
-            {% if session.get("role") == "admin" or session.get("can_edit_invoice") or session.get("can_invoice_action") %}
-            <a class="edit" href="/invoice/edit/{{ i.id }}" title="Edit Invoice">Edit</a>
-            {% endif %}
-
-            {% if session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}
-            <a class="delete"
-               href="/delete-invoice/{{ i.id }}"
-               data-async-action="true"
-               onclick="return confirm('Delete invoice?')"
-               title="Delete Invoice">Delete</a>
-            {% endif %}
-        </td>
-    </tr>
-    {% endfor %}
-</table>
 <script>
-document.getElementById("invoiceSearch").addEventListener("keyup", function () {
-    let value = this.value.toLowerCase();
-    let rows = document.querySelectorAll("#invoiceTable tr");
+(function () {
+    const table = document.getElementById("invoiceTable");
+    const liveSearch = document.getElementById("invoiceSearch");
+    const resultNote = document.getElementById("invoiceResultsNote");
+    const visibleCount = document.getElementById("visibleInvoiceCount");
+    const chips = Array.from(document.querySelectorAll("#invoiceQuickChips .app-chip"));
+    if (!table || !liveSearch || !chips.length) return;
 
-    rows.forEach((row, index) => {
-        if (index === 0) return; // header skip
+    let activeFilter = "all";
 
-        let invoice = row.children[0].innerText.toLowerCase();
-        let patient = row.children[1].innerText.toLowerCase();
-        let mobile  = row.children[2].innerText.toLowerCase();
+    function todayIso() {
+        const date = new Date();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        return `${date.getFullYear()}-${month}-${day}`;
+    }
 
-        if (invoice.includes(value) || patient.includes(value) || mobile.includes(value)) {
-            row.style.display = "";
-            row.style.background = "#e7f1ff";   // light blue highlight
-        } else {
-            row.style.display = "none";
+    function rowMatchesFilter(row) {
+        const payment = String(row.dataset.payment || "").toUpperCase();
+        const total = parseFloat(row.dataset.total || "0") || 0;
+        const created = row.dataset.date || "";
+        if (activeFilter === "cash") return payment === "CASH";
+        if (activeFilter === "online") return payment !== "CASH";
+        if (activeFilter === "high") return total >= 1000;
+        if (activeFilter === "today") return created === todayIso();
+        return true;
+    }
+
+    function rowMatchesSearch(row, query) {
+        if (!query) return true;
+        return row.textContent.toLowerCase().includes(query);
+    }
+
+    function applyTableFilter() {
+        const query = (liveSearch.value || "").trim().toLowerCase();
+        const rows = Array.from(table.querySelectorAll("tbody tr"));
+        let visibleRows = 0;
+        rows.forEach((row) => {
+            if (!row.dataset.payment) return;
+            const visible = rowMatchesFilter(row) && rowMatchesSearch(row, query);
+            row.style.display = visible ? "" : "none";
+            if (visible) visibleRows += 1;
+        });
+        if (visibleCount) visibleCount.textContent = String(visibleRows);
+        if (resultNote) {
+            resultNote.textContent = `${visibleRows} invoice rows visible with ${activeFilter} quick filter${query ? ` and search "${query}"` : ""}.`;
         }
+    }
+
+    liveSearch.addEventListener("input", applyTableFilter);
+    chips.forEach((chip) => {
+        chip.addEventListener("click", function () {
+            chips.forEach((node) => node.classList.remove("is-active"));
+            chip.classList.add("is-active");
+            activeFilter = chip.dataset.filter || "all";
+            applyTableFilter();
+        });
     });
-});
+})();
 </script>
 {% endblock %}

@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+{% block title %}Live Queue Board{% endblock %}
+
+{% block body %}
+<style>
+.queue-shell {
+    display: grid;
+    gap: 18px;
+}
+
+.queue-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.queue-title {
+    margin: 0;
+    color: #0f4fbf;
+    font-size: 32px;
+}
+
+.queue-note {
+    margin: 8px 0 0;
+    color: #607089;
+    max-width: 760px;
+}
+
+.queue-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: end;
+}
+
+.queue-actions form {
+    display: flex;
+    gap: 8px;
+    align-items: end;
+    flex-wrap: wrap;
+}
+
+.queue-actions label {
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #52627a;
+}
+
+.queue-actions input {
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #fff;
+}
+
+.queue-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.queue-btn.primary {
+    background: #0d6efd;
+    color: #fff;
+}
+
+.queue-btn.secondary {
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.hero-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1.6fr;
+    gap: 16px;
+}
+
+.hero-card,
+.lane-card {
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 18px;
+    padding: 18px;
+}
+
+.current-token {
+    display: grid;
+    gap: 12px;
+}
+
+.current-token small,
+.metric-card small,
+.lane-card small {
+    display: block;
+    color: #607089;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.current-token strong {
+    display: block;
+    color: #10223e;
+    font-size: 52px;
+    line-height: 1;
+}
+
+.current-token .patient {
+    font-size: 22px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.token-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.token-pill {
+    min-width: 58px;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    padding: 12px 16px;
+    border-radius: 999px;
+    background: #f6f9ff;
+    color: #1f3b63;
+    font-size: 20px;
+    font-weight: 800;
+    border: 1px solid #dbe4f0;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.metric-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+    padding: 14px 16px;
+}
+
+.metric-card strong {
+    display: block;
+    margin-top: 6px;
+    color: #10223e;
+    font-size: 28px;
+}
+
+.lanes-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.lane-title {
+    margin: 0;
+    color: #10223e;
+    font-size: 18px;
+}
+
+.lane-subtitle {
+    margin: 6px 0 0;
+    color: #607089;
+}
+
+.lane-list {
+    margin-top: 14px;
+    display: grid;
+    gap: 10px;
+}
+
+.lane-item {
+    border: 1px solid #e6edf8;
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: #fbfdff;
+}
+
+.lane-item-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+}
+
+.lane-token {
+    font-size: 24px;
+    font-weight: 800;
+    color: #0d6efd;
+}
+
+.lane-patient {
+    margin-top: 6px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.lane-meta {
+    margin-top: 4px;
+    color: #607089;
+    font-size: 13px;
+}
+
+.lane-link {
+    color: #0d6efd;
+    text-decoration: none;
+}
+
+.lane-link:hover {
+    text-decoration: underline;
+}
+
+.status-tag {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.empty-lane {
+    margin-top: 14px;
+    color: #607089;
+    font-size: 14px;
+}
+
+@media (max-width: 1100px) {
+    .hero-grid,
+    .lanes-grid,
+    .metrics-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="queue-shell">
+    <section class="hero-card">
+        <div class="queue-head">
+            <div>
+                <h1 class="queue-title">Live Queue Board</h1>
+                <p class="queue-note">Live OPD token board for reception and doctor rooms. Changing the date will load the queue snapshot for that day.</p>
+            </div>
+            <div class="queue-actions">
+                <form method="get">
+                    <label>
+                        Queue Date
+                        <input type="date" name="date" value="{{ target_date.isoformat() if target_date else '' }}">
+                    </label>
+                    <button type="submit" class="queue-btn primary">Load Queue</button>
+                </form>
+                <a href="{{ url_for('appointments', appointment_report_type='day', appointment_day_date=target_date.isoformat()) }}" class="queue-btn secondary">Open Appointments</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="hero-grid">
+        <div class="hero-card current-token">
+            <small>Current Token</small>
+            <strong>
+                {% if queue_snapshot.current_serving and queue_snapshot.current_serving.token_no is not none %}
+                {{ queue_snapshot.current_serving.token_no }}
+                {% else %}
+                -
+                {% endif %}
+            </strong>
+            <div class="patient">
+                {% if queue_snapshot.current_serving %}
+                {{ queue_snapshot.current_serving.patient_name }}
+                {% else %}
+                No active token
+                {% endif %}
+            </div>
+            <div class="lane-meta">
+                {% if queue_snapshot.current_serving %}
+                {{ queue_snapshot.current_serving.status.replace('_', ' ').title() }} · {{ queue_snapshot.current_serving.payment_status.title() }}
+                {% else %}
+                Queue is empty for this date.
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="hero-card">
+            <small>Next Tokens In Queue</small>
+            {% if queue_snapshot.next_tokens %}
+            <div class="token-strip">
+                {% for token in queue_snapshot.next_tokens %}
+                <span class="token-pill">{{ token }}</span>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-lane">No active queue tokens available.</div>
+            {% endif %}
+
+            <div class="metrics-grid" style="margin-top: 18px;">
+                <div class="metric-card">
+                    <small>Total</small>
+                    <strong>{{ queue_snapshot.board_stats.total }}</strong>
+                </div>
+                <div class="metric-card">
+                    <small>Active</small>
+                    <strong>{{ queue_snapshot.board_stats.active }}</strong>
+                </div>
+                <div class="metric-card">
+                    <small>Completed</small>
+                    <strong>{{ queue_snapshot.board_stats.completed }}</strong>
+                </div>
+                <div class="metric-card">
+                    <small>Cancelled</small>
+                    <strong>{{ queue_snapshot.board_stats.cancelled }}</strong>
+                </div>
+                <div class="metric-card">
+                    <small>Revenue</small>
+                    <strong>Rs {{ '%.2f'|format(queue_snapshot.summary.revenue or 0) }}</strong>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="lanes-grid">
+        {% set lane_defs = [
+            ('scheduled', 'Scheduled', 'Freshly booked patients'),
+            ('waiting', 'Waiting Area', 'Waiting or checked-in patients'),
+            ('consulting', 'In Consultation', 'Patients currently with doctor'),
+            ('completed', 'Completed', 'Closed consultations'),
+            ('cancelled', 'Cancelled', 'Cancelled or no-show tokens')
+        ] %}
+        {% for lane_key, lane_title, lane_subtitle in lane_defs %}
+        <article class="lane-card">
+            <h2 class="lane-title">{{ lane_title }}</h2>
+            <p class="lane-subtitle">{{ lane_subtitle }}</p>
+
+            {% set items = queue_snapshot.lanes[lane_key] %}
+            {% if items %}
+            <div class="lane-list">
+                {% for item in items %}
+                <div class="lane-item">
+                    <div class="lane-item-head">
+                        <span class="lane-token">{{ item.token_no if item.token_no is not none else '-' }}</span>
+                        <span class="status-tag">{{ item.status.replace('_', ' ') }}</span>
+                    </div>
+                    <div class="lane-patient">
+                        {% if item.patient_id %}
+                        <a class="lane-link" href="{{ url_for('patient_profile', patient_id=item.patient_id) }}">{{ item.patient_name }}</a>
+                        {% else %}
+                        {{ item.patient_name }}
+                        {% endif %}
+                    </div>
+                    <div class="lane-meta">
+                        {{ item.appointment_time.strftime('%I:%M %p') if item.appointment_time else '-' }} · {{ item.payment_status.title() }} · {{ item.payment_mode }}
+                    </div>
+                    <div class="lane-meta">
+                        <a class="lane-link" href="{{ url_for('edit_appointment', id=item.id) }}">Open appointment</a>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-lane">No patients in this lane.</div>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </section>
+</div>
+
+<script>
+window.setTimeout(function () {
+    window.location.reload();
+}, 30000);
+</script>
+{% endblock %}

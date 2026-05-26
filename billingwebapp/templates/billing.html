@@ -105,12 +105,39 @@
     font-size: 11px;
 }
 
+.panel-help {
+    margin-top: 8px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: #5b5f57;
+}
+
 .items-bar {
     display: grid;
     grid-template-columns: 1fr;
     gap: 6px;
     align-items: center;
     margin-bottom: 6px;
+}
+
+.lookup-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
+    gap: 10px;
+    align-items: start;
+}
+
+.lookup-stack {
+    display: grid;
+    gap: 5px;
+}
+
+.lookup-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #4b4b4b;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
 }
 
 .tab {
@@ -140,6 +167,53 @@
     border: 1px solid #bdb6a5;
     background: #fff;
     font-size: 12px;
+}
+
+.barcode-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.barcode-grid input {
+    width: 100%;
+    padding: 5px 7px;
+    border: 1px solid #bdb6a5;
+    background: #fff;
+    font-size: 12px;
+}
+
+.barcode-btn {
+    background: #244b76;
+    color: #fff;
+    border: 1px solid #1b3959;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.barcode-status {
+    min-height: 16px;
+    font-size: 10px;
+    color: #5e5a4d;
+}
+
+.barcode-status.success {
+    color: #0f6a3d;
+    font-weight: 700;
+}
+
+.barcode-status.error {
+    color: #a13d2d;
+    font-weight: 700;
+}
+
+.barcode-note {
+    font-size: 10px;
+    color: #7a6f58;
 }
 
 .autocomplete-list {
@@ -344,6 +418,7 @@ tr.item-row {
     .top-grid { grid-template-columns: 1fr; }
     .summary-grid { grid-template-columns: repeat(2, 1fr); }
     .summary-actions { grid-template-columns: 1fr; }
+    .lookup-grid { grid-template-columns: 1fr; }
 }
 </style>
 
@@ -354,7 +429,7 @@ tr.item-row {
         <div class="top-grid">
             <div class="field">
                 <label>Patient Name</label>
-                <input type="text" name="customer" required oninput="this.value=this.value.toUpperCase()" value="{{ restored_hold_bill.header.customer if restored_hold_bill else '' }}">
+                <input type="text" id="billingPatientName" name="customer" required oninput="this.value=this.value.toUpperCase()" value="{{ restored_hold_bill.header.customer if restored_hold_bill else '' }}">
             </div>
             <div class="field">
                 <label>Mobile</label>
@@ -381,13 +456,33 @@ tr.item-row {
                 </select>
             </div>
         </div>
+        <div class="panel-help">Patient shortcut: <b>Alt + P</b> focuses the patient name field. Use <b>/</b> or <b>Ctrl/Cmd + K</b> for global patient lookup.</div>
     </div>
 
     <div class="panel">
         <div class="items-bar">
-            <div class="search-wrap">
-                <input type="text" id="medicineSearch" placeholder="Search medicine" autocomplete="off">
-                <div id="medicineDropdown" class="autocomplete-list" role="listbox" aria-label="Medicine suggestions"></div>
+            <div class="lookup-grid">
+                <div class="lookup-stack">
+                    <label class="lookup-label" for="medicineSearch">Medicine Search</label>
+                    <div class="search-wrap">
+                        <input type="text" id="medicineSearch" placeholder="Search medicine, batch or barcode" autocomplete="off">
+                        <div id="medicineDropdown" class="autocomplete-list" role="listbox" aria-label="Medicine suggestions"></div>
+                    </div>
+                </div>
+                <div class="lookup-stack">
+                    <label class="lookup-label" for="barcodeBillingInput">Scan Barcode</label>
+                    <div class="barcode-grid">
+                        <input type="text" id="barcodeBillingInput" placeholder="Scan barcode and press Enter" autocomplete="off" inputmode="search">
+                        <button type="button" class="barcode-btn" id="barcodeScanButton">Scan</button>
+                    </div>
+                    <div id="barcodeStatus" class="barcode-status" aria-live="polite">Scanner shortcut: <b>Ctrl/Cmd + B</b>. Repeated scans automatically increase the same item's quantity.</div>
+                </div>
+            </div>
+            <div class="pos-shortcuts-strip">
+                <span class="app-shortcut-kbd">Alt + M · medicine search</span>
+                <span class="app-shortcut-kbd">Alt + S · save bill</span>
+                <span class="app-shortcut-kbd">Alt + N · start new bill</span>
+                <span class="app-shortcut-kbd">F2 · qty focus</span>
             </div>
         </div>
 
@@ -433,7 +528,7 @@ tr.item-row {
         <div style="margin-top:8px;"></div>
     </div>
 
-    <div class="summary-bar">
+    <div class="summary-bar pos-sticky-summary">
         <div class="summary-grid">
             <div class="sum-box"><b>Subtotal</b><span>Rs <span id="subtotal">0</span></span></div>
             <div class="sum-box"><b>Discount</b><span>Rs <span id="discount">0</span></span></div>
@@ -458,9 +553,9 @@ tr.item-row {
         </div>
 
         <div class="summary-actions">
-            <button class="btn save">Save Bill</button>
+            <button class="btn save" type="submit" data-shortcut-save>Save Bill</button>
             <button class="btn hold" formaction="/billing/hold" formmethod="POST">Hold</button>
-            <button class="btn reset" type="reset">Reset</button>
+            <button class="btn reset" type="reset" data-shortcut-new>Reset</button>
         </div>
     </div>
 </form>
@@ -751,20 +846,51 @@ if (saleTypeSelect) {
 
 let medicineSearch = document.getElementById("medicineSearch");
 let medicineDropdown = document.getElementById("medicineDropdown");
+let barcodeBillingInput = document.getElementById("barcodeBillingInput");
+let barcodeScanButton = document.getElementById("barcodeScanButton");
+let barcodeStatus = document.getElementById("barcodeStatus");
 let activeRow = document.querySelector(".item");
 let f2OnQty = false;
 let medicineData = {{ medicine_data|tojson }};
 
 let medicineMap = {};
+let barcodeMap = {};
 medicineData.forEach(m => {
     let key = normalizeName(m.name);
     if (!medicineMap[key]) medicineMap[key] = [];
     medicineMap[key].push(m);
+    let barcodeKey = normalizeBarcode(m.barcode);
+    if (barcodeKey) {
+        if (!barcodeMap[barcodeKey]) barcodeMap[barcodeKey] = [];
+        barcodeMap[barcodeKey].push(m);
+    }
 });
 let medicineNameList = Object.keys(medicineMap).sort();
+let medicineSearchIndex = medicineNameList.map(name => {
+    let variants = medicineMap[name] || [];
+    let tokens = [name];
+    variants.forEach(entry => {
+        tokens.push((entry.batch || "").trim().toUpperCase());
+        tokens.push(normalizeBarcode(entry.barcode));
+    });
+    return {
+        name: name,
+        haystack: tokens.filter(Boolean).join(" ")
+    };
+});
 
 function normalizeName(val) {
     return (val || "").trim().toUpperCase();
+}
+
+function normalizeBarcode(val) {
+    return (val || "").trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function setBarcodeStatus(message, tone = "") {
+    if (!barcodeStatus) return;
+    barcodeStatus.textContent = message || "";
+    barcodeStatus.className = "barcode-status" + (tone ? ` ${tone}` : "");
 }
 
 function parseDate(val) {
@@ -1071,6 +1197,115 @@ function selectMedicine(name) {
     applyAutoBatch(activeRow);
 }
 
+function findBarcodeTargetRow(name) {
+    let normalized = normalizeName(name);
+    let rows = Array.from(document.querySelectorAll("#billTable .item"));
+    for (let row of rows) {
+        let hidden = row.querySelector("input[type='hidden'][name='medicine_name']");
+        let batchSelect = row.querySelector(".batch-select");
+        let existingName = normalizeName(hidden ? hidden.value : row.dataset.medicineName || "");
+        if (existingName === normalized && batchSelect && !batchSelect.value) {
+            return row;
+        }
+    }
+    return rows.find(row => {
+        let hidden = row.querySelector("input[type='hidden'][name='medicine_name']");
+        return !(hidden && hidden.value);
+    }) || null;
+}
+
+function addBarcodeMedicine(name) {
+    let targetRow = findBarcodeTargetRow(name);
+    if (!targetRow) {
+        targetRow = addRow();
+    }
+
+    let hidden = targetRow.querySelector("input[type='hidden'][name='medicine_name']");
+    let qtyInput = targetRow.querySelector(".qty-input");
+    activeRow = targetRow;
+
+    if (!(hidden && hidden.value)) {
+        selectMedicine(name);
+        hidden = targetRow.querySelector("input[type='hidden'][name='medicine_name']");
+        qtyInput = targetRow.querySelector(".qty-input");
+        if (qtyInput) {
+            qtyInput.value = "1";
+            updateRow(qtyInput);
+        }
+        return targetRow;
+    }
+
+    if (qtyInput) {
+        let currentQty = parseInt(qtyInput.value || "", 10);
+        if (isNaN(currentQty) || currentQty < 0) currentQty = 0;
+        qtyInput.value = String(currentQty + 1);
+        updateRow(qtyInput);
+    }
+    return targetRow;
+}
+
+function resolveBarcodeMatch(rawBarcode) {
+    let barcode = normalizeBarcode(rawBarcode);
+    if (!barcode) {
+        return { ok: false, message: "Enter a barcode to scan." };
+    }
+
+    let allMatches = (barcodeMap[barcode] || []).slice();
+    if (!allMatches.length) {
+        return { ok: false, message: `Barcode ${barcode} was not found in Medicine Master.` };
+    }
+
+    let inStockMatches = allMatches.filter(item => toNum(item.stock, 0) > 0 && !isExpired(item.expiry));
+    let activeMatches = inStockMatches.length ? inStockMatches : allMatches.filter(item => !isExpired(item.expiry));
+    let candidates = activeMatches.length ? activeMatches : allMatches;
+    let uniqueNames = Array.from(new Set(candidates.map(item => normalizeName(item.name)).filter(Boolean)));
+
+    if (!inStockMatches.length) {
+        return { ok: false, message: `Barcode ${barcode} was found, but no stock is available.`, matches: allMatches };
+    }
+
+    if (uniqueNames.length > 1) {
+        return {
+            ok: false,
+            message: `Barcode ${barcode} is linked to multiple medicines: ${uniqueNames.slice(0, 3).join(", ")}. Please clean up the barcode mapping in Medicine Master.`,
+            matches: candidates
+        };
+    }
+
+    return {
+        ok: true,
+        barcode: barcode,
+        name: uniqueNames[0],
+        matchCount: inStockMatches.length
+    };
+}
+
+function scanBarcodeIntoBill() {
+    if (!barcodeBillingInput) return;
+    let scanValue = barcodeBillingInput.value || "";
+    let resolved = resolveBarcodeMatch(scanValue);
+    if (!resolved.ok) {
+        setBarcodeStatus(resolved.message, "error");
+        barcodeBillingInput.focus();
+        barcodeBillingInput.select();
+        return;
+    }
+
+    let targetRow = addBarcodeMedicine(resolved.name);
+    let qtyInput = targetRow ? targetRow.querySelector(".qty-input") : null;
+    setBarcodeStatus(
+        `${resolved.name} was added to the bill.${resolved.matchCount > 1 ? " FIFO batches will be used automatically." : ""}`,
+        "success"
+    );
+    barcodeBillingInput.value = "";
+    if (qtyInput) {
+        qtyInput.focus();
+        qtyInput.select();
+    } else {
+        barcodeBillingInput.focus();
+    }
+}
+
 let dropdownOpen = false;
 let activeIndex = -1;
 let currentItems = [];
@@ -1139,8 +1374,10 @@ function renderDropdown(list) {
 function filterMedicines(query) {
     let q = normalizeName(query);
     if (!q) return [];
-    let matches = medicineNameList.filter(n => n.includes(q));
-    return matches.slice(0, 25);
+    return medicineSearchIndex
+        .filter(entry => entry.haystack.includes(q))
+        .map(entry => entry.name)
+        .slice(0, 25);
 }
 
 if (medicineSearch) {
@@ -1179,7 +1416,35 @@ if (medicineSearch) {
     });
 }
 
+if (barcodeBillingInput) {
+    barcodeBillingInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            scanBarcodeIntoBill();
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            this.value = "";
+            setBarcodeStatus("Scanner ready. Scan a barcode or press Ctrl/Cmd + B.");
+        }
+    });
+}
+
+if (barcodeScanButton) {
+    barcodeScanButton.addEventListener("click", function () {
+        scanBarcodeIntoBill();
+    });
+}
+
 document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        if (barcodeBillingInput) {
+            barcodeBillingInput.focus();
+            barcodeBillingInput.select();
+            setBarcodeStatus("Barcode scanner focused. Scan and press Enter.");
+        }
+        return;
+    }
     if (e.key !== "F2") return;
     e.preventDefault();
     let active = document.activeElement;
@@ -1208,6 +1473,14 @@ if (restoredHoldBill && restoredHoldBill.hold_bill_id) {
     let firstRow = document.querySelector("#billTable .item");
     if (firstRow) syncRowHidden(firstRow);
     syncSummaryHidden(0, 0, 0, 0, 0, 0);
+}
+
+if (barcodeBillingInput) {
+    barcodeBillingInput.addEventListener("focus", function () {
+        if (!(barcodeStatus && barcodeStatus.classList.contains("error"))) {
+            setBarcodeStatus("Barcode ready. Repeated scans will automatically increase the same item's quantity.");
+        }
+    });
 }
 </script>
 

@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+{% block title %}Customer Master{% endblock %}
+
+{% block body %}
+<style>
+.customer-shell {
+    display: grid;
+    gap: 18px;
+}
+
+.customer-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.customer-title {
+    margin: 0;
+    color: #0f4fbf;
+    font-size: 28px;
+}
+
+.customer-note,
+.limit-note {
+    margin: 8px 0 0;
+    color: #607089;
+    max-width: 760px;
+}
+
+.limit-note {
+    margin-top: 12px;
+    font-size: 13px;
+}
+
+.search-card {
+    display: grid;
+    gap: 14px;
+}
+
+.search-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.4fr) minmax(180px, 0.7fr) auto auto auto;
+    gap: 10px;
+    align-items: end;
+}
+
+.field-stack {
+    display: grid;
+    gap: 6px;
+}
+
+.field-stack label,
+.check-stack label {
+    color: #52627a;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.field-stack input,
+.field-stack select {
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #fff;
+}
+
+.check-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 4px;
+}
+
+.check-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.check-option input {
+    width: 16px;
+    height: 16px;
+}
+
+.search-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.btn-chip.primary {
+    background: #0d6efd;
+    color: #fff;
+}
+
+.btn-chip.secondary {
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.stat-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.stat-card small {
+    display: block;
+    color: #607089;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.stat-card strong {
+    display: block;
+    margin-top: 6px;
+    color: #10223e;
+    font-size: 24px;
+}
+
+.table-wrap {
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+.customer-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.customer-table th,
+.customer-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #e8eef6;
+    text-align: left;
+    vertical-align: top;
+}
+
+.customer-table th {
+    background: #0d6efd;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.patient-name {
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.patient-link {
+    color: #0d6efd;
+    text-decoration: none;
+}
+
+.muted {
+    color: #607089;
+}
+
+.metric-strong {
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.data-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.data-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 4px 9px;
+    background: #edf4ff;
+    color: #1e4e94;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.data-chip.notes {
+    background: #eefbf4;
+    color: #0e7a46;
+}
+
+.data-chip.mobile {
+    background: #fff6df;
+    color: #936200;
+}
+
+.data-chip.duplicate {
+    background: #ffe9ea;
+    color: #b42318;
+}
+
+.open-link {
+    color: #0d6efd;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.empty-state {
+    padding: 28px 20px;
+    text-align: center;
+    color: #607089;
+}
+
+@media (max-width: 1180px) {
+    .search-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .stats-row {
+        grid-template-columns: repeat(3, minmax(140px, 1fr));
+    }
+}
+
+@media (max-width: 860px) {
+    .search-grid,
+    .stats-row {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="customer-shell">
+    <section class="card">
+        <div class="customer-head">
+            <div>
+                <h1 class="customer-title">Customer Master</h1>
+                <p class="customer-note">Use the patient directory to search, sort, and filter records. Open a profile to review appointments, invoices, notes, and purchase history in one place.</p>
+                {% if customer_stats.matching_patients > customer_stats.visible_patients %}
+                <p class="limit-note">Showing {{ customer_stats.visible_patients }} of {{ customer_stats.matching_patients }} matched patients. Refine the search and filters to narrow the list.</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <section class="card search-card">
+        <form method="get" class="search-grid">
+            <div class="field-stack">
+                <label for="customerSearch">Search Patients</label>
+                <input id="customerSearch" type="text" name="search" value="{{ search_query or '' }}" placeholder="Search by patient name or mobile">
+            </div>
+            <div class="field-stack">
+                <label for="sortBy">Sort By</label>
+                <select id="sortBy" name="sort">
+                    <option value="recent" {% if sort_by == 'recent' %}selected{% endif %}>Recent Activity</option>
+                    <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Name A-Z</option>
+                    <option value="visits" {% if sort_by == 'visits' %}selected{% endif %}>Most Visits</option>
+                    <option value="billing" {% if sort_by == 'billing' %}selected{% endif %}>Highest Billing</option>
+                </select>
+            </div>
+            <div class="check-stack">
+                <label>Quick Filters</label>
+                <label class="check-option">
+                    <input type="checkbox" name="with_mobile" value="1" {% if with_mobile_only %}checked{% endif %}>
+                    With mobile only
+                </label>
+                <label class="check-option">
+                    <input type="checkbox" name="with_notes" value="1" {% if with_notes_only %}checked{% endif %}>
+                    With notes only
+                </label>
+                <label class="check-option">
+                    <input type="checkbox" name="duplicates" value="1" {% if duplicates_only %}checked{% endif %}>
+                    Possible duplicates only
+                </label>
+            </div>
+            <div class="search-actions">
+                <button type="submit" class="btn-chip primary">Apply</button>
+                <a href="{{ url_for('customer') }}" class="btn-chip secondary">Reset</a>
+            </div>
+        </form>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <small>Matched Patients</small>
+                <strong>{{ customer_stats.matching_patients }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Visible Patients</small>
+                <strong>{{ customer_stats.visible_patients }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>With Mobile</small>
+                <strong>{{ customer_stats.with_mobile }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Possible Duplicates</small>
+                <strong>{{ customer_stats.duplicate_patients }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Total Visits</small>
+                <strong>{{ customer_stats.total_visits }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Total Invoices</small>
+                <strong>{{ customer_stats.total_invoices }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Lifetime Billing</small>
+                <strong>Rs {{ '%.2f'|format(customer_stats.total_billed or 0) }}</strong>
+            </div>
+        </div>
+    </section>
+
+    <section class="table-wrap">
+        {% if customer_rows %}
+        <table class="customer-table">
+            <thead>
+                <tr>
+                    <th>Patient</th>
+                    <th>Contact</th>
+                    <th>Visits</th>
+                    <th>Invoices</th>
+                    <th>Notes / Tags</th>
+                    <th>Last Activity</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in customer_rows %}
+                {% set patient = row.patient %}
+                <tr>
+                    <td>
+                        <div class="patient-name">
+                            <a class="patient-link" href="{{ url_for('patient_profile', patient_id=patient.id) }}">{{ patient.name }}</a>
+                        </div>
+                        <div class="muted">ID {{ patient.id }}</div>
+                        <div class="muted">{{ patient.gender or '-' }}{% if patient.age %} / {{ patient.age }} yrs{% endif %}</div>
+                    </td>
+                    <td>
+                        <div class="metric-strong">{{ patient.mobile or '-' }}</div>
+                        <div class="data-chips">
+                            {% if row.has_mobile %}
+                            <span class="data-chip mobile">Mobile Linked</span>
+                            {% endif %}
+                            {% if row.has_notes %}
+                            <span class="data-chip notes">Has Notes</span>
+                            {% endif %}
+                            {% if row.duplicate_count > 0 %}
+                            <span class="data-chip duplicate">{{ row.duplicate_count }} duplicate match{% if row.duplicate_count > 1 %}es{% endif %}</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <div class="metric-strong">{{ row.appointment_count }}</div>
+                        <div class="muted">appointments</div>
+                        <div class="muted mt-2">Last visit: {{ row.last_appointment_at.strftime('%d-%m-%Y %I:%M %p') if row.last_appointment_at else '-' }}</div>
+                    </td>
+                    <td>
+                        <div class="metric-strong">{{ row.invoice_count }}</div>
+                        <div class="muted">invoices</div>
+                        <div class="muted mt-2">Billed: Rs {{ '%.2f'|format(row.total_billed or 0) }}</div>
+                        <div class="muted">Last invoice: {{ row.last_invoice_at.strftime('%d-%m-%Y %I:%M %p') if row.last_invoice_at else '-' }}</div>
+                    </td>
+                    <td>
+                        {{ (patient.notes or '-')[:120] }}{% if patient.notes and patient.notes|length > 120 %}...{% endif %}
+                    </td>
+                    <td>{{ row.last_activity_at.strftime('%d-%m-%Y %I:%M %p') if row.last_activity_at else '-' }}</td>
+                    <td>
+                        <a class="open-link" href="{{ url_for('patient_profile', patient_id=patient.id) }}">
+                            {% if row.duplicate_count > 0 %}Review Duplicates{% else %}Open Profile{% endif %}
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <strong>No patients found.</strong>
+            <div class="mt-2">Try a different search or create an appointment to auto-build patient records.</div>
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

@@ -47,6 +47,9 @@ button {
         <label class="field-label" for="medicineBatch">Batch</label>
         <input type="text" id="medicineBatch" name="batch" value="{{ med.batch }}" required>
 
+        <label class="field-label" for="medicineBarcode">Barcode</label>
+        <input type="text" id="medicineBarcode" name="barcode" value="{{ med.barcode or '' }}">
+
         <label class="field-label" for="medicineExpiry">Expiry Date</label>
         <input type="date" id="medicineExpiry" name="expiry" value="{{ med.expiry }}" required>
 
@@ -75,6 +78,9 @@ button {
        value="{{ med.discount_percent }}"
        min="0"
        max="100">
+
+        <label class="field-label" for="reorderLevel">Reorder Level</label>
+        <input type="number" id="reorderLevel" name="reorder_level" min="0" step="1" value="{{ med.reorder_level if med.reorder_level is not none else 10 }}">
 
         <label class="field-label" for="stockQty">Stock Qty</label>
         <input type="number" id="stockQty" name="qty" value="{{ med.qty }}" required>

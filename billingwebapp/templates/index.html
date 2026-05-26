@@ -1,178 +1,186 @@
 {% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
 {% block body %}
+{% macro money(v) -%}₹ {{ "%.2f"|format((v or 0)|float) }}{%- endmacro %}
 
-<style>
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    margin-bottom: 20px;
-}
-
-.card-box {
-    background: #ffffff;
-    padding: 12px 14px;
-    border-radius: 12px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-}
-
-.card-link {
-    text-decoration: none;
-    color: inherit;
-}
-
-.card-title {
-    font-size: 12px;
-    color: #777;
-}
-
-.card-value {
-    font-size: 22px;
-    font-weight: bold;
-    margin-top: 4px;
-}
-
-.sale-breakdown {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin-top: 12px;
-}
-
-.sale-split {
-    border-radius: 10px;
-    padding: 10px 12px;
-}
-
-.sale-split.cash {
-    background: #f2fbf5;
-    border: 1px solid #d6efdd;
-}
-
-.sale-split.online {
-    background: #f1f7ff;
-    border: 1px solid #d8e7ff;
-}
-
-.sale-label {
-    font-size: 11px;
-    color: #6b7280;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-}
-
-.sale-amount {
-    font-size: 18px;
-    font-weight: bold;
-    margin-top: 4px;
-}
-
-.sale-meta {
-    display: block;
-    margin-top: 3px;
-    font-size: 11px;
-    color: #556070;
-}
-
-.green { color: #198754; }
-.red { color: #dc3545; }
-.orange { color: #fd7e14; }
-.blue { color: #0d6efd; }
-
-.center-logo {
-    background: #fff;
-    padding: 18px;
-    border-radius: 14px;
-    box-shadow: 0 8px 22px rgba(0,0,0,0.12);
-    text-align: center;
-}
-
-.center-logo img {
-    width: 24%;
-    max-width: 520px;
-}
-
-@media (max-width: 1100px) {
-    .dashboard-grid {
-        grid-template-columns: 1fr;
-    }
-}
-
-@media (max-width: 640px) {
-    .sale-breakdown {
-        grid-template-columns: 1fr;
-    }
-}
-
-</style>
-
-<!-- TOP DASHBOARD CARDS -->
-<div class="dashboard-grid">
-
-    <div class="card-box">
-        <div class="card-title">Today's Sale</div>
-        <div class="card-value blue">₹ {{ "%.3f"|format((today_sale or 0)|float) }}</div>
-        <small>Bills Today: {{ bills_today }}</small>
-        <div class="sale-breakdown">
-            <div class="sale-split cash">
-                <div class="sale-label">Cash</div>
-                <div class="sale-amount green">₹ {{ "%.3f"|format((cash_today_sale or 0)|float) }}</div>
-                <small class="sale-meta">Bills: {{ cash_bills_today }}</small>
+<div class="app-page-stack">
+    <section class="app-stat-grid">
+        <article class="app-stat-card">
+            <div class="app-stat-label">Today's Net Sale</div>
+            <div class="app-stat-value">{{ money(today_sale) }}</div>
+            <div class="app-stat-sub">{{ bills_today }} bills processed today</div>
+            <div class="dashboard-breakdown">
+                <div class="dashboard-breakdown-card cash">
+                    <div class="dashboard-micro-label">Cash</div>
+                    <div class="dashboard-micro-value">{{ money(cash_today_sale) }}</div>
+                    <div class="dashboard-micro-note">{{ cash_bills_today }} bills</div>
+                </div>
+                <div class="dashboard-breakdown-card online">
+                    <div class="dashboard-micro-label">Online</div>
+                    <div class="dashboard-micro-value">{{ money(online_today_sale) }}</div>
+                    <div class="dashboard-micro-note">{{ online_bills_today }} bills</div>
+                </div>
             </div>
-            <div class="sale-split online">
-                <div class="sale-label">Online</div>
-                <div class="sale-amount blue">₹ {{ "%.3f"|format((online_today_sale or 0)|float) }}</div>
-                <small class="sale-meta">Bills: {{ online_bills_today }}</small>
+        </article>
+
+        {% if show_profit_cards %}
+        <article class="app-stat-card">
+            <div class="app-stat-label">Gross Profit Today</div>
+            <div class="app-stat-value">{{ money(today_profit.gross_profit) }}</div>
+            <div class="app-stat-sub">Margin {{ "%.2f"|format(today_profit.gross_profit_percentage or 0) }}% on {{ money(today_profit.net_sales) }} net sales</div>
+        </article>
+
+        <article class="app-stat-card">
+            <div class="app-stat-label">Gross Profit This Month</div>
+            <div class="app-stat-value">{{ money(month_profit.gross_profit) }}</div>
+            <div class="app-stat-sub">Month margin {{ "%.2f"|format(month_profit.gross_profit_percentage or 0) }}%</div>
+        </article>
+        {% endif %}
+
+        <article class="app-stat-card">
+            <div class="app-stat-label">Appointments Today</div>
+            <div class="app-stat-value">{{ appointment_total_today }}</div>
+            <div class="app-stat-sub">{{ appointment_booked_today }} booked · {{ appointment_completed_today }} completed</div>
+        </article>
+    </section>
+
+    <section class="app-stat-grid">
+        <a href="/low-stock" class="app-stat-card" style="text-decoration:none;">
+            <div class="app-stat-label">Low Stock Items</div>
+            <div class="app-stat-value">{{ low_stock }}</div>
+            <div class="app-stat-sub">Immediate attention for reorder planning</div>
+        </a>
+
+        <a href="/expiring-soon" class="app-stat-card" style="text-decoration:none;">
+            <div class="app-stat-label">Expiring In 30 Days</div>
+            <div class="app-stat-value">{{ expiring_soon }}</div>
+            <div class="app-stat-sub">Expiry watchlist for liquidation action</div>
+        </a>
+
+        <article class="app-stat-card">
+            <div class="app-stat-label">Inventory Value</div>
+            <div class="app-stat-value">{{ money(inventory_value) }}</div>
+            <div class="app-stat-sub">Remaining stock value at purchase rate</div>
+        </article>
+
+        <article class="app-stat-card">
+            <div class="app-stat-label">GST Collected Today</div>
+            <div class="app-stat-value">{{ money(gst_collected) }}</div>
+            <div class="app-stat-sub">Display-only tax snapshot for reporting</div>
+        </article>
+    </section>
+
+    <section class="app-surface" style="padding: 26px; text-align: center;">
+        <img
+            src="{{ url_for('static', filename='logo.png') }}"
+            alt="Clinic Logo"
+            style="width: min(100%, 420px); height: auto;"
+        >
+    </section>
+
+    <section class="dashboard-hero-grid">
+        <article class="dashboard-graph-card app-surface">
+            <div class="dashboard-graph-head">
+                <div>
+                    <h2 class="dashboard-section-title">Sales Trend</h2>
+                    <p class="dashboard-section-note">Net sales movement for the last 7 clinic days. Returns are already adjusted.</p>
+                </div>
+                <span class="app-badge info">7 Day Trend</span>
             </div>
-        </div>
-    </div>
+            <div class="dashboard-trend-grid">
+                {% for point in sales_trend %}
+                <div class="dashboard-day-card">
+                    <div class="dashboard-bars">
+                        <div class="dashboard-bar" style="height: {{ point.height_pct }}%;"></div>
+                    </div>
+                    <div class="dashboard-day-label">{{ point.label }}</div>
+                    <div class="dashboard-day-value">{{ money(point.net) }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </article>
 
-    <a href="/low-stock" class="card-link">
-        <div class="card-box">
-            <div class="card-title">Low Stock Items</div>
-            <div class="card-value orange">{{ low_stock }}</div>
-            <small>Require attention</small>
-        </div>
-    </a>
+        <article class="dashboard-graph-card app-surface">
+            <div class="dashboard-graph-head">
+                <div>
+                    <h2 class="dashboard-section-title">Appointment Trend</h2>
+                    <p class="dashboard-section-note">Blue bars show booked intake and green bars show completed consultations.</p>
+                </div>
+                <span class="app-badge success">Flow View</span>
+            </div>
+            <div class="dashboard-trend-grid">
+                {% for point in appointment_trend %}
+                <div class="dashboard-day-card">
+                    <div class="dashboard-bars">
+                        <div class="dashboard-bar warning" style="height: {{ point.booked_height_pct }}%;"></div>
+                        <div class="dashboard-bar secondary" style="height: {{ point.completed_height_pct }}%;"></div>
+                    </div>
+                    <div class="dashboard-day-label">{{ point.label }}</div>
+                    <div class="dashboard-day-value">{{ point.booked }} booked · {{ point.completed }} done</div>
+                </div>
+                {% endfor %}
+            </div>
+        </article>
+    </section>
 
-    <a href="/expiring-soon" class="card-link">
-        <div class="card-box">
-            <div class="card-title">Expiring Soon</div>
-            <div class="card-value red">{{ expiring_soon }}</div>
-            <small>Next 30 days</small>
-        </div>
-    </a>
+    <section class="dashboard-insights-grid">
+        <article class="dashboard-list-card app-surface">
+            <div class="dashboard-list-head">
+                <div>
+                    <h2 class="dashboard-section-title">Top Medicines</h2>
+                    <p class="dashboard-section-note">Fast movers for the last 30 days by sales value, with sold quantity and profit snapshot.</p>
+                </div>
+                <a href="/reports?report_type=medicine" class="app-button secondary">Open Report</a>
+            </div>
+            <div class="dashboard-list">
+                {% if top_medicines %}
+                    {% for item in top_medicines %}
+                    <div class="dashboard-list-item">
+                        <div class="dashboard-list-top">
+                            <div class="dashboard-item-title">{{ item.name }}</div>
+                            <span class="app-badge info">{{ item.qty }} sold</span>
+                        </div>
+                        <div class="dashboard-meter"><span style="width: {{ item.bar_pct }}%;"></span></div>
+                        <div class="dashboard-day-value">{{ money(item.sales_value) }} sales · {{ money(item.net_profit) }} profit</div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="app-empty">
+                        <strong>No sales movement found</strong>
+                        This chart becomes useful as soon as recent invoice activity is available.
+                    </div>
+                {% endif %}
+            </div>
+        </article>
 
+        <article class="dashboard-list-card app-surface">
+            <div class="dashboard-list-head">
+                <div>
+                    <h2 class="dashboard-section-title">Dead Stock Watch</h2>
+                    <p class="dashboard-section-note">No sales in the last 60 days, but stock is still sitting on the shelf.</p>
+                </div>
+                <a href="/medicines?show_archived=1" class="app-button secondary">Review Stock</a>
+            </div>
+            <div class="dashboard-list">
+                {% if dead_stock_items %}
+                    {% for item in dead_stock_items %}
+                    <div class="dashboard-list-item">
+                        <div class="dashboard-list-top">
+                            <div class="dashboard-item-title">{{ item.name }}</div>
+                            <span class="app-badge warning">{{ item.qty }} in stock</span>
+                        </div>
+                        <div class="dashboard-day-value">{{ money(item.blocked_value) }} blocked purchase value · {{ item.days_without_sale }} days without sale</div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="app-empty">
+                        <strong>No dead stock in watchlist</strong>
+                        Good news: stocked items still show recent sales activity in the selected window.
+                    </div>
+                {% endif %}
+            </div>
+        </article>
+    </section>
 </div>
-
-<!-- CENTER LOGO -->
-<div class="center-logo">
-    <img src="{{ url_for('static', filename='logo.png') }}">
-</div>
-
-<!-- BOTTOM DASHBOARD CARDS -->
-<div class="dashboard-grid mt-4">
-
-    <div class="card-box">
-        <div class="card-title">Inventory Value</div>
-        <div class="card-value green">₹ {{ "%.3f"|format((inventory_value or 0)|float) }}</div>
-        <small>Well stocked</small>
-    </div>
-
-    <div class="card-box">
-        <div class="card-title">GST Collected (Today)</div>
-        <div class="card-value blue">₹ {{ "%.3f"|format((gst_collected or 0)|float) }}</div>
-        <small>For reporting only</small>
-    </div>
-
-    <a href="/appointments?date={{ today_date }}&status=BOOKED&view=list" class="card-link">
-        <div class="card-box">
-            <div class="card-title">Booked Appointments</div>
-            <div class="card-value blue">{{ appointment_booked_today }}</div>
-            <small>Today Total: {{ appointment_total_today }}</small>
-        </div>
-    </a>
-
-</div>
-
 {% endblock %}

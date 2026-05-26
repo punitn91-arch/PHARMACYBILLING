@@ -1,8 +1,11 @@
 Flask
+Flask-Migrate
 Flask-SQLAlchemy
 Werkzeug
 SQLAlchemy
+alembic
 gunicorn
 psycopg2-binary
 pandas
 openpyxl
+sentry-sdk

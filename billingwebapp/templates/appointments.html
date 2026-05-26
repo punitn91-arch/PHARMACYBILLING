@@ -96,8 +96,12 @@
 {% set s = (status or 'BOOKED')|upper %}
 {% if s == 'BOOKED' %}
 <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Booked</span>
+{% elif s == 'WAITING' %}
+<span class="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700">Waiting</span>
 {% elif s == 'CHECKED_IN' %}
 <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">Checked In</span>
+{% elif s == 'IN_CONSULTATION' %}
+<span class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">In Consultation</span>
 {% elif s == 'COMPLETED' %}
 <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Completed</span>
 {% else %}
@@ -142,10 +146,73 @@
         <p class="mt-2 text-base text-slate-500">Manage appointment flow, track consultation billing, and monitor clinic throughput.</p>
     </div>
     <div class="flex items-center gap-3">
-        <a href="{{ url_for('add_appointment') }}" class="inline-flex h-11 items-center justify-center rounded-xl bg-brand px-5 text-sm font-semibold text-white shadow-soft transition duration-150 hover:bg-blue-700 hover:shadow-md">
+        <a href="{{ url_for('appointments_queue_live', date=queue_board_date) }}" target="_blank" class="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 shadow-soft transition duration-150 hover:bg-slate-50 hover:shadow-md">
+            Live Queue Board
+        </a>
+        <a href="{{ url_for('add_appointment') }}" data-shortcut-new-appointment class="inline-flex h-11 items-center justify-center rounded-xl bg-brand px-5 text-sm font-semibold text-white shadow-soft transition duration-150 hover:bg-blue-700 hover:shadow-md">
             + Add Appointment
         </a>
     </div>
+</section>
+
+<section class="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
+    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900">Live Queue Snapshot</h2>
+            <p class="mt-1 text-sm text-slate-500">Queue preview for {{ queue_preview.target_date.strftime('%d-%m-%Y') if queue_preview.target_date else queue_board_date }}. Open the live board for a token-screen view.</p>
+        </div>
+        <div class="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-wide text-blue-700">Current Token</p>
+            <p class="mt-1 text-2xl font-bold text-blue-900">
+                {% if queue_preview.current_serving and queue_preview.current_serving.token_no is not none %}
+                {{ queue_preview.current_serving.token_no }}
+                {% else %}
+                -
+                {% endif %}
+            </p>
+            <p class="mt-1 text-xs text-blue-700">
+                {% if queue_preview.current_serving %}
+                {{ queue_preview.current_serving.patient_name }}
+                {% else %}
+                Queue not active
+                {% endif %}
+            </p>
+        </div>
+    </div>
+
+    <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-wide text-amber-700">Scheduled</p>
+            <p class="mt-1 text-2xl font-bold text-amber-900">{{ queue_preview.board_stats.scheduled }}</p>
+            <p class="mt-1 text-xs text-amber-700">Booked tokens not moved to queue yet</p>
+        </div>
+        <div class="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-wide text-orange-700">Waiting Area</p>
+            <p class="mt-1 text-2xl font-bold text-orange-900">{{ queue_preview.board_stats.waiting }}</p>
+            <p class="mt-1 text-xs text-orange-700">Waiting or checked-in patients</p>
+        </div>
+        <div class="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-wide text-violet-700">In Consultation</p>
+            <p class="mt-1 text-2xl font-bold text-violet-900">{{ queue_preview.board_stats.consulting }}</p>
+            <p class="mt-1 text-xs text-violet-700">Patients currently with doctor</p>
+        </div>
+        <div class="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-wide text-emerald-700">Completed Today</p>
+            <p class="mt-1 text-2xl font-bold text-emerald-900">{{ queue_preview.board_stats.completed }}</p>
+            <p class="mt-1 text-xs text-emerald-700">Finished consultations</p>
+        </div>
+    </div>
+
+    {% if queue_preview.next_tokens %}
+    <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-600">Next Tokens</p>
+        <div class="mt-2 flex flex-wrap gap-2">
+            {% for token in queue_preview.next_tokens %}
+            <span class="inline-flex min-w-[42px] items-center justify-center rounded-full bg-white px-3 py-1 text-sm font-semibold text-slate-800 shadow-sm">{{ token }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 </section>
 
 <section class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -218,7 +285,22 @@
 </section>
 
 {% set appt_report_type = report_filters.appointment_report_type %}
-<section class="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
+<section class="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft appointment-sticky-panel">
+    <div class="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div class="app-chip-row">
+            {{ quick_filter_link('today', 'Today') }}
+            {{ quick_filter_link('tomorrow', 'Tomorrow') }}
+            {{ quick_filter_link('this_week', 'This Week') }}
+            {{ quick_filter_link('pending', 'Pending') }}
+            {{ quick_filter_link('completed', 'Completed') }}
+            {{ quick_filter_link('cancelled', 'Cancelled') }}
+        </div>
+        <div class="appointments-shortcut-banner">
+            <span class="app-shortcut-kbd">Alt + N · add appointment</span>
+            <span class="app-shortcut-kbd">Alt + F · search filters</span>
+            <span class="app-shortcut-kbd">Alt + P · mark selected row paid</span>
+        </div>
+    </div>
     <div class="mb-3">
         <div>
             <h2 class="text-base font-semibold text-slate-900">Appointment Reports</h2>
@@ -279,7 +361,7 @@
 </section>
 {% endif %}
 
-<section class="rounded-2xl border border-slate-200 bg-white shadow-soft">
+<section class="rounded-2xl border border-slate-200 bg-white shadow-soft appointment-sticky-head">
     <div class="overflow-x-auto">
         <table class="appointments-table">
             <thead>
@@ -301,14 +383,18 @@
                 {% set row_status = (a.status or 'BOOKED')|upper %}
                 {% set pay_status = (a.payment_status or ('PAID' if (a.payment_mode or '')|upper == 'PAID' else 'UNPAID'))|upper %}
                 {% set has_mobile = ((a.mobile or '')|trim) != '' %}
-                <tr class="transition duration-150">
+                <tr class="transition duration-150 appointment-row">
                     <td class="px-4 py-4 text-sm font-semibold text-slate-900">
                         {{ a.appointment_no }}
                         <p class="mt-1 text-xs font-medium text-slate-500">Token {{ a.token_no or '-' }} | {{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</p>
                     </td>
                     <td class="px-4 py-4 text-sm text-slate-700">{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}</td>
                     <td class="px-4 py-4 text-sm">
+                        {% if a.patient_id %}
+                        <a href="{{ url_for('patient_profile', patient_id=a.patient_id) }}" class="font-semibold text-brand hover:underline">{{ a.patient_name }}</a>
+                        {% else %}
                         <p class="font-semibold text-slate-900">{{ a.patient_name }}</p>
+                        {% endif %}
                         <p class="mt-1 text-xs text-slate-500">{{ (a.gender or 'NA') }}</p>
                     </td>
                     <td class="px-4 py-4 text-sm text-slate-700">{{ a.mobile or '-' }}</td>
@@ -343,20 +429,28 @@
                                 </summary>
                                 <div class="appointment-action-panel fixed z-50 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
                                     <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
+                                        <input type="hidden" name="status" value="WAITING">
+                                        <button type="submit" {% if row_status not in ['BOOKED', 'CHECKED_IN'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-orange-50 hover:text-orange-700 disabled:cursor-not-allowed disabled:opacity-40">Move to Waiting</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
                                         <input type="hidden" name="status" value="CHECKED_IN">
-                                        <button type="submit" {% if row_status != 'BOOKED' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40">Check In</button>
+                                        <button type="submit" {% if row_status not in ['BOOKED', 'WAITING', 'IN_CONSULTATION'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40">Check In</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
+                                        <input type="hidden" name="status" value="IN_CONSULTATION">
+                                        <button type="submit" {% if row_status not in ['WAITING', 'CHECKED_IN'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-40">Start Consultation</button>
                                     </form>
                                     <form method="POST" action="{{ url_for('mark_appointment_paid', id=a.id) }}" data-async-action="true">
-                                        <button type="submit" {% if pay_status == 'PAID' or row_status == 'CANCELLED' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Paid</button>
+                                        <button type="submit" data-shortcut-pay {% if pay_status == 'PAID' or row_status == 'CANCELLED' %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Paid</button>
                                     </form>
                                     <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
                                         <input type="hidden" name="status" value="COMPLETED">
-                                        <button type="submit" {% if pay_status != 'PAID' or row_status in ['COMPLETED', 'CANCELLED'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Completed</button>
+                                        <button type="submit" {% if pay_status != 'PAID' or row_status in ['COMPLETED', 'CANCELLED', 'BOOKED'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40">Mark Completed</button>
                                     </form>
                                     <a href="{{ url_for('edit_appointment', id=a.id) }}" class="block px-3 py-2 text-sm text-slate-700 transition duration-150 hover:bg-slate-50 hover:text-slate-900">Edit</a>
                                     <form method="POST" action="{{ url_for('update_appointment_status', id=a.id) }}" data-async-action="true">
                                         <input type="hidden" name="status" value="CANCELLED">
-                                        <button type="submit" {% if row_status not in ['BOOKED', 'CHECKED_IN'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40">Cancel</button>
+                                        <button type="submit" {% if pay_status == 'PAID' or row_status in ['COMPLETED', 'CANCELLED'] %}disabled{% endif %} class="w-full px-3 py-2 text-left text-sm text-slate-700 transition duration-150 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40">Cancel</button>
                                     </form>
                                     <form method="POST" action="{{ url_for('delete_appointment', id=a.id) }}" onsubmit="return confirm('Delete this appointment?')" data-async-action="true">
                                         <button type="submit" class="w-full px-3 py-2 text-left text-sm text-red-600 transition duration-150 hover:bg-red-50">Delete</button>
@@ -470,28 +564,6 @@ function setupAppointmentActionMenus() {
     window.addEventListener('scroll', repositionOpenMenus, true);
 }
 
-function appointmentStatusBadge(status) {
-    const s = String(status || '').toUpperCase();
-    if (s === 'CHECKED_IN') {
-        return '<span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">Checked In</span>';
-    }
-    if (s === 'COMPLETED') {
-        return '<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Completed</span>';
-    }
-    if (s === 'CANCELLED') {
-        return '<span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">Cancelled</span>';
-    }
-    return '<span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Booked</span>';
-}
-
-function appointmentPaymentBadge(status) {
-    const s = String(status || '').toUpperCase();
-    if (s === 'PAID') {
-        return '<span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Paid</span>';
-    }
-    return '<span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">Unpaid</span>';
-}
-
 function normalizeWhatsappNumber(raw) {
     const digits = String(raw || '').replace(/\D/g, '');
     if (!digits) return '';
@@ -515,15 +587,15 @@ function openAppointmentWhatsapp(button) {
     const apptTime = (button.dataset.waTime || '-').trim();
 
     const lines = [
-        `Namaste ${patient},`,
-        'Yeh aapke appointment details hain:',
+        `Hello ${patient},`,
+        'Here are your appointment details:',
         `Token No: ${token}`,
         `Date: ${apptDate}`,
         `Time: ${apptTime}`,
         'Clinic: THE ENDO CLINIC'
     ];
 
-    lines.push('', 'Kripya time par clinic pahunchiye. Dhanyavaad.');
+    lines.push('', 'Please arrive at the clinic on time. Thank you.');
     const message = lines.join('\n');
     const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
@@ -538,61 +610,13 @@ document.addEventListener('app:async-success', function (event) {
     if (!row || !row.closest('.appointments-ui')) return;
 
     const url = String(detail.actionUrl || '').toLowerCase();
-    const paymentCell = row.children[5];
-    const discountCell = row.children[6];
-    const feeCell = row.children[7];
-    const statusCell = row.children[8];
-    const paidBtn = row.querySelector("form[action*='/payment/paid'] button");
-    const completedInput = row.querySelector("form input[name='status'][value='COMPLETED']");
-    const completedBtn = completedInput ? completedInput.closest('form').querySelector('button') : null;
-    const checkInInput = row.querySelector("form input[name='status'][value='CHECKED_IN']");
-    const checkInBtn = checkInInput ? checkInInput.closest('form').querySelector('button') : null;
-    const cancelInput = row.querySelector("form input[name='status'][value='CANCELLED']");
-    const cancelBtn = cancelInput ? cancelInput.closest('form').querySelector('button') : null;
     const actionMenu = row.querySelector('.appointment-action-menu');
     if (actionMenu) actionMenu.removeAttribute('open');
 
-    if (url.includes('/payment/paid')) {
-        if (paymentCell) paymentCell.innerHTML = appointmentPaymentBadge('PAID');
-        if (paidBtn) paidBtn.disabled = true;
-        const currentStatus = String(statusCell ? statusCell.textContent : '').toUpperCase();
-        if (completedBtn && !currentStatus.includes('COMPLETED') && !currentStatus.includes('CANCELLED')) {
-            completedBtn.disabled = false;
-        }
-        return;
-    }
-
-    if (!url.includes('/status')) return;
-    const form = trigger.tagName === 'FORM' ? trigger : trigger.closest('form');
-    if (!form) return;
-    const statusInput = form.querySelector("input[name='status']");
-    const newStatus = String(statusInput ? statusInput.value : '').toUpperCase();
-    if (!newStatus) return;
-
-    if (statusCell) {
-        statusCell.innerHTML = appointmentStatusBadge(newStatus);
-    }
-
-    if (newStatus === 'CHECKED_IN') {
-        if (checkInBtn) checkInBtn.disabled = true;
-        if (cancelBtn) cancelBtn.disabled = false;
-        if (completedBtn) {
-            const isPaid = String(paymentCell ? paymentCell.textContent : '').toUpperCase().includes('PAID');
-            completedBtn.disabled = !isPaid;
-        }
-        return;
-    }
-
-    if (newStatus === 'COMPLETED' || newStatus === 'CANCELLED') {
-        if (checkInBtn) checkInBtn.disabled = true;
-        if (paidBtn) paidBtn.disabled = true;
-        if (completedBtn) completedBtn.disabled = true;
-        if (cancelBtn) cancelBtn.disabled = true;
-        if (newStatus === 'CANCELLED') {
-            if (paymentCell) paymentCell.innerHTML = appointmentPaymentBadge('UNPAID');
-            if (discountCell) discountCell.textContent = 'Rs 0.00';
-            if (feeCell) feeCell.textContent = 'Rs 0.00';
-        }
+    if (url.includes('/appointments/')) {
+        window.setTimeout(function () {
+            window.location.reload();
+        }, 180);
     }
 });
 

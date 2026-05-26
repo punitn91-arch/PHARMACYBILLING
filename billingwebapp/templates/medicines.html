@@ -484,7 +484,7 @@
 }
 </style>
 
-<div class="master-shell">
+<div class="master-shell app-page-stack">
     <div class="page-head">
         <div>
             <h2 class="page-title">Medicine Master</h2>
@@ -492,7 +492,7 @@
         </div>
         <div class="page-actions">
             {% if session.get("role") == "admin" or session.get("can_add_medicine") %}
-            <a href="/medicines/add" class="btn-primary">Add Batch</a>
+            <a href="/medicines/add" class="btn-primary" data-shortcut-add-medicine>Add Batch</a>
             {% endif %}
             {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
             <a href="/medicines/export" class="btn-export">Export Excel</a>
@@ -500,11 +500,12 @@
         </div>
     </div>
 
-    <section class="management-panel">
+    <section class="management-panel app-sticky-panel">
         <div class="search-grid">
             <div class="field-stack">
                 <label for="medicineSearch">Search Medicine</label>
-                <input class="search-input" type="text" id="medicineSearch" placeholder="Search by medicine name, batch, pack or status">
+                <input class="search-input" type="text" id="medicineSearch" value="{{ initial_search or '' }}" placeholder="Search by medicine name, batch, barcode, pack or status">
+                <div class="app-inline-help">Shortcut: <b>Alt + F</b> focus search, <b>Alt + M</b> add new batch. Review items with missing barcodes before rolling out barcode billing.</div>
             </div>
 
             <div class="field-stack">
@@ -536,6 +537,7 @@
                 <button type="button" class="filter-chip" data-filter="expiring">Expiring Soon</button>
                 <button type="button" class="filter-chip" data-filter="multi_batch">Multi Batch</button>
                 <button type="button" class="filter-chip" data-filter="out_of_stock">Out of Stock</button>
+                <button type="button" class="filter-chip" data-filter="barcode_missing">Barcode Missing</button>
             </div>
         </div>
 
@@ -593,6 +595,7 @@
                     data-has-expired="{{ 1 if expired_count else 0 }}"
                     data-out-of-stock="{{ 1 if out_of_stock else 0 }}"
                     data-low-stock="{{ 1 if low_stock else 0 }}"
+                    data-barcode-missing="{{ 0 if group.has_barcode else 1 }}"
                 >
                     <details>
                         <summary>
@@ -759,6 +762,7 @@ function matchesMedicineFilter(group, filterKey) {
     const hasExpired = group.dataset.hasExpired === "1";
     const outOfStock = group.dataset.outOfStock === "1";
     const lowStock = group.dataset.lowStock === "1";
+    const barcodeMissing = group.dataset.barcodeMissing === "1";
     const expiringSoon = isExpiringSoon(group.dataset.expiry || "");
 
     if (filterKey === "attention") {
@@ -775,6 +779,9 @@ function matchesMedicineFilter(group, filterKey) {
     }
     if (filterKey === "out_of_stock") {
         return outOfStock || stock <= 0;
+    }
+    if (filterKey === "barcode_missing") {
+        return barcodeMissing;
     }
     return true;
 }
@@ -810,7 +817,8 @@ function updateMedicineResultsNote(visibleCount, totalCount) {
         low_stock: "low stock medicines",
         expiring: "expiring soon medicines",
         multi_batch: "multi-batch medicines",
-        out_of_stock: "out of stock medicines"
+        out_of_stock: "out of stock medicines",
+        barcode_missing: "barcode-missing medicines"
     };
 
     const label = filterLabelMap[filterKey] || "medicines";

@@ -297,7 +297,12 @@ td {
                 <input type="file" name="attachment_file" accept=".pdf,.png,.jpg,.jpeg">
                 {% if vendor and vendor.attachment_ref %}
                 <div style="margin-top:6px; font-size:12px;">
-                    Current: <a href="/static/uploads/vendors/{{ vendor.attachment_ref }}" target="_blank">{{ vendor.attachment_ref }}</a>
+                    Current:
+                    {% if '://' in vendor.attachment_ref %}
+                    <a href="{{ vendor.attachment_ref }}" target="_blank" rel="noopener">{{ vendor.attachment_ref }}</a>
+                    {% else %}
+                    <a href="/vendor/attachment/{{ vendor.attachment_ref }}" target="_blank" rel="noopener">{{ vendor.attachment_ref }}</a>
+                    {% endif %}
                 </div>
                 {% endif %}
             </div>
@@ -360,6 +365,7 @@ td {
             <thead>
                 <tr>
                     <th>Medicine Name</th>
+                    <th>Barcode</th>
                     <th>Composition</th>
                     <th>Company</th>
                     <th>Distributor</th>
@@ -380,6 +386,7 @@ td {
                     <td>
                         <input type="text" name="medicine_name" list="medicineList">
                     </td>
+                    <td><input type="text" name="barcode" placeholder="Scan or type barcode"></td>
                     <td><input type="text" name="composition"></td>
                     <td><input type="text" name="company"></td>
                     <td><input type="text" name="distributor_name" value="{{ vendor.name }}"></td>
@@ -484,6 +491,7 @@ td {
     <table class="purchase-history-table">
         <tr>
             <th>Medicine</th>
+            <th>Barcode</th>
             <th>Batch</th>
             <th>Pack</th>
             <th>Expiry</th>
@@ -500,6 +508,7 @@ td {
         {% for p in purchase_items %}
         <tr {% if p.is_expired %}style="background:#f8d7da;"{% endif %}>
             <td>{{ p.medicine_name }}</td>
+            <td>{{ p.barcode or '-' }}</td>
             <td>{{ p.batch }}</td>
             <td>
                 {% if p.pack_type and p.pack_qty %}

@@ -13,7 +13,14 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=True)  # ⚠️ IMPORTANT
 
     role = db.Column(db.String(20), default="staff")
+    access_profile = db.Column(db.String(40), default="custom")
     session_version = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True, index=True)
+    deleted_at = db.Column(db.DateTime, index=True)
+    deleted_by = db.Column(db.String(50))
+    last_login_at = db.Column(db.DateTime, index=True)
+    last_login_ip = db.Column(db.String(80))
+    last_login_user_agent = db.Column(db.String(255))
 
     can_view_medicine = db.Column(db.Boolean, default=False)
     can_add_medicine = db.Column(db.Boolean, default=False)
@@ -25,8 +32,11 @@ class User(db.Model):
     can_view_stock_history = db.Column(db.Boolean, default=False)
     can_view_reports = db.Column(db.Boolean, default=False)
     can_manage_users = db.Column(db.Boolean, default=False)
+    can_manage_purchases = db.Column(db.Boolean, default=False)
+    can_view_audit_logs = db.Column(db.Boolean, default=False)
+    can_view_profit_dashboard = db.Column(db.Boolean, default=False)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     # Use PBKDF2 explicitly so hashes work reliably across Python/OpenSSL builds.
     def set_password(self, password):
@@ -47,18 +57,21 @@ class Medicine(db.Model):
     __tablename__ = "medicine"
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(150), nullable=False)
+    name = db.Column(db.String(150), nullable=False, index=True)
     composition = db.Column(db.String(255))
     company = db.Column(db.String(150))
     pack_type = db.Column(db.String(50))
     pack_qty = db.Column(db.Integer)
-    batch = db.Column(db.String(50), nullable=False)
+    batch = db.Column(db.String(50), nullable=False, index=True)
     expiry = db.Column(db.String(10), nullable=False)
     mrp = db.Column(db.Float, nullable=False)
     qty = db.Column(db.Integer, default=0)
     discount_percent = db.Column(db.Integer, default=0)
+    barcode = db.Column(db.String(80), index=True)
+    reorder_level = db.Column(db.Integer, default=10)
+    is_active = db.Column(db.Boolean, default=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 # ================= INVOICE =================
@@ -67,8 +80,9 @@ class Invoice(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     invoice_no = db.Column(db.String(50), unique=True)
-    customer = db.Column(db.String(100))
-    mobile = db.Column(db.String(20))
+    patient_id = db.Column(db.Integer, index=True)
+    customer = db.Column(db.String(100), index=True)
+    mobile = db.Column(db.String(20), index=True)
     doctor = db.Column(db.String(100))
     gender = db.Column(db.String(10))
 
@@ -77,24 +91,24 @@ class Invoice(db.Model):
     cgst = db.Column(db.Float, default=0)
     sgst = db.Column(db.Float, default=0)
     total = db.Column(db.Float, default=0)
-    payment_mode = db.Column(db.String(20), default="CASH")
+    payment_mode = db.Column(db.String(20), default="CASH", index=True)
 
 
     created_by = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 class InvoiceItem(db.Model):
     __tablename__ = "invoice_item"
 
     id = db.Column(db.Integer, primary_key=True)
-    invoice_id = db.Column(db.Integer, nullable=False)
+    invoice_id = db.Column(db.Integer, nullable=False, index=True)
 
-    name = db.Column(db.String(150))
+    name = db.Column(db.String(150), index=True)
     qty = db.Column(db.Integer)
     price = db.Column(db.Float)
     amount = db.Column(db.Float)
 
-    batch = db.Column(db.String(50))
+    batch = db.Column(db.String(50), index=True)
     expiry = db.Column(db.String(10))
 
     discount_percent = db.Column(db.Float, default=0)
@@ -109,7 +123,7 @@ class Return(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     return_no = db.Column(db.String(30), unique=True)
-    invoice_id = db.Column(db.Integer, nullable=False)
+    invoice_id = db.Column(db.Integer, nullable=False, index=True)
     invoice_no = db.Column(db.String(50))
     customer = db.Column(db.String(100))
     mobile = db.Column(db.String(20))
@@ -122,19 +136,19 @@ class Return(db.Model):
     cancelled_at = db.Column(db.DateTime)
 
     created_by = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 class ReturnItem(db.Model):
     __tablename__ = "return_item"
 
     id = db.Column(db.Integer, primary_key=True)
-    return_id = db.Column(db.Integer, nullable=False)
-    invoice_item_id = db.Column(db.Integer, nullable=False)
+    return_id = db.Column(db.Integer, nullable=False, index=True)
+    invoice_item_id = db.Column(db.Integer, nullable=False, index=True)
 
     medicine_id = db.Column(db.Integer)
-    medicine_name = db.Column(db.String(150))
-    batch = db.Column(db.String(50))
+    medicine_name = db.Column(db.String(150), index=True)
+    batch = db.Column(db.String(50), index=True)
     expiry = db.Column(db.String(10))
 
     qty = db.Column(db.Integer)
@@ -161,7 +175,10 @@ class HoldBill(db.Model):
     gender = db.Column(db.String(10))
 
     data = db.Column(db.JSON)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    is_deleted = db.Column(db.Boolean, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, index=True)
+    deleted_by = db.Column(db.String(50))
 
 
 class Patient(db.Model):
@@ -173,7 +190,7 @@ class Patient(db.Model):
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
     notes = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     @validates("age")
@@ -196,14 +213,14 @@ class Appointment(db.Model):
     patient_id = db.Column(db.Integer, index=True)
 
     patient_name = db.Column(db.String(120), nullable=False)
-    mobile = db.Column(db.String(20))
+    mobile = db.Column(db.String(20), index=True)
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
     doctor_name = db.Column(db.String(120), nullable=False)
 
     appointment_date = db.Column(db.Date, nullable=False, index=True)
     appointment_time = db.Column(db.Time, nullable=False)
-    payment_mode = db.Column(db.String(20), default="CASH")
+    payment_mode = db.Column(db.String(20), default="CASH", index=True)
     payment_status = db.Column(db.String(20), default="UNPAID")
     doctor_discount = db.Column(db.Float, default=0)
     consultation_fee = db.Column(db.Float, default=0)
@@ -215,10 +232,13 @@ class Appointment(db.Model):
     previous_visit_notes = db.Column(db.Text)
 
     created_by = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     checked_in_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
     cancelled_at = db.Column(db.DateTime)
+    is_deleted = db.Column(db.Boolean, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, index=True)
+    deleted_by = db.Column(db.String(50))
 
     @validates("age")
     def _sanitize_age(self, _key, value):
@@ -237,8 +257,8 @@ class StockHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
 
     medicine_id = db.Column(db.Integer)
-    medicine_name = db.Column(db.String(150))
-    batch = db.Column(db.String(50))
+    medicine_name = db.Column(db.String(150), index=True)
+    batch = db.Column(db.String(50), index=True)
 
     action = db.Column(db.String(20))
     # ADD, SALE, RETURN, ADJUST
@@ -252,7 +272,7 @@ class StockHistory(db.Model):
     ref_table = db.Column(db.String(50))
     ref_id = db.Column(db.Integer)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 # ================= VENDOR =================
@@ -261,8 +281,8 @@ class Vendor(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
 
-    name = db.Column(db.String(150), nullable=False)
-    mobile = db.Column(db.String(20))
+    name = db.Column(db.String(150), nullable=False, index=True)
+    mobile = db.Column(db.String(20), index=True)
     email = db.Column(db.String(120))
     gst_no = db.Column(db.String(30))
     shop_name = db.Column(db.String(150))
@@ -296,7 +316,9 @@ class Vendor(db.Model):
     attachment_ref = db.Column(db.String(255))
 
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    deleted_at = db.Column(db.DateTime, index=True)
+    deleted_by = db.Column(db.String(50))
 
 
 # ================= VENDOR PURCHASE =================
@@ -306,9 +328,9 @@ class VendorPurchase(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     vendor_id = db.Column(db.Integer, nullable=False)
     purchase_no = db.Column(db.String(30), unique=True)
-    invoice_no = db.Column(db.String(60))
+    invoice_no = db.Column(db.String(60), index=True)
     bill_attachment_ref = db.Column(db.String(255))
-    purchase_date = db.Column(db.DateTime, default=datetime.utcnow)
+    purchase_date = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     payment_mode = db.Column(db.String(30))
     payment_status = db.Column(db.String(30))
     paid_amount = db.Column(db.Float, default=0)
@@ -317,23 +339,24 @@ class VendorPurchase(db.Model):
     discount_total = db.Column(db.Float, default=0)
     total_amount = db.Column(db.Float, default=0)
     created_by = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 class VendorPurchaseItem(db.Model):
     __tablename__ = "vendor_purchase_item"
 
     id = db.Column(db.Integer, primary_key=True)
-    purchase_id = db.Column(db.Integer, nullable=False)
+    purchase_id = db.Column(db.Integer, nullable=False, index=True)
     vendor_id = db.Column(db.Integer, nullable=False)
     medicine_id = db.Column(db.Integer)
-    medicine_name = db.Column(db.String(150))
+    medicine_name = db.Column(db.String(150), index=True)
+    barcode = db.Column(db.String(80), index=True)
     composition = db.Column(db.String(255))
     company = db.Column(db.String(150))
     distributor_name = db.Column(db.String(150))
     pack_type = db.Column(db.String(50))
     pack_qty = db.Column(db.Integer)
-    batch = db.Column(db.String(50))
+    batch = db.Column(db.String(50), index=True)
     expiry = db.Column(db.String(10))
     qty = db.Column(db.Integer, default=0)
     free_qty = db.Column(db.Integer, default=0)
@@ -343,7 +366,7 @@ class VendorPurchaseItem(db.Model):
     gst_percent = db.Column(db.Float, default=0)
     discount_percent = db.Column(db.Float, default=0)
     total_value = db.Column(db.Float, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 # ================= VENDOR NOTES (DEBIT/CREDIT) =================
@@ -435,8 +458,28 @@ class AuditLog(db.Model):
     __tablename__ = "audit_log"
 
     id = db.Column(db.Integer, primary_key=True)
-    user = db.Column(db.String(50))
-    action = db.Column(db.String(255))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user = db.Column(db.String(50), index=True)
+    action = db.Column(db.String(255), index=True)
+    entity_type = db.Column(db.String(50))
+    entity_id = db.Column(db.Integer)
+    ref_code = db.Column(db.String(120))
+    before_json = db.Column(db.Text)
+    after_json = db.Column(db.Text)
+    extra_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+class LoginSecurityEvent(db.Model):
+    __tablename__ = "login_security_event"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(50), index=True)
+    user_id = db.Column(db.Integer, index=True)
+    ip_address = db.Column(db.String(80), index=True)
+    user_agent = db.Column(db.String(255))
+    outcome = db.Column(db.String(30), index=True)
+    reason = db.Column(db.String(255))
+    is_suspicious = db.Column(db.Boolean, default=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 

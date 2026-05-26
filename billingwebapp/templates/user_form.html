@@ -1,75 +1,257 @@
 {% extends "base.html" %}
-{% block title %}User{% endblock %}
+{% block title %}{{ form_title }}{% endblock %}
 
 {% block body %}
 <style>
-.form-card{
-    max-width:600px;
-    background:#fff;
-    padding:25px;
-    border-radius:10px;
-    box-shadow:0 8px 20px rgba(0,0,0,.1);
+.user-form-shell {
+    max-width: 980px;
+    display: grid;
+    gap: 20px;
 }
-.perm-box{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:10px;
+.user-form-card {
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+    padding: 24px;
+}
+.user-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+.user-permission-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+.user-permission-item {
+    border: 1px solid #d7e3f7;
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: #f8fbff;
+}
+.user-permission-item small {
+    display: block;
+    color: #64748b;
+    margin-top: 4px;
+}
+.user-form-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+}
+.user-help {
+    color: #64748b;
+    font-size: 14px;
 }
 </style>
 
-<div class="form-card">
-<h3>{{ 'Edit User' if user else 'Add User' }}</h3>
+{% set selected_role = request.form.get('role') or (user.role if user else 'staff') %}
+{% set selected_profile_candidate = request.form.get('access_profile') or (user.access_profile if user else 'custom') %}
+{% set selected_profile = selected_profile_candidate if selected_profile_candidate in profile_options else 'custom' %}
 
-<form method="POST">
+{% set can_view_medicine_checked = request.form.get('can_view_medicine') if request.method == 'POST' else (user.can_view_medicine if user else False) %}
+{% set can_add_medicine_checked = request.form.get('can_add_medicine') if request.method == 'POST' else (user.can_add_medicine if user else False) %}
+{% set can_edit_medicine_checked = request.form.get('can_edit_medicine') if request.method == 'POST' else (user.can_edit_medicine if user else False) %}
+{% set can_delete_medicine_checked = request.form.get('can_delete_medicine') if request.method == 'POST' else (user.can_delete_medicine if user else False) %}
+{% set can_invoice_action_checked = request.form.get('can_invoice_action') if request.method == 'POST' else (user.can_invoice_action if user else False) %}
+{% set can_edit_invoice_checked = request.form.get('can_edit_invoice') if request.method == 'POST' else (user.can_edit_invoice if user else False) %}
+{% set can_delete_invoice_checked = request.form.get('can_delete_invoice') if request.method == 'POST' else (user.can_delete_invoice if user else False) %}
+{% set can_view_stock_history_checked = request.form.get('can_view_stock_history') if request.method == 'POST' else (user.can_view_stock_history if user else False) %}
+{% set can_manage_purchases_checked = request.form.get('can_manage_purchases') if request.method == 'POST' else (user.can_manage_purchases if user else False) %}
+{% set can_view_reports_checked = request.form.get('can_view_reports') if request.method == 'POST' else (user.can_view_reports if user else False) %}
+{% set can_manage_users_checked = request.form.get('can_manage_users') if request.method == 'POST' else (user.can_manage_users if user else False) %}
+{% set can_view_audit_logs_checked = request.form.get('can_view_audit_logs') if request.method == 'POST' else (user.can_view_audit_logs if user else False) %}
+{% set can_view_profit_dashboard_checked = request.form.get('can_view_profit_dashboard') if request.method == 'POST' else (user.can_view_profit_dashboard if user else False) %}
 
-<label>Username</label>
-<input class="form-control mb-2" name="username"
-       value="{{ user.username if user else '' }}" required>
+<div class="user-form-shell">
+    <div class="user-form-card">
+        <h2 style="margin-bottom: 8px;">{{ form_title }}</h2>
+        <p class="user-help">Use preset profiles for quick access setup, then fine-tune with the checkboxes below.</p>
 
-{% if not user %}
-<label>Password</label>
-<input class="form-control mb-2" name="password" required>
-{% endif %}
+        <form method="POST" id="userForm">
+            <div class="user-grid">
+                <div>
+                    <label>Username</label>
+                    <input class="form-control mt-2" name="username" value="{{ request.form.get('username') or (user.username if user else '') }}" required>
+                    <small class="user-help">Use a unique username for login.</small>
+                </div>
+                {% if not user %}
+                <div>
+                    <label>Password</label>
+                    <input class="form-control mt-2" name="password" type="password" required>
+                    <small class="user-help">Use a strong password; it can be updated later from Change Password.</small>
+                </div>
+                {% endif %}
+                <div>
+                    <label>Role</label>
+                    <select class="form-control mt-2" name="role" id="userRoleSelect">
+                        <option value="staff" {{ 'selected' if selected_role == 'staff' }}>Staff</option>
+                        <option value="admin" {{ 'selected' if selected_role == 'admin' }}>Admin</option>
+                    </select>
+                    <small class="user-help">Admin role automatically enables all permissions.</small>
+                </div>
+                <div>
+                    <label>Access Profile</label>
+                    <select class="form-control mt-2" name="access_profile" id="accessProfileSelect">
+                        <option value="custom" {{ 'selected' if selected_profile == 'custom' }}>Custom</option>
+                        <option value="report_only" {{ 'selected' if selected_profile == 'report_only' }}>Report Only</option>
+                        <option value="billing_only" {{ 'selected' if selected_profile == 'billing_only' }}>Billing Only</option>
+                        <option value="stock_manager" {{ 'selected' if selected_profile == 'stock_manager' }}>Stock Manager</option>
+                        <option value="purchase_manager" {{ 'selected' if selected_profile == 'purchase_manager' }}>Purchase Manager</option>
+                        <option value="admin_audit" {{ 'selected' if selected_profile == 'admin_audit' }}>Admin Audit Access</option>
+                    </select>
+                    <small class="user-help">Selecting a preset will auto-fill the relevant permissions.</small>
+                </div>
+            </div>
 
-<label>Role</label>
-<select class="form-control mb-3" name="role">
-    <option value="admin" {{ 'selected' if user and user.role=='admin' }}>Admin</option>
-    <option value="staff" {{ 'selected' if user and user.role=='staff' }}>Staff</option>
-</select>
+            <div class="user-form-card" style="margin-top: 20px; padding: 18px;">
+                <h4 style="margin-bottom: 6px;">Granular Permissions</h4>
+                <p class="user-help">Use the Custom profile to control these individually.</p>
+                <div class="user-permission-grid">
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_view_medicine" {{ 'checked' if can_view_medicine_checked }}>
+                        View Medicine
+                        <small>Can view Medicine Master.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_add_medicine" {{ 'checked' if can_add_medicine_checked }}>
+                        Add Medicine
+                        <small>Can create new medicines.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_edit_medicine" {{ 'checked' if can_edit_medicine_checked }}>
+                        Edit Medicine
+                        <small>Can update existing medicine records.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_delete_medicine" {{ 'checked' if can_delete_medicine_checked }}>
+                        Delete Medicine
+                        <small>Medicine rows deactivate/delete level access.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_invoice_action" {{ 'checked' if can_invoice_action_checked }}>
+                        Billing Access
+                        <small>Can access POS billing, returns, and invoice workflows.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_edit_invoice" {{ 'checked' if can_edit_invoice_checked }}>
+                        Edit Invoice
+                        <small>Can correct saved invoices.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_delete_invoice" {{ 'checked' if can_delete_invoice_checked }}>
+                        Delete Invoice
+                        <small>Invoice delete/cancel level access.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_view_stock_history" {{ 'checked' if can_view_stock_history_checked }}>
+                        Stock History
+                        <small>Can view stock movement and FIFO history.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_manage_purchases" {{ 'checked' if can_manage_purchases_checked }}>
+                        Purchase Manager
+                        <small>Can manage vendors, purchases, and vendor notes.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_view_reports" {{ 'checked' if can_view_reports_checked }}>
+                        Reports
+                        <small>Can access sales, profit, medicine, and appointment reports.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_view_profit_dashboard" {{ 'checked' if can_view_profit_dashboard_checked }}>
+                        Dashboard Profit Cards
+                        <small>Can view the Gross Profit Today and Gross Profit This Month cards on the dashboard.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_manage_users" {{ 'checked' if can_manage_users_checked }}>
+                        User Management
+                        <small>Can manage users and System Center admin tools.</small>
+                    </label>
+                    <label class="user-permission-item">
+                        <input type="checkbox" name="can_view_audit_logs" {{ 'checked' if can_view_audit_logs_checked }}>
+                        Audit Logs
+                        <small>Can view audit trails and sensitive action history.</small>
+                    </label>
+                </div>
+            </div>
 
-<h5>Permissions</h5>
-<div class="perm-box">
-    <label><input type="checkbox" name="can_view_medicine"
-        {% if user and user.can_view_medicine %}checked{% endif %}> View Medicine</label>
-
-    <label><input type="checkbox" name="can_add_medicine"
-        {% if user and user.can_add_medicine %}checked{% endif %}> Add Medicine</label>
-
-    <label><input type="checkbox" name="can_edit_medicine"
-        {% if user and user.can_edit_medicine %}checked{% endif %}> Edit Medicine</label>
-
-    <label><input type="checkbox" name="can_delete_medicine"
-        {% if user and user.can_delete_medicine %}checked{% endif %}> Delete Medicine</label>
-
-    <label><input type="checkbox" name="can_edit_invoice"
-        {% if user and user.can_edit_invoice %}checked{% endif %}> Edit Invoice</label>
-
-    <label><input type="checkbox" name="can_delete_invoice"
-        {% if user and user.can_delete_invoice %}checked{% endif %}> Delete Invoice</label>
-
-    <label><input type="checkbox" name="can_view_stock_history"
-        {% if user and user.can_view_stock_history %}checked{% endif %}> Stock History</label>
-
-    <label><input type="checkbox" name="can_view_reports"
-        {% if user and user.can_view_reports %}checked{% endif %}> Reports</label>
-
-    <label><input type="checkbox" name="can_manage_users"
-        {% if user and user.can_manage_users %}checked{% endif %}> Users</label>
+            <div class="user-form-actions">
+                <button class="btn btn-primary">{{ submit_label }}</button>
+                <a href="/users" class="btn btn-secondary">Back</a>
+            </div>
+        </form>
+    </div>
 </div>
 
-<button class="btn btn-success mt-3">Save</button>
-<a href="/users" class="btn btn-secondary mt-3">Back</a>
+<script>
+(() => {
+    const roleSelect = document.getElementById("userRoleSelect");
+    const profileSelect = document.getElementById("accessProfileSelect");
+    const permissionInputs = Array.from(document.querySelectorAll(".user-permission-grid input[type='checkbox']"));
+    const profileMap = {
+        custom: {},
+        report_only: { can_view_reports: true },
+        billing_only: { can_invoice_action: true, can_edit_invoice: true },
+        stock_manager: {
+            can_view_medicine: true,
+            can_add_medicine: true,
+            can_edit_medicine: true,
+            can_view_stock_history: true
+        },
+        purchase_manager: {
+            can_manage_purchases: true,
+            can_view_medicine: true,
+            can_add_medicine: true,
+            can_edit_medicine: true,
+            can_view_stock_history: true
+        },
+        admin_audit: {
+            can_view_reports: true,
+            can_manage_users: true,
+            can_view_audit_logs: true
+        }
+    };
 
-</form>
-</div>
+    function setAllPermissions(value) {
+        permissionInputs.forEach((input) => {
+            input.checked = value;
+            input.disabled = value && roleSelect.value === "admin";
+        });
+    }
+
+    function applyProfile() {
+        if (roleSelect.value === "admin") {
+            setAllPermissions(true);
+            profileSelect.disabled = true;
+            return;
+        }
+        profileSelect.disabled = false;
+        if (profileSelect.value === "custom") {
+            permissionInputs.forEach((input) => {
+                input.disabled = false;
+            });
+            return;
+        }
+        permissionInputs.forEach((input) => {
+            input.checked = false;
+            input.disabled = false;
+        });
+        const preset = profileMap[profileSelect.value] || {};
+        Object.keys(preset).forEach((name) => {
+            const field = permissionInputs.find((input) => input.name === name);
+            if (field) {
+                field.checked = !!preset[name];
+            }
+        });
+    }
+
+    roleSelect.addEventListener("change", applyProfile);
+    profileSelect.addEventListener("change", applyProfile);
+    applyProfile();
+})();
+</script>
 {% endblock %}

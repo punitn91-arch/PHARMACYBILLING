@@ -1,16 +1,416 @@
 {% extends "base.html" %}
+{% block title %}Audit Logs{% endblock %}
+
 {% block body %}
-<h3>📜 Audit Logs</h3>
-<table class="table table-bordered">
-<tr>
-<th>User</th><th>Action</th><th>Date</th>
-</tr>
-{% for l in logs %}
-<tr>
-<td>{{ l.user }}</td>
-<td>{{ l.action }}</td>
-<td>{{ l.created_at.strftime('%d-%m-%Y %H:%M') }}</td>
-</tr>
-{% endfor %}
-</table>
+<style>
+.audit-shell {
+    display: grid;
+    gap: 18px;
+}
+
+.audit-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.audit-title {
+    margin: 0;
+    color: #0f4fbf;
+    font-size: 28px;
+}
+
+.audit-note {
+    margin: 8px 0 0;
+    color: #607089;
+    max-width: 780px;
+}
+
+.audit-filter {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.7fr) minmax(160px, 0.7fr) auto;
+    align-items: end;
+}
+
+.field-stack {
+    display: grid;
+    gap: 6px;
+}
+
+.field-stack label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+    color: #52627a;
+}
+
+.field-stack input,
+.field-stack select {
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #fff;
+}
+
+.filter-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-linkish {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.btn-linkish.primary {
+    background: #0d6efd;
+    color: #fff;
+}
+
+.btn-linkish.secondary {
+    background: #eef4ff;
+    color: #21406d;
+}
+
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.stat-card {
+    border: 1px solid #dbe4f0;
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.stat-card small {
+    display: block;
+    color: #607089;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+}
+
+.stat-card strong {
+    display: block;
+    margin-top: 6px;
+    color: #10223e;
+    font-size: 24px;
+}
+
+.audit-table-wrap {
+    background: #fff;
+    border: 1px solid #dbe4f0;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+.audit-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.audit-table th,
+.audit-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #e8eef6;
+    text-align: left;
+    vertical-align: top;
+}
+
+.audit-table th {
+    background: #0d6efd;
+    color: #fff;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    background: #edf4ff;
+    color: #1e4e94;
+}
+
+.pill.create {
+    background: #e6fbef;
+    color: #0a7d44;
+}
+
+.pill.update {
+    background: #eef4ff;
+    color: #1e4e94;
+}
+
+.pill.status {
+    background: #fff6df;
+    color: #936200;
+}
+
+.pill.delete {
+    background: #ffe9ea;
+    color: #b42318;
+}
+
+.pill.other {
+    background: #eef2f7;
+    color: #475569;
+}
+
+.ref-code {
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.muted {
+    color: #607089;
+}
+
+.change-summary {
+    display: grid;
+    gap: 8px;
+}
+
+.change-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.change-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 10px;
+    background: #f8fbff;
+    border: 1px solid #dbe4f0;
+    color: #1f3b63;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.change-chip strong {
+    margin-right: 5px;
+}
+
+.change-box {
+    display: grid;
+    gap: 8px;
+}
+
+.change-box details {
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    background: #f8fbff;
+    overflow: hidden;
+}
+
+.change-box summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 10px 12px;
+    font-weight: 700;
+    color: #1f3b63;
+}
+
+.change-box summary::-webkit-details-marker {
+    display: none;
+}
+
+.change-box pre {
+    margin: 0;
+    padding: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #fff;
+    border-top: 1px solid #dbe4f0;
+    color: #0f172a;
+}
+
+.empty-state {
+    padding: 28px 20px;
+    text-align: center;
+    color: #607089;
+}
+
+@media (max-width: 1120px) {
+    .audit-filter {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .stats-row {
+        grid-template-columns: repeat(2, minmax(140px, 1fr));
+    }
+}
+
+@media (max-width: 860px) {
+    .audit-filter,
+    .stats-row {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="audit-shell">
+    <section class="card">
+        <div class="audit-head">
+            <div>
+                <h1 class="audit-title">Audit Logs</h1>
+                <p class="audit-note">Every important create, edit, status change, and delete action is tracked here with before/after snapshots. The changed-fields summary means you usually do not need to open the raw JSON.</p>
+            </div>
+        </div>
+
+        <form method="get" class="audit-filter">
+            <div class="field-stack">
+                <label for="auditSearch">Search</label>
+                <input id="auditSearch" type="text" name="search" value="{{ search_query or '' }}" placeholder="User, action, reference code">
+            </div>
+            <div class="field-stack">
+                <label for="entityFilter">Entity Type</label>
+                <select id="entityFilter" name="entity">
+                    <option value="">All Entities</option>
+                    {% for entity in entity_options %}
+                    <option value="{{ entity }}" {% if entity_filter == entity %}selected{% endif %}>{{ entity.replace('_', ' ') }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field-stack">
+                <label for="actionFilter">Action Type</label>
+                <select id="actionFilter" name="action">
+                    <option value="">All Actions</option>
+                    {% for action in action_options %}
+                    <option value="{{ action }}" {% if action_filter == action %}selected{% endif %}>{{ action.title() }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-actions">
+                <button type="submit" class="btn-linkish primary">Apply Filter</button>
+                <a href="{{ url_for('audit_logs') }}" class="btn-linkish secondary">Reset</a>
+            </div>
+        </form>
+
+        <div class="stats-row mt-4">
+            <div class="stat-card">
+                <small>Visible Logs</small>
+                <strong>{{ audit_stats.visible_logs }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Create Events</small>
+                <strong>{{ audit_stats.create_count }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Update / Status</small>
+                <strong>{{ audit_stats.update_count }}</strong>
+            </div>
+            <div class="stat-card">
+                <small>Delete Events</small>
+                <strong>{{ audit_stats.delete_count }}</strong>
+            </div>
+        </div>
+    </section>
+
+    <section class="audit-table-wrap">
+        {% if logs %}
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Entity</th>
+                    <th>Reference</th>
+                    <th>Changes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>
+                        <strong>{{ log.created_at.strftime('%d-%m-%Y %I:%M %p') if log.created_at else '-' }}</strong>
+                    </td>
+                    <td>{{ log.user or '-' }}</td>
+                    <td>
+                        <div>{{ log.action or '-' }}</div>
+                        <div class="mt-2">
+                            <span class="pill {{ (log.action_category or 'OTHER')|lower }}">{{ (log.action_category or 'OTHER').title() }}</span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="pill">{{ (log.entity_type or 'GENERAL').replace('_', ' ') }}</span>
+                        {% if log.entity_id %}
+                        <div class="muted mt-2">ID {{ log.entity_id }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="ref-code">{{ log.ref_code or '-' }}</div>
+                    </td>
+                    <td>
+                        <div class="change-summary">
+                            {% if log.change_rows %}
+                            <div class="change-chip-list">
+                                {% for change in log.change_rows %}
+                                <span class="change-chip">
+                                    <strong>{{ change.field }}:</strong> {{ change.before }} -> {{ change.after }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                            {% if log.change_count > log.change_rows|length %}
+                            <div class="muted">+ {{ log.change_count - (log.change_rows|length) }} more changed fields</div>
+                            {% endif %}
+                            {% else %}
+                            <div class="muted">No field-level snapshot available.</div>
+                            {% endif %}
+
+                            <div class="change-box">
+                                {% if log.before_data %}
+                                <details>
+                                    <summary>Before</summary>
+                                    <pre>{{ log.before_data | tojson(indent=2) }}</pre>
+                                </details>
+                                {% endif %}
+                                {% if log.after_data %}
+                                <details>
+                                    <summary>After</summary>
+                                    <pre>{{ log.after_data | tojson(indent=2) }}</pre>
+                                </details>
+                                {% endif %}
+                                {% if log.extra_data %}
+                                <details>
+                                    <summary>Context</summary>
+                                    <pre>{{ log.extra_data | tojson(indent=2) }}</pre>
+                                </details>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <strong>No audit logs found.</strong>
+            <div class="mt-2">Try a different filter or perform a tracked action first.</div>
+        </div>
+        {% endif %}
+    </section>
+</div>
 {% endblock %}

@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Pharmacy Billing{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app_premium.css') }}">
     <style>
 .stock-table th,
 .stock-table td {
@@ -14,7 +18,7 @@
 }
 
 .stock-table td:nth-child(9) {
-    white-space: normal; /* Remark wrap ho sake */
+    white-space: normal; /* Allow remark text to wrap */
 }
 </style>
 
@@ -119,6 +123,137 @@
             font-weight: 600;
         }
 
+        .topbar-search {
+            position: relative;
+            flex: 1 1 360px;
+            max-width: 460px;
+        }
+
+        .global-search-input {
+            width: 100%;
+            height: 40px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.28);
+            background: rgba(255,255,255,0.16);
+            color: #fff;
+            padding: 0 40px 0 14px;
+            outline: none;
+            font-size: 13px;
+        }
+
+        .global-search-input::placeholder {
+            color: rgba(255,255,255,0.86);
+        }
+
+        .global-search-input:focus {
+            background: rgba(255,255,255,0.24);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .global-search-icon {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: rgba(255,255,255,0.92);
+            pointer-events: none;
+            font-size: 15px;
+        }
+
+        .global-search-panel {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            right: 0;
+            background: #fff;
+            color: #10223e;
+            border-radius: 16px;
+            border: 1px solid #dbe4f0;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+            max-height: min(72vh, 560px);
+            overflow-y: auto;
+            z-index: 1500;
+        }
+
+        .global-search-state {
+            padding: 14px 16px;
+            color: #607089;
+            font-size: 13px;
+        }
+
+        .global-search-group {
+            padding: 8px 0;
+            border-top: 1px solid #edf2f8;
+        }
+
+        .global-search-group:first-child {
+            border-top: 0;
+        }
+
+        .global-search-group-head {
+            padding: 0 16px 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .global-search-group-label-wrap {
+            min-width: 0;
+        }
+
+        .global-search-group-label {
+            color: #607089;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .global-search-group-hint {
+            margin-top: 3px;
+            font-size: 11px;
+            color: #94a3b8;
+        }
+
+        .global-search-group-link {
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 700;
+            color: #0d6efd;
+            white-space: nowrap;
+        }
+
+        .global-search-item {
+            display: block;
+            padding: 10px 16px;
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .global-search-item:hover,
+        .global-search-item.is-active {
+            background: #f6f9ff;
+        }
+
+        .global-search-item-title {
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .global-search-item-subtitle,
+        .global-search-item-meta {
+            margin-top: 3px;
+            font-size: 12px;
+            color: #607089;
+        }
+
+        .global-search-shortcut {
+            margin-top: 4px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.82);
+        }
+
         /* ================= SIDEBAR ================= */
         .sidebar {
             position: fixed;
@@ -128,6 +263,7 @@
             height: calc(100vh - 60px);
             background: #0d6efd;
             overflow-y: auto;
+            overflow-x: visible;
             transition: transform 0.2s ease-in-out;
         }
 
@@ -151,11 +287,39 @@
             text-decoration: none;
             font-size: 15px;
             border-bottom: 1px solid rgba(255,255,255,0.15);
+            position: relative;
+            z-index: 0;
+            transform: translateZ(0) scale(1);
+            transform-origin: center;
+            backface-visibility: hidden;
+            will-change: transform;
+            transition:
+                transform 0.22s ease-in-out,
+                background-color 0.22s ease-in-out,
+                box-shadow 0.22s ease-in-out;
         }
 
         .sidebar a:hover,
         .sidebar a.active {
             background: #084298;
+        }
+
+        .sidebar a.active {
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+        }
+
+        @media (hover: hover) and (pointer: fine) {
+            .sidebar a:hover {
+                transform: translateZ(0) scale(1.06);
+                box-shadow:
+                    0 10px 22px rgba(8, 66, 152, 0.24),
+                    inset 0 0 0 1px rgba(255,255,255,0.18);
+                z-index: 2;
+            }
+
+            .sidebar a.active:hover {
+                background: #084298;
+            }
         }
 
         /* ================= CONTENT ================= */
@@ -254,7 +418,7 @@
     color:  #084298; 
     opacity: 0.9;
     z-index: 9999;
-    pointer-events: none; /* click block na kare */
+    pointer-events: none; /* Keep footer from blocking clicks */
 }
 
         /* === Layout normalization for all sub pages === */
@@ -560,6 +724,10 @@
             .topbar .right {
                 font-size: 13px;
             }
+
+            .topbar-search {
+                max-width: 320px;
+            }
         }
 
         @media (max-width: 860px) {
@@ -607,6 +775,10 @@
 
             .topbar .right .welcome-text,
             .topbar .right .divider {
+                display: none;
+            }
+
+            .topbar-search {
                 display: none;
             }
 
@@ -678,7 +850,7 @@
     </style>
 </head>
 
-<body>
+<body class="app-shell" data-route="{{ request.path }}" data-user-role="{{ session.get('role', '') }}">
 
     <!-- TOP BAR -->
     <div class="topbar">
@@ -686,6 +858,22 @@
             <button id="sidebarToggle" class="menu-toggle" type="button" aria-label="Toggle menu" aria-expanded="true">&#9776;</button>
             <div class="title">DR. ABHISHEK'S PHARMACY – BILLING</div>
         </div>
+
+        {% if session.get("user_id") %}
+        <div class="topbar-search" id="globalSearchShell">
+            <input
+                id="globalSearchInput"
+                class="global-search-input"
+                type="text"
+                autocomplete="off"
+                placeholder="Search patient, mobile, medicine, batch, invoice, appointment"
+                aria-label="Global search"
+            >
+            <span class="global-search-icon">&#128269;</span>
+            <div class="global-search-shortcut">Press / or Ctrl/Cmd + K to search instantly</div>
+            <div id="globalSearchPanel" class="global-search-panel" hidden></div>
+        </div>
+        {% endif %}
 
         <div class="right">
             <span class="welcome-text">Welcome <b>{{ session.get("username") }}</b></span>
@@ -708,11 +896,13 @@
         <a href="/" class="{% if request.path == '/' %}active{% endif %}">🏠 Dashboard</a>
 
         <a href="/appointments" class="{% if request.path.startswith('/appointments') %}active{% endif %}">&#128197; Appointments</a>
+        {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
         <h4>Invoice</h4>
         <a href="/billing">🧾 POS Invoice</a>
         <a href="/invoices">📄 Manage Invoice</a>
         <a href="/return-bills">&#8617; Return Bills</a>
         <a href="/pending-bills">&#9203; Pending Bills</a>
+        {% endif %}
        
         <h4>Master</h4>
         {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
@@ -728,19 +918,27 @@
         <a href="/company">🏭 Company Master</a>
         <a href="/category">📦 Category Master</a>
         <a href="/salt">🧪 Salt Master</a>
+        {% if session.get("role") == "admin" or session.get("can_manage_purchases") %}
         <a href="/vendor">🚚 Vendor Master</a>
-        {% if session.get("role") == "admin" or session.get("can_invoice_action") %}
+        {% endif %}
+        {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_manage_purchases") %}
         <a href="/vendor-notes">&#128221; Vendor Notes</a>
         {% endif %}
-        <a href="/customer">👤 Customer Master</a>
+        <a href="/customer" class="{% if request.path == '/customer' or request.path.startswith('/patients') %}active{% endif %}">👤 Customer Master</a>
 
         <h4>Reports</h4>
         {% if session.get("role") == "admin" or session.get("can_view_reports") %}
 <a href="/reports">📊 Reports</a>
 {% endif %}
-        {% if session.get("role") == "admin" or session.get("can_manage_users") %}
+{% if session.get("role") == "admin" or session.get("can_manage_users") or session.get("can_view_audit_logs") %}
 <h4>System</h4>
-<a href="/users">Users</a>
+{% if session.get("role") == "admin" or session.get("can_manage_users") %}
+<a href="/system-center" class="{% if request.path.startswith('/system-center') %}active{% endif %}">System Center</a>
+<a href="/users" class="{% if request.path.startswith('/users') %}active{% endif %}">Users</a>
+{% endif %}
+{% if session.get("role") == "admin" or session.get("can_view_audit_logs") or session.get("can_manage_users") %}
+<a href="/audit-logs" class="{% if request.path.startswith('/audit-logs') %}active{% endif %}">Audit Logs</a>
+{% endif %}
 {% endif %}
     </div>
     <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
@@ -823,6 +1021,200 @@
     });
 
     updateAria();
+})();
+</script>
+<script>
+(function () {
+    const shell = document.getElementById("globalSearchShell");
+    const input = document.getElementById("globalSearchInput");
+    const panel = document.getElementById("globalSearchPanel");
+    if (!shell || !input || !panel) return;
+
+    let debounceTimer = null;
+    let activeController = null;
+    let activeIndex = -1;
+
+    function getItems() {
+        return Array.from(panel.querySelectorAll(".global-search-item"));
+    }
+
+    function setActiveItem(index) {
+        const items = getItems();
+        if (!items.length) {
+            activeIndex = -1;
+            return;
+        }
+        const boundedIndex = Math.max(0, Math.min(index, items.length - 1));
+        activeIndex = boundedIndex;
+        items.forEach((item, itemIndex) => {
+            const isActive = itemIndex === boundedIndex;
+            item.classList.toggle("is-active", isActive);
+            item.setAttribute("aria-selected", isActive ? "true" : "false");
+        });
+        items[boundedIndex].scrollIntoView({ block: "nearest" });
+    }
+
+    function closePanel() {
+        panel.hidden = true;
+        panel.innerHTML = "";
+        activeIndex = -1;
+    }
+
+    function setLoadingState(message) {
+        panel.hidden = false;
+        panel.innerHTML = `<div class="global-search-state">${message}</div>`;
+    }
+
+    function renderGroups(groups) {
+        if (!Array.isArray(groups) || groups.length === 0) {
+            setLoadingState("No matching results found.");
+            return;
+        }
+
+        function escapeHtml(value) {
+            return String(value || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        const html = groups.map((group) => {
+            const items = Array.isArray(group.items) ? group.items : [];
+            const itemHtml = items.map((item) => `
+                <a class="global-search-item" href="${escapeHtml(item.href || '#')}">
+                    <div class="global-search-item-title">${escapeHtml(item.title || 'Result')}</div>
+                    <div class="global-search-item-subtitle">${escapeHtml(item.subtitle || '')}</div>
+                    <div class="global-search-item-meta">${escapeHtml(item.meta || '')}</div>
+                </a>
+            `).join("");
+            return `
+                <div class="global-search-group">
+                    <div class="global-search-group-head">
+                        <div class="global-search-group-label-wrap">
+                            <div class="global-search-group-label">${escapeHtml(group.label || 'Results')}</div>
+                            ${group.hint ? `<div class="global-search-group-hint">${escapeHtml(group.hint)}</div>` : ""}
+                        </div>
+                        ${group.view_all_href ? `<a class="global-search-group-link" href="${escapeHtml(group.view_all_href)}">View all</a>` : ""}
+                    </div>
+                    ${itemHtml}
+                </div>
+            `;
+        }).join("");
+
+        panel.hidden = false;
+        panel.innerHTML = html;
+        setActiveItem(0);
+    }
+
+    async function runSearch() {
+        const query = (input.value || "").trim();
+        if (query.length < 2) {
+            closePanel();
+            return;
+        }
+
+        if (activeController) {
+            activeController.abort();
+        }
+        activeController = new AbortController();
+        setLoadingState("Searching...");
+
+        try {
+            const response = await fetch(`/api/global-search?q=${encodeURIComponent(query)}`, {
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" },
+                signal: activeController.signal
+            });
+            if (!response.ok) {
+                throw new Error(`Search failed with ${response.status}`);
+            }
+            const payload = await response.json();
+            renderGroups(payload && payload.groups);
+        } catch (err) {
+            if (err && err.name === "AbortError") {
+                return;
+            }
+            setLoadingState("Search is temporarily unavailable.");
+        }
+    }
+
+    input.addEventListener("input", function () {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(runSearch, 180);
+    });
+
+    input.addEventListener("focus", function () {
+        if ((input.value || "").trim().length >= 2) {
+            runSearch();
+        }
+    });
+
+    input.addEventListener("keydown", function (event) {
+        const items = getItems();
+        if (event.key === "Escape") {
+            closePanel();
+            input.blur();
+            return;
+        }
+        if (event.key === "ArrowDown") {
+            if (panel.hidden) {
+                runSearch();
+                return;
+            }
+            if (items.length) {
+                event.preventDefault();
+                setActiveItem(activeIndex + 1);
+            }
+            return;
+        }
+        if (event.key === "ArrowUp") {
+            if (items.length) {
+                event.preventDefault();
+                setActiveItem(activeIndex <= 0 ? 0 : activeIndex - 1);
+            }
+            return;
+        }
+        if (event.key === "Enter") {
+            const targetItem = items[activeIndex] || items[0];
+            if (targetItem) {
+                event.preventDefault();
+                window.location.assign(targetItem.getAttribute("href"));
+            }
+        }
+    });
+
+    panel.addEventListener("mouseover", function (event) {
+        const item = event.target.closest(".global-search-item");
+        if (!item) return;
+        const items = getItems();
+        const index = items.indexOf(item);
+        if (index >= 0) {
+            setActiveItem(index);
+        }
+    });
+
+    document.addEventListener("click", function (event) {
+        if (!shell.contains(event.target)) {
+            closePanel();
+        }
+    });
+
+    document.addEventListener("keydown", function (event) {
+        const tagName = document.activeElement && document.activeElement.tagName
+            ? document.activeElement.tagName.toUpperCase()
+            : "";
+        const isShortcutK = event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey);
+        if ((event.key === "/" && !event.ctrlKey && !event.metaKey) || isShortcutK) {
+            if (event.altKey) return;
+            if (tagName !== "INPUT" && tagName !== "TEXTAREA" && tagName !== "SELECT") {
+                event.preventDefault();
+                input.focus();
+                input.select();
+            }
+        }
+    });
 })();
 </script>
 <script>
@@ -1052,5 +1444,6 @@
     autoDismissFlashMessages();
 })();
 </script>
+<script src="{{ url_for('static', filename='app_premium.js') }}"></script>
 </body>
 </html>

@@ -1,8 +1,9 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory
-from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, g
+from models import db, User, Medicine, StockHistory, Invoice, InvoiceItem, Return, ReturnItem, HoldBill, Patient, Appointment, Vendor, VendorPurchase, VendorPurchaseItem, SalesAllocation, VendorNote, VendorNoteItem, VendorNoteAllocation, VendorLedgerEntry, AuditLog, LoginSecurityEvent
 from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
+import json
 import webbrowser
 import threading
 import os
@@ -13,11 +14,44 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, or_, inspect
+from sqlalchemy import text, or_, and_, inspect
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+try:
+    from flask_migrate import Migrate
+except Exception:  # pragma: no cover
+    Migrate = None
+
+from routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
+from routes.appointments import render_appointments_page
+from routes.billing import prepare_billing_context
+from routes.reports import render_reports_page
+from routes.vendors import render_vendor_reports_page
+from services.background_jobs import init_background_jobs, queue_report_export_job
+from services.infra_safety import (
+    build_backup_snapshot,
+    build_restore_commands,
+    ensure_runtime_indexes,
+    get_backup_summary,
+    list_backup_snapshots,
+    restore_backup_snapshot,
+)
+from services.monitoring import configure_monitoring
+from services.validation import (
+    ACCESS_PROFILE_PRESETS,
+    USER_PERMISSION_FIELDS,
+    derive_access_profile,
+    validate_billing_submission,
+    validate_mark_paid_transition,
+    validate_report_request,
+    validate_return_submission,
+    validate_user_form,
+)
 
 def open_browser():
-    webbrowser.open("http://127.0.0.1:5000")
+    try:
+        webbrowser.open("http://127.0.0.1:5000")
+    except Exception:
+        pass
 
 IS_PROD = bool(
     os.environ.get("RAILWAY_ENVIRONMENT")
@@ -29,11 +63,16 @@ IS_PROD = bool(
 )
 IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
 
-if os.environ.get("WERKZEUG_RUN_MAIN") == "true" and not IS_PROD:
+if (
+    os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    and not IS_PROD
+    and str(os.environ.get("AUTO_OPEN_BROWSER", "1")).strip().lower() not in {"0", "false", "no", "off"}
+):
     threading.Timer(1, open_browser).start()
 
 
 APP_TIMEZONE = (os.environ.get("APP_TIMEZONE") or "Asia/Kolkata").strip() or "Asia/Kolkata"
+APP_ENV = (os.environ.get("APP_ENV") or ("production" if IS_PROD else "local")).strip().lower() or "local"
 
 
 def clinic_now():
@@ -53,6 +92,26 @@ app = Flask(
     static_url_path="/static"
 )
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
+try:
+    max_upload_mb = max(1, int(str(os.environ.get("MAX_CONTENT_LENGTH_MB", "12")).strip()))
+except (TypeError, ValueError):
+    max_upload_mb = 12
+try:
+    session_idle_minutes = max(5, int(str(os.environ.get("SESSION_IDLE_MINUTES", "90")).strip()))
+except (TypeError, ValueError):
+    session_idle_minutes = 90
+try:
+    session_absolute_hours = max(1, int(str(os.environ.get("SESSION_ABSOLUTE_HOURS", "24")).strip()))
+except (TypeError, ValueError):
+    session_absolute_hours = 24
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = IS_PROD
+app.config["PREFERRED_URL_SCHEME"] = "https" if IS_PROD else "http"
+app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
+app.config["JSON_SORT_KEYS"] = False
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=session_absolute_hours)
+app.config["APP_ENV"] = APP_ENV
 
 ASYNC_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
@@ -94,14 +153,30 @@ def resolve_database_url(default_db):
     return default_db
 
 # ---------------- UPLOADS ----------------
-UPLOAD_FOLDER = ensure_writable_dir(
-    os.path.join(APP_BASE_DIR, "static", "uploads", "vendors"),
-    os.path.join(TMP_BASE_DIR, "uploads", "vendors")
+UPLOAD_STORAGE_ROOT = os.path.abspath(
+    (os.environ.get("APP_STORAGE_ROOT") or os.path.join(APP_BASE_DIR, "static", "uploads")).strip()
 )
-VENDOR_BILL_UPLOAD_FOLDER = ensure_writable_dir(
-    os.path.join(APP_BASE_DIR, "static", "uploads", "vendor_bills"),
-    os.path.join(TMP_BASE_DIR, "uploads", "vendor_bills")
+
+
+def resolve_upload_dir(*parts):
+    return ensure_writable_dir(
+        os.path.join(UPLOAD_STORAGE_ROOT, *parts),
+        os.path.join(TMP_BASE_DIR, "uploads", *parts)
+    )
+
+
+UPLOAD_FOLDER = resolve_upload_dir("vendors")
+VENDOR_BILL_UPLOAD_FOLDER = resolve_upload_dir("vendor_bills")
+BACKUP_ROOT = os.path.abspath(
+    (os.environ.get("APP_BACKUP_ROOT") or os.path.join(app.instance_path, "backups")).strip()
 )
+app.config["APP_BASE_DIR"] = APP_BASE_DIR
+app.config["APP_STORAGE_ROOT"] = UPLOAD_STORAGE_ROOT
+app.config["BACKUP_ROOT"] = BACKUP_ROOT
+app.config["INFRA_UPLOAD_DIRECTORIES"] = {
+    "vendor_uploads": UPLOAD_FOLDER,
+    "vendor_bill_uploads": VENDOR_BILL_UPLOAD_FOLDER,
+}
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 
 def allowed_file(filename):
@@ -244,6 +319,1020 @@ def to_float_safe(val, default=0.0):
         return float(str(val).strip())
     except (TypeError, ValueError):
         return default
+
+def serialize_json_text(payload):
+    if payload in (None, "", [], {}):
+        return ""
+    try:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        return json.dumps({"value": str(payload)}, ensure_ascii=False, sort_keys=True)
+
+def parse_json_text(payload):
+    raw = (payload or "").strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"raw": raw}
+
+
+def get_release_identifier():
+    return (
+        os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+        or os.environ.get("RENDER_GIT_COMMIT")
+        or os.environ.get("VERCEL_GIT_COMMIT_SHA")
+        or os.environ.get("SOURCE_VERSION")
+        or "local"
+    )
+
+
+def mask_database_target(engine_url):
+    try:
+        backend = engine_url.get_backend_name()
+    except Exception:
+        return "unknown"
+
+    if backend == "sqlite":
+        database_name = os.path.basename(engine_url.database or "") or "pharmacy.db"
+        return database_name
+
+    host = (getattr(engine_url, "host", "") or "").strip()
+    port = getattr(engine_url, "port", None)
+    database_name = (getattr(engine_url, "database", "") or "").strip()
+    host_part = host or backend
+    if port:
+        host_part = f"{host_part}:{port}"
+    if database_name:
+        return f"{host_part}/{database_name}"
+    return host_part
+
+
+def format_bytes(size_value):
+    size = float(size_value or 0)
+    units = ("B", "KB", "MB", "GB", "TB")
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    return f"{size:.2f} {units[unit_index]}"
+
+
+def summarize_directory(path_value):
+    summary = {
+        "path": path_value,
+        "available": os.path.isdir(path_value),
+        "file_count": 0,
+        "total_bytes": 0,
+        "total_size": "0 B",
+        "latest_file_at": None
+    }
+    if not summary["available"]:
+        return summary
+
+    latest_mtime = None
+    for root, _dirs, files in os.walk(path_value):
+        for name in files:
+            file_path = os.path.join(root, name)
+            try:
+                stat_result = os.stat(file_path)
+            except OSError:
+                continue
+            summary["file_count"] += 1
+            summary["total_bytes"] += int(stat_result.st_size or 0)
+            if latest_mtime is None or stat_result.st_mtime > latest_mtime:
+                latest_mtime = stat_result.st_mtime
+    summary["total_size"] = format_bytes(summary["total_bytes"])
+    if latest_mtime is not None:
+        summary["latest_file_at"] = datetime.fromtimestamp(latest_mtime).strftime("%d-%m-%Y %I:%M %p")
+    return summary
+
+
+def current_client_ip():
+    forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return (request.headers.get("X-Real-IP") or request.remote_addr or "").strip() or "unknown"
+
+
+def current_user_agent():
+    return (request.headers.get("User-Agent") or "").strip()[:255]
+
+
+def active_user_query():
+    return User.query.filter(User.deleted_at.is_(None), User.is_active.is_(True))
+
+
+def active_vendor_query():
+    return Vendor.query.filter(Vendor.deleted_at.is_(None))
+
+
+def active_hold_bill_query():
+    return HoldBill.query.filter(
+        or_(HoldBill.is_deleted.is_(False), HoldBill.is_deleted.is_(None))
+    )
+
+
+def active_appointment_query():
+    return Appointment.query.filter(
+        or_(Appointment.is_deleted.is_(False), Appointment.is_deleted.is_(None))
+    )
+
+
+def active_user_by_id(user_id):
+    if not user_id:
+        return None
+    return active_user_query().filter(User.id == user_id).first()
+
+
+def log_login_security_event(*, username="", user=None, outcome="", reason="", is_suspicious=False):
+    try:
+        db.session.add(
+            LoginSecurityEvent(
+                username=(username or (user.username if user else "") or "").strip()[:50],
+                user_id=(user.id if user else None),
+                ip_address=current_client_ip(),
+                user_agent=current_user_agent(),
+                outcome=(outcome or "").strip().upper()[:30],
+                reason=(reason or "").strip()[:255],
+                is_suspicious=bool(is_suspicious),
+            )
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Failed to log login security event")
+
+
+def failed_login_attempts_recent(username="", ip_address=""):
+    username = (username or "").strip()
+    ip_address = (ip_address or "").strip()
+    window_started = datetime.utcnow() - timedelta(
+        minutes=max(5, int(str(os.environ.get("SUSPICIOUS_LOGIN_WINDOW_MINUTES", "15")).strip() or 15))
+    )
+    query = LoginSecurityEvent.query.filter(
+        LoginSecurityEvent.outcome == "FAILED",
+        LoginSecurityEvent.created_at >= window_started,
+    )
+    filters = []
+    if username:
+        filters.append(LoginSecurityEvent.username == username)
+    if ip_address:
+        filters.append(LoginSecurityEvent.ip_address == ip_address)
+    if filters:
+        query = query.filter(or_(*filters))
+    return query.count()
+
+
+def run_system_health_checks(include_counts=False):
+    release_id = get_release_identifier()
+    backup_summary = get_backup_summary(app)
+    suspicious_since = datetime.utcnow() - timedelta(hours=24)
+    payload = {
+        "status": "ok",
+        "checked_at": clinic_now().isoformat(),
+        "release": release_id,
+        "environment": APP_ENV,
+        "timezone": APP_TIMEZONE,
+        "database": {
+            "ok": True,
+            "backend": "unknown",
+            "target": "unknown",
+            "latency_ms": None,
+            "error": ""
+        },
+        "storage": {
+            "vendor_uploads": summarize_directory(UPLOAD_FOLDER),
+            "vendor_bill_uploads": summarize_directory(VENDOR_BILL_UPLOAD_FOLDER),
+            "root_path": UPLOAD_STORAGE_ROOT
+        },
+        "backups": backup_summary,
+        "security": {
+            "suspicious_logins_24h": LoginSecurityEvent.query.filter(
+                LoginSecurityEvent.is_suspicious.is_(True),
+                LoginSecurityEvent.created_at >= suspicious_since,
+            ).count(),
+            "failed_logins_24h": LoginSecurityEvent.query.filter(
+                LoginSecurityEvent.outcome == "FAILED",
+                LoginSecurityEvent.created_at >= suspicious_since,
+            ).count(),
+        },
+    }
+
+    try:
+        engine_url = db.engine.url
+        payload["database"]["backend"] = engine_url.get_backend_name()
+        payload["database"]["target"] = mask_database_target(engine_url)
+        probe_started = datetime.utcnow()
+        db.session.execute(text("SELECT 1"))
+        probe_elapsed = datetime.utcnow() - probe_started
+        payload["database"]["latency_ms"] = round(probe_elapsed.total_seconds() * 1000, 2)
+    except Exception as exc:
+        payload["status"] = "degraded"
+        payload["database"]["ok"] = False
+        payload["database"]["error"] = str(exc)
+
+    if not payload["storage"]["vendor_uploads"]["available"] or not payload["storage"]["vendor_bill_uploads"]["available"]:
+        payload["status"] = "degraded"
+
+    if include_counts:
+        today_local = clinic_now().date()
+        payload["counts"] = {
+            "users": active_user_query().count(),
+            "patients": Patient.query.count(),
+            "appointments": active_appointment_query().count(),
+            "invoices": Invoice.query.count(),
+            "returns": Return.query.count(),
+            "medicines": Medicine.query.count(),
+            "active_medicines": Medicine.query.filter(Medicine.is_active.is_(True)).count(),
+            "low_stock_medicines": Medicine.query.filter(Medicine.qty <= Medicine.reorder_level).count(),
+            "vendors": active_vendor_query().count(),
+            "audit_events": AuditLog.query.count(),
+            "today_invoices": Invoice.query.filter(db.func.date(Invoice.created_at) == today_local).count(),
+            "today_appointments": active_appointment_query().filter(Appointment.appointment_date == today_local).count()
+        }
+
+    return payload
+
+
+def build_upgrade_tracker():
+    return [
+        {
+            "title": "Already Live In App",
+            "items": [
+                "Patient profile, customer directory, and linked visit history",
+                "Live queue board with token flow for appointments",
+                "Global search across patient, medicine, invoice, and appointment",
+                "Audit logs with before/after change snapshots",
+                "Medicine, profit, and appointment reporting exports",
+                "Role-based access controls for medicines, reports, invoices, and users"
+            ]
+        },
+        {
+            "title": "Upgraded In This Pass",
+            "items": [
+                "Health and readiness endpoints for deployment monitoring",
+                "Admin System Center with storage, database, and release diagnostics",
+                "Automated smoke-test base for future safe changes",
+                "Operational roadmap documented inside the repository"
+            ]
+        },
+        {
+            "title": "Next Pro Phases",
+            "items": [
+                "Patient credit ledger and due collection workflow",
+                "Scheduled backups, restore drill, and release checklist",
+                "WhatsApp reminder automation and refill nudges",
+                "Chart-based analytics dashboard and deeper stock forecasting",
+                "Modular route/service split plus formal database migrations"
+            ]
+        }
+    ]
+
+
+def storage_datetime_to_local(value):
+    if not value:
+        return None
+    tzinfo = get_clinic_tzinfo()
+    if not tzinfo:
+        return value
+    try:
+        return value.replace(tzinfo=timezone.utc).astimezone(tzinfo)
+    except Exception:
+        return value
+
+
+def storage_datetime_to_local_date(value):
+    local_dt = storage_datetime_to_local(value)
+    return local_dt.date() if local_dt else None
+
+
+def build_dashboard_sales_trend(days=7):
+    days = max(3, min(to_int_safe(days, 7), 31))
+    end_date = clinic_now().date()
+    start_date = end_date - timedelta(days=days - 1)
+    start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
+
+    ordered_days = [start_date + timedelta(days=offset) for offset in range(days)]
+    bucket_map = {
+        day_key: {
+            "date": day_key.isoformat(),
+            "label": day_key.strftime("%d %b"),
+            "sales": 0.0,
+            "returns": 0.0,
+            "net": 0.0,
+            "height_pct": 0
+        }
+        for day_key in ordered_days
+    }
+
+    invoices = Invoice.query.filter(
+        Invoice.created_at >= start_bound,
+        Invoice.created_at < end_bound
+    ).all()
+    for invoice in invoices:
+        local_day = storage_datetime_to_local_date(invoice.created_at)
+        if local_day in bucket_map:
+            bucket_map[local_day]["sales"] += to_float(invoice.total)
+
+    returns = Return.query.filter(
+        Return.created_at >= start_bound,
+        Return.created_at < end_bound,
+        Return.is_cancelled == False
+    ).all()
+    for return_bill in returns:
+        local_day = storage_datetime_to_local_date(return_bill.created_at)
+        if local_day in bucket_map:
+            bucket_map[local_day]["returns"] += to_float(return_bill.total_refund)
+
+    max_value = 0.0
+    points = []
+    for day_key in ordered_days:
+        bucket = bucket_map[day_key]
+        bucket["sales"] = round(bucket["sales"], 2)
+        bucket["returns"] = round(bucket["returns"], 2)
+        bucket["net"] = round(bucket["sales"] - bucket["returns"], 2)
+        max_value = max(max_value, bucket["net"])
+        points.append(bucket)
+
+    for bucket in points:
+        if bucket["net"] <= 0 or max_value <= 0:
+            bucket["height_pct"] = 8 if bucket["net"] > 0 else 0
+        else:
+            bucket["height_pct"] = max(12, int(round((bucket["net"] / max_value) * 100)))
+    return points
+
+
+def build_dashboard_appointment_trend(days=7):
+    days = max(3, min(to_int_safe(days, 7), 31))
+    end_date = clinic_now().date()
+    start_date = end_date - timedelta(days=days - 1)
+    ordered_days = [start_date + timedelta(days=offset) for offset in range(days)]
+    bucket_map = {
+        day_key: {
+            "date": day_key.isoformat(),
+            "label": day_key.strftime("%d %b"),
+            "booked": 0,
+            "completed": 0,
+            "cancelled": 0,
+            "booked_height_pct": 0,
+            "completed_height_pct": 0
+        }
+        for day_key in ordered_days
+    }
+
+    appointments = active_appointment_query().filter(
+        Appointment.appointment_date >= start_date,
+        Appointment.appointment_date <= end_date
+    ).all()
+    for appointment in appointments:
+        day_key = appointment.appointment_date
+        if day_key not in bucket_map:
+            continue
+        bucket_map[day_key]["booked"] += 1
+        normalized_status = (appointment.status or "BOOKED").strip().upper()
+        if normalized_status == "COMPLETED":
+            bucket_map[day_key]["completed"] += 1
+        elif normalized_status == "CANCELLED":
+            bucket_map[day_key]["cancelled"] += 1
+
+    max_count = 0
+    points = []
+    for day_key in ordered_days:
+        bucket = bucket_map[day_key]
+        max_count = max(max_count, bucket["booked"], bucket["completed"])
+        points.append(bucket)
+
+    for bucket in points:
+        if max_count <= 0:
+            bucket["booked_height_pct"] = 0
+            bucket["completed_height_pct"] = 0
+            continue
+        bucket["booked_height_pct"] = max(10, int(round((bucket["booked"] / max_count) * 100))) if bucket["booked"] else 0
+        bucket["completed_height_pct"] = max(10, int(round((bucket["completed"] / max_count) * 100))) if bucket["completed"] else 0
+    return points
+
+
+def build_dashboard_dead_stock(limit=5, dormant_days=60):
+    limit = max(1, min(to_int_safe(limit, 5), 12))
+    dormant_days = max(30, min(to_int_safe(dormant_days, 60), 365))
+    end_date = clinic_now().date()
+    start_date = end_date - timedelta(days=dormant_days - 1)
+
+    medicine_data, _errors = build_medicine_report_data(
+        start_date.isoformat(),
+        end_date.isoformat(),
+        top_n=max(limit, 10)
+    )
+    dormant_rows = {}
+    for row in medicine_data.get("medicine_summary") or []:
+        if to_int_safe(row.get("current_stock"), 0) <= 0:
+            continue
+        if to_float_safe(row.get("net_sold_qty"), 0) > 0:
+            continue
+        dormant_rows[(row.get("medicine") or "").strip().upper()] = {
+            "name": (row.get("medicine") or "").strip(),
+            "qty": to_int_safe(row.get("current_stock"), 0),
+            "blocked_value": 0.0,
+            "days_without_sale": dormant_days
+        }
+
+    if not dormant_rows:
+        return []
+
+    med_name_by_id = {
+        med.id: (med.name or "").strip()
+        for med in Medicine.query.with_entities(Medicine.id, Medicine.name).all()
+    }
+    purchase_items = VendorPurchaseItem.query.filter(
+        db.func.coalesce(VendorPurchaseItem.remaining_qty, 0) > 0
+    ).all()
+    for item in purchase_items:
+        med_name = (item.medicine_name or med_name_by_id.get(item.medicine_id) or "").strip().upper()
+        if med_name in dormant_rows:
+            dormant_rows[med_name]["blocked_value"] += (
+                to_int_safe(item.remaining_qty, 0) * to_float_safe(item.purchase_rate, 0)
+            )
+
+    rows = list(dormant_rows.values())
+    for row in rows:
+        row["blocked_value"] = round(row["blocked_value"], 2)
+    rows.sort(key=lambda row: (row["blocked_value"], row["qty"], row["name"].lower()), reverse=True)
+    return rows[:limit]
+
+
+def build_dashboard_top_medicines(limit=5, period_days=30):
+    limit = max(1, min(to_int_safe(limit, 5), 12))
+    period_days = max(7, min(to_int_safe(period_days, 30), 120))
+    end_date = clinic_now().date()
+    start_date = end_date - timedelta(days=period_days - 1)
+    medicine_data, _errors = build_medicine_report_data(
+        start_date.isoformat(),
+        end_date.isoformat(),
+        top_n=max(limit, 10)
+    )
+    rows = [row for row in (medicine_data.get("fast_movers") or []) if to_float_safe(row.get("sales_value"), 0) > 0]
+    rows = rows[:limit]
+    max_sales = max((to_float_safe(row.get("sales_value"), 0) for row in rows), default=0.0)
+    result = []
+    for row in rows:
+        sales_value = to_float_safe(row.get("sales_value"), 0)
+        result.append({
+            "name": (row.get("medicine") or "").strip(),
+            "qty": to_int_safe(row.get("net_sold_qty"), 0),
+            "sales_value": round(sales_value, 2),
+            "net_profit": round(to_float_safe(row.get("net_profit"), 0), 2),
+            "bar_pct": max(12, int(round((sales_value / max_sales) * 100))) if max_sales > 0 else 0
+        })
+    return result
+
+def is_truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+def compact_display_value(value, limit=56):
+    if value in (None, "", [], {}):
+        return "-"
+    if isinstance(value, bool):
+        text = "Yes" if value else "No"
+    elif isinstance(value, float):
+        text = f"{value:.2f}".rstrip("0").rstrip(".")
+    elif isinstance(value, Decimal):
+        text = f"{float(value):.2f}".rstrip("0").rstrip(".")
+    elif isinstance(value, (int,)):
+        text = str(value)
+    elif isinstance(value, datetime):
+        text = value.strftime("%d-%m-%Y %I:%M %p")
+    elif isinstance(value, date):
+        text = value.strftime("%d-%m-%Y")
+    elif isinstance(value, time):
+        text = value.strftime("%I:%M %p")
+    elif isinstance(value, dict):
+        keys = [str(key).replace("_", " ").title() for key in list(value.keys())[:3]]
+        text = ", ".join(keys)
+        if len(value) > 3:
+            text = f"{text} +{len(value) - 3} more"
+    elif isinstance(value, (list, tuple, set)):
+        items = [compact_display_value(item, limit=18) for item in list(value)[:3]]
+        text = ", ".join(item for item in items if item and item != "-")
+        if len(value) > 3:
+            text = f"{text} +{len(value) - 3} more"
+    else:
+        text = str(value).strip()
+    if not text:
+        return "-"
+    if len(text) > limit:
+        return text[:limit - 3] + "..."
+    return text
+
+def classify_audit_action(action):
+    normalized = (action or "").strip().lower()
+    if not normalized:
+        return "OTHER"
+    if "delete" in normalized or "remove" in normalized:
+        return "DELETE"
+    if (
+        "status" in normalized
+        or "paid" in normalized
+        or "cancel" in normalized
+        or "posted" in normalized
+        or "restored" in normalized
+    ):
+        return "STATUS"
+    if (
+        "create" in normalized
+        or "added" in normalized
+        or "booked" in normalized
+        or normalized.startswith("new ")
+    ):
+        return "CREATE"
+    if "update" in normalized or "edit" in normalized or "change" in normalized:
+        return "UPDATE"
+    return "OTHER"
+
+def build_audit_change_rows(before_data, after_data, limit=8):
+    if isinstance(before_data, dict) and isinstance(after_data, dict):
+        changes = []
+        ordered_keys = []
+        for key in list(before_data.keys()) + list(after_data.keys()):
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+        for key in ordered_keys:
+            before_value = before_data.get(key)
+            after_value = after_data.get(key)
+            if serialize_json_text(before_value) == serialize_json_text(after_value):
+                continue
+            changes.append({
+                "field": str(key).replace("_", " ").title(),
+                "before": compact_display_value(before_value),
+                "after": compact_display_value(after_value)
+            })
+        return changes[:limit], len(changes)
+
+    if before_data and not after_data:
+        return [{
+            "field": "Deleted Record",
+            "before": compact_display_value(before_data),
+            "after": "-"
+        }], 1
+
+    if after_data and not before_data:
+        return [{
+            "field": "Created Record",
+            "before": "-",
+            "after": compact_display_value(after_data)
+        }], 1
+
+    if before_data or after_data:
+        return [{
+            "field": "Snapshot",
+            "before": compact_display_value(before_data),
+            "after": compact_display_value(after_data)
+        }], 1
+
+    return [], 0
+
+def resolve_patient_directory_match(patient_lookup, mobile_lookup, name_lookup, patient_id=None, mobile="", patient_name=""):
+    if patient_id in patient_lookup:
+        return patient_lookup[patient_id]
+    mobile_digits = normalize_patient_mobile(mobile)
+    if mobile_digits and mobile_digits in mobile_lookup:
+        return patient_lookup.get(mobile_lookup[mobile_digits])
+    normalized_name = (patient_name or "").strip().lower()
+    if normalized_name and normalized_name in name_lookup:
+        return patient_lookup.get(name_lookup[normalized_name])
+    return None
+
+def build_customer_directory_rows(patients):
+    rows = []
+    if not patients:
+        return rows
+
+    patient_lookup = {}
+    mobile_lookup = {}
+    name_lookup = {}
+    patient_ids = []
+    mobile_values = []
+    name_values = []
+
+    for patient in patients:
+        row = {
+            "patient": patient,
+            "appointment_count": 0,
+            "invoice_count": 0,
+            "total_billed": 0.0,
+            "last_appointment_at": None,
+            "last_invoice_at": None,
+            "last_activity_at": patient.updated_at,
+        }
+        rows.append(row)
+        patient_lookup[patient.id] = row
+        patient_ids.append(patient.id)
+
+        mobile_digits = normalize_patient_mobile(patient.mobile)
+        if mobile_digits and mobile_digits not in mobile_lookup:
+            mobile_lookup[mobile_digits] = patient.id
+            mobile_values.append(mobile_digits)
+
+        normalized_name = (patient.name or "").strip().lower()
+        if normalized_name and normalized_name not in name_lookup:
+            name_lookup[normalized_name] = patient.id
+            name_values.append(normalized_name)
+
+    appointment_conditions = []
+    if patient_ids:
+        appointment_conditions.append(Appointment.patient_id.in_(patient_ids))
+    if mobile_values:
+        appointment_conditions.append(Appointment.mobile.in_(mobile_values))
+    if name_values:
+        appointment_conditions.append(
+            db.func.lower(db.func.coalesce(Appointment.patient_name, "")).in_(name_values)
+        )
+
+    if appointment_conditions:
+        appointment_rows = active_appointment_query().filter(or_(*appointment_conditions)).with_entities(
+            Appointment.patient_id,
+            Appointment.patient_name,
+            Appointment.mobile,
+            Appointment.appointment_date,
+            Appointment.appointment_time
+        ).all()
+        for appt in appointment_rows:
+            row = resolve_patient_directory_match(
+                patient_lookup,
+                mobile_lookup,
+                name_lookup,
+                patient_id=appt.patient_id,
+                mobile=appt.mobile,
+                patient_name=appt.patient_name
+            )
+            if not row:
+                continue
+            row["appointment_count"] += 1
+            if appt.appointment_date:
+                occurred_at = datetime.combine(appt.appointment_date, appt.appointment_time or time.min)
+                if not row["last_appointment_at"] or occurred_at > row["last_appointment_at"]:
+                    row["last_appointment_at"] = occurred_at
+                if not row["last_activity_at"] or occurred_at > row["last_activity_at"]:
+                    row["last_activity_at"] = occurred_at
+
+    invoice_conditions = []
+    if patient_ids:
+        invoice_conditions.append(Invoice.patient_id.in_(patient_ids))
+    if mobile_values:
+        invoice_conditions.append(Invoice.mobile.in_(mobile_values))
+    if name_values:
+        invoice_conditions.append(
+            db.func.lower(db.func.coalesce(Invoice.customer, "")).in_(name_values)
+        )
+
+    if invoice_conditions:
+        invoice_rows = Invoice.query.filter(or_(*invoice_conditions)).with_entities(
+            Invoice.patient_id,
+            Invoice.customer,
+            Invoice.mobile,
+            Invoice.total,
+            Invoice.created_at
+        ).all()
+        for invoice in invoice_rows:
+            row = resolve_patient_directory_match(
+                patient_lookup,
+                mobile_lookup,
+                name_lookup,
+                patient_id=invoice.patient_id,
+                mobile=invoice.mobile,
+                patient_name=invoice.customer
+            )
+            if not row:
+                continue
+            row["invoice_count"] += 1
+            row["total_billed"] += round(to_float_safe(invoice.total, 0), 2)
+            if invoice.created_at and (not row["last_invoice_at"] or invoice.created_at > row["last_invoice_at"]):
+                row["last_invoice_at"] = invoice.created_at
+            if invoice.created_at and (not row["last_activity_at"] or invoice.created_at > row["last_activity_at"]):
+                row["last_activity_at"] = invoice.created_at
+
+    for row in rows:
+        row["total_billed"] = round(row["total_billed"], 2)
+        row["has_mobile"] = bool((row["patient"].mobile or "").strip())
+        row["has_notes"] = bool((row["patient"].notes or "").strip())
+
+    return rows
+
+def build_medicine_audit_snapshot(med):
+    if not med:
+        return None
+    return {
+        "id": med.id,
+        "name": (med.name or "").strip(),
+        "batch": (med.batch or "").strip(),
+        "expiry": med.expiry,
+        "mrp": round(to_float_safe(med.mrp, 0), 3),
+        "qty": to_int_safe(med.qty, 0),
+        "discount_percent": to_int_safe(med.discount_percent, 0),
+        "pack_type": (med.pack_type or "").strip(),
+        "pack_qty": med.pack_qty,
+        "barcode": (getattr(med, "barcode", "") or "").strip(),
+        "reorder_level": to_int_safe(getattr(med, "reorder_level", 10), 10),
+        "is_active": bool(getattr(med, "is_active", True))
+    }
+
+def build_invoice_audit_snapshot(inv):
+    if not inv:
+        return None
+    return {
+        "id": inv.id,
+        "invoice_no": (inv.invoice_no or "").strip(),
+        "patient_id": getattr(inv, "patient_id", None),
+        "customer": (inv.customer or "").strip(),
+        "mobile": (inv.mobile or "").strip(),
+        "payment_mode": (inv.payment_mode or "").strip().upper(),
+        "subtotal": round(to_float_safe(inv.subtotal, 0), 2),
+        "discount": round(to_float_safe(inv.discount, 0), 2),
+        "total": round(to_float_safe(inv.total, 0), 2),
+        "created_by": (inv.created_by or "").strip()
+    }
+
+def build_appointment_audit_snapshot(appt):
+    if not appt:
+        return None
+    return {
+        "id": appt.id,
+        "appointment_no": (appt.appointment_no or "").strip(),
+        "patient_id": appt.patient_id,
+        "patient_name": (appt.patient_name or "").strip(),
+        "mobile": (appt.mobile or "").strip(),
+        "appointment_date": appt.appointment_date.isoformat() if appt.appointment_date else "",
+        "appointment_time": appt.appointment_time.strftime("%H:%M:%S") if appt.appointment_time else "",
+        "status": (appt.status or "").strip().upper(),
+        "payment_mode": (appt.payment_mode or "").strip().upper(),
+        "payment_status": (appt.payment_status or "").strip().upper(),
+        "consultation_fee": round(to_float_safe(appt.consultation_fee, 0), 2),
+        "doctor_discount": round(to_float_safe(appt.doctor_discount, 0), 2)
+    }
+
+def build_patient_audit_snapshot(patient):
+    if not patient:
+        return None
+    return {
+        "id": patient.id,
+        "name": (patient.name or "").strip(),
+        "mobile": (patient.mobile or "").strip(),
+        "age": patient.age,
+        "gender": (patient.gender or "").strip().upper(),
+        "notes": (patient.notes or "").strip()
+    }
+
+def can_manage_patient_records(user=None):
+    actor = user
+    if actor is None:
+        actor = active_user_by_id(session.get("user_id"))
+    if not actor:
+        return False
+    return bool(actor.role == "admin" or actor.can_invoice_action)
+
+def normalize_patient_name(value):
+    return " ".join(str(value or "").strip().lower().split())
+
+def patient_name_expression(column):
+    return db.func.lower(db.func.trim(db.func.coalesce(column, "")))
+
+def invoice_name_expression():
+    return patient_name_expression(Invoice.customer)
+
+def appointment_name_expression():
+    return patient_name_expression(Appointment.patient_name)
+
+def patient_master_name_expression():
+    return patient_name_expression(Patient.name)
+
+def build_patient_duplicate_name_counts():
+    rows = db.session.query(
+        patient_master_name_expression().label("normalized_name"),
+        db.func.count(Patient.id)
+    ).filter(
+        db.func.length(db.func.trim(db.func.coalesce(Patient.name, ""))) > 0
+    ).group_by(
+        patient_master_name_expression()
+    ).having(
+        db.func.count(Patient.id) > 1
+    ).all()
+    return {
+        (normalized_name or "").strip(): int(count or 0)
+        for normalized_name, count in rows
+        if (normalized_name or "").strip()
+    }
+
+def build_patient_duplicate_candidates(patient, limit=8):
+    normalized_name = normalize_patient_name(getattr(patient, "name", ""))
+    if not normalized_name:
+        return []
+    rows = Patient.query.filter(
+        Patient.id != patient.id,
+        patient_master_name_expression() == normalized_name
+    ).order_by(
+        Patient.updated_at.desc(),
+        Patient.id.desc()
+    ).limit(max(1, min(to_int_safe(limit, 8), 15))).all()
+    return rows
+
+def build_patient_link_summary(patient):
+    patient_name = normalize_patient_name(patient.name)
+    patient_mobile = normalize_patient_mobile(patient.mobile)
+
+    direct_appointments = active_appointment_query().filter(Appointment.patient_id == patient.id).count()
+    direct_invoices = Invoice.query.filter(getattr(Invoice, "patient_id") == patient.id).count()
+
+    orphan_appointment_conditions = [Appointment.patient_id.is_(None)]
+    appointment_match_conditions = []
+    if patient_mobile:
+        appointment_match_conditions.append(Appointment.mobile == patient_mobile)
+    if patient_name:
+        appointment_match_conditions.append(appointment_name_expression() == patient_name)
+    if appointment_match_conditions:
+        orphan_appointment_conditions.append(or_(*appointment_match_conditions))
+        orphan_appointments = active_appointment_query().filter(and_(*orphan_appointment_conditions)).count()
+    else:
+        orphan_appointments = 0
+
+    orphan_invoice_conditions = [Invoice.patient_id.is_(None)]
+    invoice_match_conditions = []
+    if patient_mobile:
+        invoice_match_conditions.append(Invoice.mobile == patient_mobile)
+    if patient_name:
+        invoice_match_conditions.append(invoice_name_expression() == patient_name)
+    if invoice_match_conditions:
+        orphan_invoice_conditions.append(or_(*invoice_match_conditions))
+        orphan_invoices = Invoice.query.filter(and_(*orphan_invoice_conditions)).count()
+    else:
+        orphan_invoices = 0
+
+    return {
+        "linked_appointments": direct_appointments,
+        "linked_invoices": direct_invoices,
+        "orphan_appointments": orphan_appointments,
+        "orphan_invoices": orphan_invoices
+    }
+
+def relink_patient_records(patient, matching_names=None, matching_mobiles=None, source_patient_ids=None, sync_display_fields=False):
+    normalized_names = {
+        normalize_patient_name(name)
+        for name in (matching_names or [])
+        if normalize_patient_name(name)
+    }
+    patient_name = (patient.name or "").strip()
+    if normalize_patient_name(patient_name):
+        normalized_names.add(normalize_patient_name(patient_name))
+
+    normalized_mobiles = {
+        normalize_patient_mobile(mobile)
+        for mobile in (matching_mobiles or [])
+        if normalize_patient_mobile(mobile)
+    }
+    patient_mobile = normalize_patient_mobile(patient.mobile)
+    if patient_mobile:
+        normalized_mobiles.add(patient_mobile)
+
+    source_ids = {to_int_safe(source_id, 0) for source_id in (source_patient_ids or []) if to_int_safe(source_id, 0)}
+    source_ids.discard(patient.id)
+
+    appointment_conditions = [Appointment.patient_id == patient.id]
+    if source_ids:
+        appointment_conditions.append(Appointment.patient_id.in_(source_ids))
+    if normalized_mobiles:
+        appointment_conditions.append(Appointment.mobile.in_(sorted(normalized_mobiles)))
+    if normalized_names:
+        appointment_conditions.append(appointment_name_expression().in_(sorted(normalized_names)))
+    appointment_rows = active_appointment_query().filter(or_(*appointment_conditions)).all() if appointment_conditions else []
+
+    invoice_conditions = [Invoice.patient_id == patient.id]
+    if source_ids:
+        invoice_conditions.append(Invoice.patient_id.in_(source_ids))
+    if normalized_mobiles:
+        invoice_conditions.append(Invoice.mobile.in_(sorted(normalized_mobiles)))
+    if normalized_names:
+        invoice_conditions.append(invoice_name_expression().in_(sorted(normalized_names)))
+    invoice_rows = Invoice.query.filter(or_(*invoice_conditions)).all() if invoice_conditions else []
+
+    appointment_relinked = 0
+    appointment_synced = 0
+    invoice_relinked = 0
+    invoice_synced = 0
+
+    for appt in appointment_rows:
+        if appt.patient_id != patient.id:
+            appt.patient_id = patient.id
+            appointment_relinked += 1
+        if sync_display_fields:
+            row_changed = False
+            appt_name_token = normalize_patient_name(appt.patient_name)
+            appt_mobile_token = normalize_patient_mobile(appt.mobile)
+            if patient_name and (appt_name_token in normalized_names or not appt_name_token):
+                if appt.patient_name != patient_name:
+                    appt.patient_name = patient_name
+                    row_changed = True
+            if patient_mobile and (appt_mobile_token in normalized_mobiles or not appt_mobile_token):
+                if appt.mobile != patient_mobile:
+                    appt.mobile = patient_mobile
+                    row_changed = True
+            if patient.age not in (None, "") and appt.age != patient.age:
+                appt.age = patient.age
+                row_changed = True
+            if (patient.gender or "").strip() and (appt.gender != patient.gender):
+                appt.gender = patient.gender
+                row_changed = True
+            if row_changed:
+                appointment_synced += 1
+
+    for invoice in invoice_rows:
+        if getattr(invoice, "patient_id", None) != patient.id:
+            invoice.patient_id = patient.id
+            invoice_relinked += 1
+        if sync_display_fields:
+            row_changed = False
+            invoice_name_token = normalize_patient_name(invoice.customer)
+            invoice_mobile_token = normalize_patient_mobile(invoice.mobile)
+            if patient_name and (invoice_name_token in normalized_names or not invoice_name_token):
+                if invoice.customer != patient_name:
+                    invoice.customer = patient_name
+                    row_changed = True
+            if patient_mobile and (invoice_mobile_token in normalized_mobiles or not invoice_mobile_token):
+                if invoice.mobile != patient_mobile:
+                    invoice.mobile = patient_mobile
+                    row_changed = True
+            if (patient.gender or "").strip() and (not (invoice.gender or "").strip() or (invoice_name_token in normalized_names)):
+                if invoice.gender != patient.gender:
+                    invoice.gender = patient.gender
+                    row_changed = True
+            if row_changed:
+                invoice_synced += 1
+
+    return {
+        "appointment_relinked": appointment_relinked,
+        "appointment_synced": appointment_synced,
+        "invoice_relinked": invoice_relinked,
+        "invoice_synced": invoice_synced
+    }
+
+def record_audit_event(action, entity_type="", entity_id=None, ref_code="", before=None, after=None, extra=None):
+    details = {}
+    if isinstance(extra, dict):
+        details.update(extra)
+    elif extra not in (None, ""):
+        details["info"] = extra
+    try:
+        details.setdefault("path", request.path)
+        details.setdefault("method", request.method)
+    except RuntimeError:
+        pass
+
+    try:
+        db.session.add(AuditLog(
+            user=session.get("username"),
+            action=(action or "").strip(),
+            entity_type=((entity_type or "").strip().upper() or None),
+            entity_id=entity_id,
+            ref_code=(ref_code or "").strip() or None,
+            before_json=serialize_json_text(before),
+            after_json=serialize_json_text(after),
+            extra_json=serialize_json_text(details)
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Audit log write failed for action=%s entity=%s", action, entity_type)
+
+def upsert_patient_from_invoice(customer_name, mobile, gender=""):
+    patient_name = (customer_name or "").strip()
+    mobile_digits = normalize_patient_mobile(mobile)
+    gender = (gender or "").strip().upper()
+
+    if not patient_name and not mobile_digits:
+        return None, mobile_digits
+
+    patient = None
+    if mobile_digits:
+        patient = Patient.query.filter_by(mobile=mobile_digits).first()
+        if not patient:
+            patient = Patient(name=patient_name or mobile_digits, mobile=mobile_digits)
+            db.session.add(patient)
+    elif patient_name:
+        patient = Patient.query.filter(
+            db.func.lower(Patient.name) == patient_name.lower()
+        ).order_by(Patient.id.desc()).first()
+        if not patient:
+            patient = Patient(name=patient_name, mobile=None)
+            db.session.add(patient)
+
+    if patient_name:
+        patient.name = patient_name
+    if mobile_digits:
+        patient.mobile = mobile_digits
+    if gender and (not patient.gender or patient.gender == "OTHER"):
+        patient.gender = gender
+    return patient, mobile_digits
 
 def find_medicine_for_hold(name, batch=""):
     if not name:
@@ -576,6 +1665,7 @@ def build_medicine_master_groups(show_archived=False):
                 "total_batches": 0,
                 "active_batches": 0,
                 "archived_batches": 0,
+                "has_barcode": False,
                 "visible_stock": 0,
                 "next_expiry": "-",
                 "next_expiry_sort": date.max,
@@ -589,6 +1679,8 @@ def build_medicine_master_groups(show_archived=False):
         expiry_display, expiry_sort = medicine_expiry_display(med.expiry)
         is_expired = bool(expiry_sort and expiry_sort < today)
         status = "Archived" if is_archived else ("Expired" if is_expired else "Active")
+        if (getattr(med, "barcode", "") or "").strip():
+            group["has_barcode"] = True
 
         group["total_batches"] += 1
         group["total_stock"] += qty
@@ -609,6 +1701,7 @@ def build_medicine_master_groups(show_archived=False):
             part.lower()
             for part in (
                 med.batch or "",
+                getattr(med, "barcode", "") or "",
                 medicine_pack_display(med),
                 expiry_display,
                 status
@@ -872,7 +1965,7 @@ def get_doctor_suggestions():
             names.add(nm)
     return sorted(names, key=lambda x: x.lower())
 
-APPOINTMENT_STATUSES = ("BOOKED", "CHECKED_IN", "COMPLETED", "CANCELLED")
+APPOINTMENT_STATUSES = ("BOOKED", "WAITING", "CHECKED_IN", "IN_CONSULTATION", "COMPLETED", "CANCELLED")
 APPOINTMENT_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD")
 APPOINTMENT_PAYMENT_STATUSES = ("PAID", "UNPAID")
 APPOINTMENT_CONSULTATION_FEES = ("600", "1000")
@@ -880,8 +1973,10 @@ APPOINTMENT_DEFAULT_DOCTOR = "GENERAL"
 APPOINTMENT_GENDERS = ("MALE", "FEMALE", "OTHER")
 
 APPOINTMENT_STATUS_FLOW = {
-    "BOOKED": {"CHECKED_IN", "COMPLETED", "CANCELLED"},
-    "CHECKED_IN": {"COMPLETED", "CANCELLED"},
+    "BOOKED": {"WAITING", "CHECKED_IN", "IN_CONSULTATION", "COMPLETED", "CANCELLED"},
+    "WAITING": {"BOOKED", "CHECKED_IN", "IN_CONSULTATION", "COMPLETED", "CANCELLED"},
+    "CHECKED_IN": {"WAITING", "IN_CONSULTATION", "COMPLETED", "CANCELLED"},
+    "IN_CONSULTATION": {"CHECKED_IN", "COMPLETED", "CANCELLED"},
     "COMPLETED": set(),
     "CANCELLED": set()
 }
@@ -1071,6 +2166,7 @@ db_url = resolve_database_url(default_db)
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
+migrate = Migrate(app, db, compare_type=True, render_as_batch=db_url.startswith("sqlite")) if Migrate else None
 AUTO_DATA_BACKFILL_ON_BOOT = env_flag("AUTO_DATA_BACKFILL_ON_BOOT", not IS_SERVERLESS)
 
 # ---------------- INIT ----------------
@@ -1101,11 +2197,26 @@ with app.app_context():
         ensure_column("user", "can_view_stock_history", "INTEGER")
         ensure_column("user", "can_view_reports", "INTEGER")
         ensure_column("user", "can_manage_users", "INTEGER")
+        ensure_column("user", "can_manage_purchases", "INTEGER")
+        ensure_column("user", "can_view_audit_logs", "INTEGER")
+        ensure_column("user", "can_view_profit_dashboard", "INTEGER")
+        ensure_column("user", "access_profile", "TEXT")
         ensure_column("user", "session_version", "INTEGER DEFAULT 0")
+        ensure_column("user", "is_active", "INTEGER DEFAULT 1")
+        ensure_column("user", "deleted_at", "TIMESTAMP")
+        ensure_column("user", "deleted_by", "TEXT")
+        ensure_column("user", "last_login_at", "TIMESTAMP")
+        ensure_column("user", "last_login_ip", "TEXT")
+        ensure_column("user", "last_login_user_agent", "TEXT")
         db.session.execute(text(
             'UPDATE "user" '
             'SET "session_version" = 0 '
             'WHERE "session_version" IS NULL'
+        ))
+        db.session.execute(text(
+            'UPDATE "user" '
+            'SET "is_active" = 1 '
+            'WHERE "is_active" IS NULL'
         ))
         db.session.commit()
 
@@ -1114,6 +2225,9 @@ with app.app_context():
         ensure_column("medicine", "company", "TEXT")
         ensure_column("medicine", "pack_type", "TEXT")
         ensure_column("medicine", "pack_qty", "INTEGER")
+        ensure_column("medicine", "barcode", "TEXT")
+        ensure_column("medicine", "reorder_level", "INTEGER DEFAULT 10")
+        ensure_column("medicine", "is_active", "INTEGER DEFAULT 1")
 
         # Vendor extra fields
         ensure_column("vendor", "shop_name", "TEXT")
@@ -1138,6 +2252,7 @@ with app.app_context():
         ensure_column("return_item", "selling_rate", "REAL")
         ensure_column("return_item", "gst_percent", "REAL")
         ensure_column("return_item", "reason", "TEXT")
+        ensure_column("invoice", "patient_id", "INTEGER")
         ensure_column("invoice_item", "cost_price", "REAL")
         ensure_column("invoice_item", "cost_amount", "REAL")
         ensure_column("return_item", "cost_price", "REAL")
@@ -1145,9 +2260,19 @@ with app.app_context():
         ensure_column("vendor_purchase_item", "remaining_qty", "INTEGER")
         ensure_column("vendor_purchase_item", "pack_type", "TEXT")
         ensure_column("vendor_purchase_item", "pack_qty", "INTEGER")
+        ensure_column("vendor_purchase_item", "barcode", "TEXT")
         ensure_column("vendor_notes", "outstanding_impact", "NUMERIC(12,4)")
         ensure_column("stock_history", "ref_table", "TEXT")
         ensure_column("stock_history", "ref_id", "INTEGER")
+        ensure_column("audit_log", "user", "TEXT")
+        ensure_column("audit_log", "action", "TEXT")
+        ensure_column("audit_log", "entity_type", "TEXT")
+        ensure_column("audit_log", "entity_id", "INTEGER")
+        ensure_column("audit_log", "ref_code", "TEXT")
+        ensure_column("audit_log", "before_json", "TEXT")
+        ensure_column("audit_log", "after_json", "TEXT")
+        ensure_column("audit_log", "extra_json", "TEXT")
+        ensure_column("audit_log", "created_at", "TIMESTAMP")
         ensure_column("appointment", "payment_mode", "TEXT")
         ensure_column("appointment", "payment_status", "TEXT")
         ensure_column("appointment", "doctor_discount", "REAL")
@@ -1158,6 +2283,14 @@ with app.app_context():
         ensure_column("appointment", "gender", "TEXT")
         ensure_column("appointment", "symptoms", "TEXT")
         ensure_column("appointment", "previous_visit_notes", "TEXT")
+        ensure_column("appointment", "is_deleted", "INTEGER DEFAULT 0")
+        ensure_column("appointment", "deleted_at", "TIMESTAMP")
+        ensure_column("appointment", "deleted_by", "TEXT")
+        ensure_column("hold_bill", "is_deleted", "INTEGER DEFAULT 0")
+        ensure_column("hold_bill", "deleted_at", "TIMESTAMP")
+        ensure_column("hold_bill", "deleted_by", "TEXT")
+        ensure_column("vendor", "deleted_at", "TIMESTAMP")
+        ensure_column("vendor", "deleted_by", "TEXT")
         if AUTO_DATA_BACKFILL_ON_BOOT:
             db.session.execute(text(
                 'UPDATE "appointment" '
@@ -1183,10 +2316,31 @@ with app.app_context():
                 'SET "consultation_fee" = 0 '
                 'WHERE "consultation_fee" IS NULL'
             ))
+            db.session.execute(text(
+                'UPDATE "medicine" '
+                'SET "reorder_level" = 10 '
+                'WHERE "reorder_level" IS NULL'
+            ))
+            db.session.execute(text(
+                'UPDATE "medicine" '
+                'SET "is_active" = 1 '
+                'WHERE "is_active" IS NULL'
+            ))
+            db.session.execute(text(
+                'UPDATE "appointment" '
+                'SET "is_deleted" = 0 '
+                'WHERE "is_deleted" IS NULL'
+            ))
+            db.session.execute(text(
+                'UPDATE "hold_bill" '
+                'SET "is_deleted" = 0 '
+                'WHERE "is_deleted" IS NULL'
+            ))
             db.session.commit()
 
             appointments_without_token = Appointment.query.filter(
-                Appointment.token_no.is_(None)
+                Appointment.token_no.is_(None),
+                Appointment.deleted_at.is_(None),
             ).order_by(
                 Appointment.appointment_date.asc(),
                 Appointment.appointment_time.asc(),
@@ -1255,11 +2409,12 @@ with app.app_context():
                 'WHERE "returned_qty" IS NULL'
             ))
             db.session.commit()
+        ensure_runtime_indexes()
     except Exception:
         # If schema upgrade fails, app should still run
         db.session.rollback()
         pass
-    if not User.query.filter_by(username="admin").first():
+    if not active_user_query().filter_by(username="admin").first():
         bootstrap_admin_password = (
             (os.environ.get("DEFAULT_ADMIN_PASSWORD") or "").strip()
             or (os.environ.get("ADMIN_PASSWORD") or "").strip()
@@ -1271,7 +2426,24 @@ with app.app_context():
                 bootstrap_admin_password
             )
         if bootstrap_admin_password:
-            admin = User(username="admin", role="admin")
+            admin = User(
+                username="admin",
+                role="admin",
+                access_profile="admin",
+                can_view_medicine=True,
+                can_add_medicine=True,
+                can_edit_medicine=True,
+                can_delete_medicine=True,
+                can_edit_invoice=True,
+                can_delete_invoice=True,
+                can_invoice_action=True,
+                can_view_stock_history=True,
+                can_view_reports=True,
+                can_manage_users=True,
+                can_manage_purchases=True,
+                can_view_audit_logs=True,
+                can_view_profit_dashboard=True
+            )
             admin.set_password(bootstrap_admin_password)
             db.session.add(admin)
             db.session.commit()
@@ -1280,19 +2452,33 @@ with app.app_context():
                 "Admin bootstrap skipped because DEFAULT_ADMIN_PASSWORD/ADMIN_PASSWORD is not set."
             )
 
+configure_monitoring(app, db, env_flag=env_flag)
+background_jobs = init_background_jobs(
+    app,
+    enabled=env_flag("ENABLE_BACKGROUND_JOBS", IS_PROD and not IS_SERVERLESS)
+)
+
 # ---------------- AUTH DECORATOR ----------------
 def set_login_session(user):
     session.clear()
+    session.permanent = True
+    now_iso = datetime.utcnow().isoformat()
     session["user_id"] = user.id
     session["session_version"] = int(user.session_version or 0)
     session["username"] = user.username
     session["role"] = user.role
+    session["login_at"] = now_iso
+    session["last_seen_at"] = now_iso
+    session["access_profile"] = getattr(user, "access_profile", "custom") or "custom"
     session["can_view_medicine"] = user.can_view_medicine
     session["can_edit_invoice"] = user.can_edit_invoice
     session["can_delete_invoice"] = user.can_delete_invoice
     session["can_view_stock_history"] = user.can_view_stock_history
     session["can_view_reports"] = user.can_view_reports
     session["can_manage_users"] = user.can_manage_users
+    session["can_manage_purchases"] = getattr(user, "can_manage_purchases", False)
+    session["can_view_audit_logs"] = getattr(user, "can_view_audit_logs", False)
+    session["can_view_profit_dashboard"] = getattr(user, "can_view_profit_dashboard", False)
     session["can_invoice_action"] = user.can_invoice_action
     session["can_add_medicine"] = user.can_add_medicine
     session["can_edit_medicine"] = user.can_edit_medicine
@@ -1305,17 +2491,82 @@ def login_required(f):
         user_id = session.get("user_id")
         if not user_id:
             return redirect("/login")
-        user = User.query.get(user_id)
+        user = active_user_by_id(user_id)
         if not user:
             session.clear()
             return redirect("/login")
+        now_utc = datetime.utcnow()
+        last_seen_raw = (session.get("last_seen_at") or "").strip()
+        if last_seen_raw:
+            try:
+                last_seen_at = datetime.fromisoformat(last_seen_raw)
+            except ValueError:
+                last_seen_at = None
+            if last_seen_at and (now_utc - last_seen_at) > timedelta(minutes=session_idle_minutes):
+                log_login_security_event(
+                    username=user.username,
+                    user=user,
+                    outcome="SESSION_EXPIRED",
+                    reason="Idle session timeout",
+                    is_suspicious=False,
+                )
+                session.clear()
+                flash("Your session expired due to inactivity. Please login again.", "warning")
+                return redirect("/login")
+        login_at_raw = (session.get("login_at") or "").strip()
+        if login_at_raw:
+            try:
+                login_at = datetime.fromisoformat(login_at_raw)
+            except ValueError:
+                login_at = None
+            if login_at and (now_utc - login_at) > timedelta(hours=session_absolute_hours):
+                log_login_security_event(
+                    username=user.username,
+                    user=user,
+                    outcome="SESSION_EXPIRED",
+                    reason="Absolute session lifetime exceeded",
+                    is_suspicious=False,
+                )
+                session.clear()
+                flash("Your session has expired. Please login again.", "warning")
+                return redirect("/login")
         session_version = int(session.get("session_version", 0))
         if session_version != int(user.session_version or 0):
+            log_login_security_event(
+                username=user.username,
+                user=user,
+                outcome="SESSION_REVOKED",
+                reason="Session version mismatch",
+                is_suspicious=False,
+            )
             session.clear()
             flash("You have been logged out from all devices. Please login again.", "warning")
             return redirect("/login")
+        g.user = user
+        session["last_seen_at"] = now_utc.isoformat()
         return f(*args, **kwargs)
     return w
+
+
+@app.route("/healthz")
+def healthz():
+    payload = run_system_health_checks(include_counts=False)
+    status_code = 200 if payload["status"] == "ok" else 503
+    return jsonify(payload), status_code
+
+
+@app.route("/readyz")
+def readyz():
+    payload = run_system_health_checks(include_counts=False)
+    database_ok = bool(payload["database"]["ok"])
+    storage_ok = all(
+        details.get("available")
+        for details in payload.get("storage", {}).values()
+        if isinstance(details, dict) and "available" in details
+    )
+    payload["ready"] = bool(database_ok and storage_ok)
+    status_code = 200 if payload["ready"] else 503
+    return jsonify(payload), status_code
 
 # ---------------- LOGIN ----------------
 @app.route("/login", methods=["GET", "POST"])
@@ -1326,10 +2577,45 @@ def login():
         if not username or not password:
             flash("Username and password are required", "danger")
             return render_template("login.html")
-        user = User.query.filter_by(username=username).first()
+        normalized_username = username.lower()
+        user = active_user_query().filter(db.func.lower(User.username) == normalized_username).first()
         if user and user.check_password(password):
+            suspicious_reason = "Login successful"
+            suspicious = False
+            request_ip = current_client_ip()
+            request_agent = current_user_agent()
+            if user.last_login_ip and user.last_login_ip != request_ip:
+                suspicious = True
+                suspicious_reason = "Successful login from a new IP address"
+            elif user.last_login_user_agent and user.last_login_user_agent != request_agent:
+                suspicious = True
+                suspicious_reason = "Successful login from a new device signature"
+            user.last_login_at = datetime.utcnow()
+            user.last_login_ip = request_ip
+            user.last_login_user_agent = request_agent
+            db.session.commit()
             set_login_session(user)
+            log_login_security_event(
+                username=user.username,
+                user=user,
+                outcome="SUCCESS",
+                reason=suspicious_reason,
+                is_suspicious=suspicious,
+            )
             return redirect("/")
+        suspicious_threshold = max(3, int(str(os.environ.get("SUSPICIOUS_LOGIN_THRESHOLD", "5")).strip() or 5))
+        failed_attempts = failed_login_attempts_recent(username, current_client_ip())
+        known_user = User.query.filter(db.func.lower(User.username) == normalized_username).first()
+        disabled_attempt = bool(known_user and (known_user.deleted_at is not None or not getattr(known_user, "is_active", True)))
+        suspicious = disabled_attempt or (failed_attempts + 1 >= suspicious_threshold)
+        failure_reason = "Attempted login to disabled user" if disabled_attempt else "Invalid credentials"
+        log_login_security_event(
+            username=username,
+            user=(known_user if known_user else None),
+            outcome="FAILED",
+            reason=failure_reason,
+            is_suspicious=suspicious,
+        )
         flash("Invalid credentials", "danger")
     return render_template("login.html")
 
@@ -1345,7 +2631,7 @@ def logout_everywhere():
     if session.get("role") != "admin":
         flash("Access denied", "danger")
         return redirect("/")
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if user:
         user.session_version = int(user.session_version or 0) + 1
         db.session.commit()
@@ -1357,7 +2643,10 @@ def logout_everywhere():
 @app.route("/change-password", methods=["GET", "POST"])
 @login_required
 def change_password():
-    user = User.query.get_or_404(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
+    if not user:
+        session.clear()
+        return redirect("/login")
 
     if request.method == "POST":
         current_password = (request.form.get("current_password") or "").strip()
@@ -1401,7 +2690,7 @@ def admin_required(f):
 def invoice_access_required(f):
     @wraps(f)
     def w(*args, **kwargs):
-        user = User.query.get(session.get("user_id"))
+        user = active_user_by_id(session.get("user_id"))
         if not user:
             flash("Access denied", "danger")
             return redirect("/")
@@ -1414,7 +2703,7 @@ def invoice_access_required(f):
 def inventory_access_required(f):
     @wraps(f)
     def w(*args, **kwargs):
-        user = User.query.get(session.get("user_id"))
+        user = active_user_by_id(session.get("user_id"))
         if not user:
             flash("Access denied", "danger")
             return redirect("/")
@@ -1423,6 +2712,7 @@ def inventory_access_required(f):
             or user.can_add_medicine
             or user.can_edit_medicine
             or user.can_delete_medicine
+            or getattr(user, "can_manage_purchases", False)
         ):
             flash("Access denied", "danger")
             return redirect("/")
@@ -1433,8 +2723,14 @@ def vendor_note_access_required(api=False):
     def decorator(f):
         @wraps(f)
         def w(*args, **kwargs):
-            user = User.query.get(session.get("user_id"))
-            allowed = bool(user and (user.role == "admin" or user.can_invoice_action))
+            user = active_user_by_id(session.get("user_id"))
+            allowed = bool(
+                user and (
+                    user.role == "admin"
+                    or user.can_invoice_action
+                    or getattr(user, "can_manage_purchases", False)
+                )
+            )
             if allowed:
                 return f(*args, **kwargs)
             if api:
@@ -1443,17 +2739,80 @@ def vendor_note_access_required(api=False):
             return redirect("/")
         return w
     return decorator
+
+
+@app.route("/system-center")
+@login_required
+@admin_required
+def system_center():
+    health = run_system_health_checks(include_counts=True)
+    return render_template(
+        "system_center.html",
+        system_health=health,
+        upgrade_tracker=build_upgrade_tracker(),
+        release_identifier=get_release_identifier(),
+        max_upload_mb=max_upload_mb,
+        background_job_status=(background_jobs.snapshot() if background_jobs else {}),
+        backup_snapshots=list_backup_snapshots(app, limit=8),
+        restore_commands=build_restore_commands(app, "latest"),
+        recent_suspicious_logins=LoginSecurityEvent.query.filter(
+            LoginSecurityEvent.is_suspicious.is_(True)
+        ).order_by(LoginSecurityEvent.created_at.desc()).limit(8).all(),
+        migrate_enabled=bool(migrate),
+        sentry_configured=bool((os.environ.get("SENTRY_DSN") or "").strip())
+    )
+
+
+@app.route("/system-center/backups/run", methods=["POST"])
+@login_required
+@admin_required
+def run_backup_snapshot_now():
+    snapshot = build_backup_snapshot(
+        app,
+        upload_dirs=app.config.get("INFRA_UPLOAD_DIRECTORIES", {}),
+        keep_count=int(os.environ.get("BACKUP_KEEP_COUNT", "14") or 14),
+        include_uploads=True,
+    )
+    flash(f"Backup snapshot created: {snapshot['snapshot_name']}", "success")
+    return redirect("/system-center")
+
+
+@app.route("/system-center/backups/restore-drill", methods=["POST"])
+@login_required
+@admin_required
+def run_restore_drill():
+    snapshot_name = (request.form.get("snapshot_name") or "latest").strip() or "latest"
+    try:
+        result = restore_backup_snapshot(
+            app,
+            snapshot_name=snapshot_name,
+            include_uploads=True,
+            dry_run=True,
+            allow_production=False,
+        )
+        flash(
+            f"Restore drill passed for {result['snapshot_name']}. "
+            f"Tables checked: {sum((result.get('table_counts') or {}).values())} rows in snapshot manifest.",
+            "success",
+        )
+    except Exception as exc:
+        flash(f"Restore drill failed: {exc}", "danger")
+    return redirect("/system-center")
+
 # ---------------- DASHBOARD (DAILY LIVE SALE) ----------------
 @app.route("/")
 @login_required
 def index():
-    from datetime import date, timedelta
-
+    show_profit_cards = bool(
+        session.get("role") == "admin" or session.get("can_view_profit_dashboard")
+    )
     # ---------- TODAY SALE ----------
-    today = date.today()
+    today = clinic_now().date()
     today_iso = today.isoformat()
+    today_start, tomorrow_start = local_date_range_to_storage_bounds(today, today)
     today_invoices = Invoice.query.filter(
-        db.func.date(Invoice.created_at) == today
+        Invoice.created_at >= today_start,
+        Invoice.created_at < tomorrow_start
     ).all()
 
     cash_today_sale = 0
@@ -1503,13 +2862,38 @@ def index():
     )
 
     # ---------- APPOINTMENTS (TODAY) ----------
-    appointments_today = Appointment.query.filter(
+    appointments_today = active_appointment_query().filter(
         Appointment.appointment_date == today
     )
     appointment_total_today = appointments_today.count()
     appointment_booked_today = appointments_today.filter(
         Appointment.status == "BOOKED"
     ).count()
+    appointment_completed_today = appointments_today.filter(
+        Appointment.status == "COMPLETED"
+    ).count()
+
+    sales_trend = build_dashboard_sales_trend(days=7)
+    appointment_trend = build_dashboard_appointment_trend(days=7)
+    top_medicines = build_dashboard_top_medicines(limit=5, period_days=30)
+    dead_stock_items = build_dashboard_dead_stock(limit=5, dormant_days=60)
+
+    today_profit = None
+    month_profit = None
+    if show_profit_cards:
+        today_profit, _today_profit_error = build_profit_report_summary(today_iso, today_iso)
+        month_start = today.replace(day=1)
+        month_profit, _month_profit_error = build_profit_report_summary(month_start.isoformat(), today_iso)
+        today_profit = today_profit or {
+            "gross_profit": 0.0,
+            "gross_profit_percentage": 0.0,
+            "net_sales": 0.0
+        }
+        month_profit = month_profit or {
+            "gross_profit": 0.0,
+            "gross_profit_percentage": 0.0,
+            "net_sales": 0.0
+        }
 
     return render_template(
         "index.html",
@@ -1525,7 +2909,15 @@ def index():
         gst_collected=gst_collected,
         appointment_total_today=appointment_total_today,
         appointment_booked_today=appointment_booked_today,
-        today_date=today_iso
+        appointment_completed_today=appointment_completed_today,
+        today_date=today_iso,
+        sales_trend=sales_trend,
+        appointment_trend=appointment_trend,
+        top_medicines=top_medicines,
+        dead_stock_items=dead_stock_items,
+        today_profit=today_profit,
+        month_profit=month_profit,
+        show_profit_cards=show_profit_cards
     )
 @app.route("/low-stock")
 @login_required
@@ -1565,7 +2957,7 @@ def expiring_soon():
 @app.route("/medicines")
 @login_required
 def medicines():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -1575,12 +2967,14 @@ def medicines():
         flash("Access denied", "danger")
         return redirect("/")
     show_archived = (request.args.get("show_archived") or "").strip().lower() in {"1", "true", "yes", "on"}
+    initial_search = (request.args.get("search") or "").strip()
     medicine_groups, medicine_stats = build_medicine_master_groups(show_archived=show_archived)
     return render_template(
         "medicines.html",
         medicine_groups=medicine_groups,
         medicine_stats=medicine_stats,
-        show_archived=show_archived
+        show_archived=show_archived,
+        initial_search=initial_search
     )
 
 def build_patient_medicine_usage_report(
@@ -1990,7 +3384,7 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
 @app.route("/medicines/add", methods=["GET", "POST"])
 @login_required
 def add_medicine():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -2008,6 +3402,10 @@ def add_medicine():
         pack_type = (request.form.get("pack_type") or "").strip()
         pack_qty_raw = (request.form.get("pack_qty") or "").strip()
         pack_qty = parse_pack_qty(pack_qty_raw)
+        barcode = (request.form.get("barcode") or "").strip()
+        reorder_level = to_int_safe(request.form.get("reorder_level"), 10)
+        if reorder_level < 0:
+            reorder_level = 0
         if pack_qty_raw and (pack_qty is None or pack_qty < 1):
             flash("Pack quantity must be at least 1", "danger")
             return redirect("/medicines/add")
@@ -2019,7 +3417,11 @@ def add_medicine():
             qty=qty,
             expiry=expiry,
             pack_type=pack_type,
-            pack_qty=pack_qty
+            pack_qty=pack_qty,
+            discount_percent=to_int_safe(request.form.get("discount_percent"), 0),
+            barcode=barcode,
+            reorder_level=reorder_level,
+            is_active=True
         )
 
         db.session.add(med)
@@ -2040,6 +3442,14 @@ def add_medicine():
 
         db.session.add(history)
         db.session.commit()
+        record_audit_event(
+            action="Created medicine",
+            entity_type="MEDICINE",
+            entity_id=med.id,
+            ref_code=f"{med.name} / {med.batch}",
+            before=None,
+            after=build_medicine_audit_snapshot(med)
+        )
 
         flash("Medicine added successfully", "success")
         return redirect("/medicines")
@@ -2049,7 +3459,7 @@ def add_medicine():
 @app.route("/medicines/edit/<int:id>", methods=["GET", "POST"])
 @login_required
 def edit_medicine(id):
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -2060,6 +3470,7 @@ def edit_medicine(id):
     old_qty = med.qty
 
     if request.method == "POST":
+        before_snapshot = build_medicine_audit_snapshot(med)
         name = (request.form.get("name") or "").strip()
         batch = (request.form.get("batch") or "").strip()
         expiry = (request.form.get("expiry") or "").strip()
@@ -2072,6 +3483,8 @@ def edit_medicine(id):
         med.mrp = to_float(request.form.get("mrp"))
         med.discount_percent = to_int(request.form.get("discount_percent"))
         med.qty = to_int(request.form.get("qty"))
+        med.barcode = (request.form.get("barcode") or "").strip()
+        med.reorder_level = max(0, to_int_safe(request.form.get("reorder_level"), 10))
         pack_type = (request.form.get("pack_type") or "").strip()
         pack_qty_raw = (request.form.get("pack_qty") or "").strip()
         pack_qty = parse_pack_qty(pack_qty_raw)
@@ -2100,6 +3513,14 @@ def edit_medicine(id):
             db.session.add(history)
 
         db.session.commit()
+        record_audit_event(
+            action="Updated medicine",
+            entity_type="MEDICINE",
+            entity_id=med.id,
+            ref_code=f"{med.name} / {med.batch}",
+            before=before_snapshot,
+            after=build_medicine_audit_snapshot(med)
+        )
         flash("Medicine updated successfully", "success")
         return redirect("/medicines")
 
@@ -2108,7 +3529,7 @@ def edit_medicine(id):
 @app.route("/medicines/delete/<int:id>")
 @login_required
 def delete_medicine(id):
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -2116,6 +3537,7 @@ def delete_medicine(id):
         flash("Access denied", "danger")
         return redirect("/medicines")
     med = Medicine.query.get_or_404(id)
+    before_snapshot = build_medicine_audit_snapshot(med)
 
     # 🔴 STOCK HISTORY ENTRY (DELETE)
     history = StockHistory(
@@ -2133,6 +3555,14 @@ def delete_medicine(id):
     # 🔴 DELETE MEDICINE
     db.session.delete(med)
     db.session.commit()
+    record_audit_event(
+        action="Deleted medicine",
+        entity_type="MEDICINE",
+        entity_id=before_snapshot.get("id") if before_snapshot else None,
+        ref_code=f"{before_snapshot.get('name', '')} / {before_snapshot.get('batch', '')}" if before_snapshot else "",
+        before=before_snapshot,
+        after=None
+    )
 
     flash("Medicine deleted successfully", "danger")
     return redirect("/medicines")
@@ -2144,18 +3574,6 @@ def delete_medicine(id):
 @invoice_access_required
 def billing():
     meds = Medicine.query.order_by(Medicine.name).all()
-    medicine_names = sorted({m.name for m in meds})
-    medicine_data = []
-    for m in meds:
-        medicine_data.append({
-            "name": (m.name or "").strip().upper(),
-            "batch": m.batch or "",
-            "expiry": m.expiry or "",
-            "stock": m.qty or 0,
-            "mrp": float(m.mrp or 0),
-            "discount": m.discount_percent or 0,
-            "created_at": m.created_at.strftime("%Y-%m-%d") if m.created_at else ""
-        })
     
     cart = []
     posted_hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0) if request.method == "POST" else 0
@@ -2166,6 +3584,10 @@ def billing():
         return redirect("/billing")
 
     if request.method == "POST":
+        validation_error = validate_billing_submission(request.form)
+        if validation_error:
+            flash(validation_error, "danger")
+            return redirect_to_billing_with_context()
         subtotal = 0
         total_discount = 0
 
@@ -2271,10 +3693,14 @@ def billing():
         inv_no = f"INV-{datetime.now().year}-{1000 + ((last.id + 1) if last else 1)}"
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
+        patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, request.form.get("gender", ""))
+        if patient and not patient.id:
+            db.session.flush()
         inv = Invoice(
             invoice_no=inv_no,
+            patient_id=patient.id if patient else None,
             customer=customer,
-            mobile=mobile,
+            mobile=normalized_mobile or mobile,
             doctor=request.form.get("doctor", ""),
             gender=request.form.get("gender", ""),
             subtotal=subtotal,
@@ -2316,11 +3742,25 @@ def billing():
                 ))
 
         if posted_hold_bill_id > 0:
-            held_bill = HoldBill.query.get(posted_hold_bill_id)
+            held_bill = active_hold_bill_query().filter(HoldBill.id == posted_hold_bill_id).first()
             if held_bill:
-                db.session.delete(held_bill)
+                held_bill.is_deleted = True
+                held_bill.deleted_at = datetime.utcnow()
+                held_bill.deleted_by = session.get("username")
 
         db.session.commit()
+        record_audit_event(
+            action="Created invoice",
+            entity_type="INVOICE",
+            entity_id=inv.id,
+            ref_code=inv.invoice_no,
+            before=None,
+            after=build_invoice_audit_snapshot(inv),
+            extra={
+                "item_count": len(cart),
+                "payment_mode": inv.payment_mode
+            }
+        )
 
         return render_template(
             "invoice.html",
@@ -2343,7 +3783,7 @@ def billing():
     restored_hold_bill = None
     restore_hold_bill_id = to_int_safe(request.args.get("hold_bill_id"), 0)
     if restore_hold_bill_id > 0:
-        hold_bill = HoldBill.query.get(restore_hold_bill_id)
+        hold_bill = active_hold_bill_query().filter(HoldBill.id == restore_hold_bill_id).first()
         if not hold_bill:
             flash("Held bill not found. It may have been deleted.", "warning")
         else:
@@ -2351,10 +3791,7 @@ def billing():
 
     return render_template(
         "billing.html",
-        medicines=meds,
-        medicine_names=medicine_names,
-        medicine_data=medicine_data,
-        restored_hold_bill=restored_hold_bill
+        **prepare_billing_context(meds, restored_hold_bill)
     )
 
 
@@ -2375,6 +3812,10 @@ def return_medicine():
 
     if request.method == "POST":
         mode = request.form.get("mode", "invoice")
+        return_validation_error = validate_return_submission(request.form)
+        if return_validation_error:
+            flash(return_validation_error, "danger")
+            return redirect("/return-medicine")
 
         # ---------------- MANUAL RETURN ----------------
         if mode == "manual":
@@ -2745,7 +4186,7 @@ def hold_bill():
         "totals": build_hold_totals_from_form(request.form, items)
     }
 
-    hold_bill = HoldBill.query.get(hold_bill_id) if hold_bill_id > 0 else None
+    hold_bill = active_hold_bill_query().filter(HoldBill.id == hold_bill_id).first() if hold_bill_id > 0 else None
     if hold_bill:
         hold_bill.customer = customer
         hold_bill.mobile = mobile
@@ -2774,14 +4215,14 @@ def hold_bill():
 @login_required
 @invoice_access_required
 def pending_bills():
-    bills = HoldBill.query.order_by(HoldBill.id.desc()).all()
+    bills = active_hold_bill_query().order_by(HoldBill.id.desc()).all()
     return render_template("pending_bills.html", bills=bills)
 
 @app.route("/restore-bill/<int:id>")
 @login_required
 @invoice_access_required
 def restore_bill(id):
-    hb = HoldBill.query.get(id)
+    hb = active_hold_bill_query().filter(HoldBill.id == id).first()
     if not hb:
         flash("Held bill not found.", "warning")
         return redirect("/pending-bills")
@@ -2791,8 +4232,12 @@ def restore_bill(id):
 @login_required
 @invoice_access_required
 def delete_hold(id):
-    db.session.delete(HoldBill.query.get_or_404(id))
+    hold_bill = active_hold_bill_query().filter(HoldBill.id == id).first_or_404()
+    hold_bill.is_deleted = True
+    hold_bill.deleted_at = datetime.utcnow()
+    hold_bill.deleted_by = session.get("username")
     db.session.commit()
+    flash("Pending bill removed from the active hold list.", "success")
     return redirect("/pending-bills")
 
 # ---------------- CANCEL RETURN BILL ----------------
@@ -2876,6 +4321,7 @@ def return_bills():
 def invoices():
     from_str = request.args.get("from", "").strip()
     to_str = request.args.get("to", "").strip()
+    search_query = (request.args.get("search") or "").strip()
     query = Invoice.query
     if from_str:
         try:
@@ -2889,9 +4335,20 @@ def invoices():
             query = query.filter(Invoice.created_at < to_dt)
         except ValueError:
             pass
+    if search_query:
+        like = f"%{search_query}%"
+        digits = normalize_patient_mobile(search_query)
+        conditions = [
+            Invoice.invoice_no.ilike(like),
+            Invoice.customer.ilike(like)
+        ]
+        if digits:
+            conditions.append(Invoice.mobile.ilike(f"%{digits}%"))
+        query = query.filter(or_(*conditions))
     return render_template(
         "invoices.html",
-        invoices=query.order_by(Invoice.id.desc()).all()
+        invoices=query.order_by(Invoice.id.desc()).all(),
+        search_query=search_query
     )
 
 # ---------------- PART-3: VIEW / PRINT INVOICE ----------------
@@ -2924,7 +4381,7 @@ def view_invoice(id):
 @login_required
 @invoice_access_required
 def edit_invoice(id):
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -2936,6 +4393,7 @@ def edit_invoice(id):
     payment_modes = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
 
     if request.method == "POST":
+        before_snapshot = build_invoice_audit_snapshot(invoice)
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
         payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
@@ -2950,8 +4408,21 @@ def edit_invoice(id):
         invoice.customer = customer
         invoice.mobile = mobile
         invoice.payment_mode = payment_mode
+        patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, invoice.gender)
+        if patient and not patient.id:
+            db.session.flush()
+        invoice.patient_id = patient.id if patient else invoice.patient_id
+        invoice.mobile = normalized_mobile or mobile
 
         db.session.commit()
+        record_audit_event(
+            action="Updated invoice details",
+            entity_type="INVOICE",
+            entity_id=invoice.id,
+            ref_code=invoice.invoice_no,
+            before=before_snapshot,
+            after=build_invoice_audit_snapshot(invoice)
+        )
         flash("Invoice details updated successfully.", "success")
         return redirect(f"/invoice/{invoice.id}")
 
@@ -2965,7 +4436,7 @@ def edit_invoice(id):
 @app.route("/delete-invoice/<int:id>")
 @login_required
 def delete_invoice(id):
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -2973,6 +4444,7 @@ def delete_invoice(id):
         flash("Access denied", "danger")
         return redirect("/invoices")
     inv = Invoice.query.get_or_404(id)
+    before_snapshot = build_invoice_audit_snapshot(inv)
     has_returns = Return.query.filter(Return.invoice_id == inv.id, Return.is_cancelled == False).first()
     if has_returns:
         flash("Cannot delete invoice with returns. Cancel returns first.", "danger")
@@ -3010,6 +4482,14 @@ def delete_invoice(id):
     InvoiceItem.query.filter_by(invoice_id=id).delete()
     db.session.delete(inv)
     db.session.commit()
+    record_audit_event(
+        action="Deleted invoice",
+        entity_type="INVOICE",
+        entity_id=before_snapshot.get("id") if before_snapshot else None,
+        ref_code=before_snapshot.get("invoice_no", "") if before_snapshot else "",
+        before=before_snapshot,
+        after=None
+    )
     flash("Invoice deleted and stock restored.", "info")
     return redirect("/invoices")
 @app.route("/company")
@@ -3031,14 +4511,27 @@ def salt():
 @login_required
 @inventory_access_required
 def vendor():
-    vendors = Vendor.query.order_by(Vendor.name).all()
+    vendors = active_vendor_query().order_by(Vendor.name).all()
     return render_template("vendor.html", vendors=vendors)
+
+
+@app.route("/vendor/attachment/<path:filename>")
+@login_required
+@inventory_access_required
+def view_vendor_attachment(filename):
+    cleaned_name = secure_filename(filename or "")
+    if not cleaned_name:
+        return "Attachment not found.", 404
+    file_path = os.path.join(UPLOAD_FOLDER, cleaned_name)
+    if not os.path.exists(file_path):
+        return "Attachment file not found on server.", 404
+    return send_from_directory(UPLOAD_FOLDER, cleaned_name, as_attachment=False)
 
 @app.route("/vendor-notes")
 @login_required
 @vendor_note_access_required()
 def vendor_notes():
-    vendors = Vendor.query.order_by(Vendor.name.asc()).all()
+    vendors = active_vendor_query().order_by(Vendor.name.asc()).all()
     medicines = Medicine.query.order_by(
         db.func.lower(Medicine.name).asc(),
         Medicine.batch.asc(),
@@ -3115,53 +4608,8 @@ def vendor_note_invoice(note_id):
 @login_required
 @inventory_access_required
 def vendor_reports():
-    vendors = Vendor.query.order_by(Vendor.name).all()
-    purchase_summary = []
-    for v in vendors:
-        total = db.session.query(db.func.sum(VendorPurchase.total_amount)).filter_by(vendor_id=v.id).scalar() or 0
-        count = db.session.query(db.func.count(VendorPurchase.id)).filter_by(vendor_id=v.id).scalar() or 0
-        mrp_value = (
-            db.session.query(
-                db.func.coalesce(
-                    db.func.sum(
-                        (db.func.coalesce(VendorPurchaseItem.qty, 0) + db.func.coalesce(VendorPurchaseItem.free_qty, 0))
-                        * db.func.coalesce(VendorPurchaseItem.mrp, 0)
-                    ),
-                    0
-                )
-            )
-            .filter(
-                VendorPurchaseItem.vendor_id == v.id,
-                db.func.coalesce(VendorPurchaseItem.mrp, 0) > 0
-            )
-            .scalar()
-            or 0
-        )
-        cost_value = (
-            db.session.query(
-                db.func.coalesce(
-                    db.func.sum(db.func.coalesce(VendorPurchaseItem.total_value, 0)),
-                    0
-                )
-            )
-            .filter(
-                VendorPurchaseItem.vendor_id == v.id,
-                db.func.coalesce(VendorPurchaseItem.mrp, 0) > 0
-            )
-            .scalar()
-            or 0
-        )
-        margin_amount = mrp_value - cost_value
-        margin_percent = (margin_amount / mrp_value * 100) if mrp_value else 0
-        purchase_summary.append({
-            "vendor": v,
-            "total": round(total, 2),
-            "count": count,
-            "outstanding": round(v.outstanding_balance or 0, 2),
-            "margin_amount": round(margin_amount, 2),
-            "margin_percent": round(margin_percent, 2)
-        })
-    return render_template("vendor_reports.html", purchase_summary=purchase_summary)
+    vendors = active_vendor_query().order_by(Vendor.name).all()
+    return render_vendor_reports_page(vendors)
 
 @app.route("/vendor/medicine-history")
 @login_required
@@ -3201,7 +4649,7 @@ def add_vendor():
         if not name:
             flash("Vendor name is required", "danger")
             return redirect("/vendor/add")
-        existing = Vendor.query.filter(db.func.lower(Vendor.name) == name.lower()).first()
+        existing = active_vendor_query().filter(db.func.lower(Vendor.name) == name.lower()).first()
         if existing:
             flash("Vendor name already exists", "danger")
             return redirect("/vendor/add")
@@ -3260,14 +4708,14 @@ def add_vendor():
 @login_required
 @inventory_access_required
 def edit_vendor(id):
-    v = Vendor.query.get_or_404(id)
+    v = active_vendor_query().filter(Vendor.id == id).first_or_404()
 
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()
         if not name:
             flash("Vendor name is required", "danger")
             return redirect(f"/vendor/edit/{id}")
-        existing = Vendor.query.filter(db.func.lower(Vendor.name) == name.lower(), Vendor.id != v.id).first()
+        existing = active_vendor_query().filter(db.func.lower(Vendor.name) == name.lower(), Vendor.id != v.id).first()
         if existing:
             flash("Vendor name already exists", "danger")
             return redirect(f"/vendor/edit/{id}")
@@ -3359,7 +4807,7 @@ def edit_vendor(id):
 @login_required
 @inventory_access_required
 def add_vendor_purchase(id):
-    vendor = Vendor.query.get_or_404(id)
+    vendor = active_vendor_query().filter(Vendor.id == id).first_or_404()
 
     invoice_no = (request.form.get("invoice_no") or "").strip()
     if not invoice_no:
@@ -3390,6 +4838,7 @@ def add_vendor_purchase(id):
     pack_types = request.form.getlist("pack_type")
     pack_qtys = request.form.getlist("pack_qty")
     batches = request.form.getlist("batch")
+    barcodes = request.form.getlist("barcode")
     expiries = request.form.getlist("expiry")
     qtys = request.form.getlist("qty")
     free_qtys = request.form.getlist("free_qty")
@@ -3407,6 +4856,7 @@ def add_vendor_purchase(id):
     for idx, name in enumerate(names):
         name = (name or "").strip()
         batch = (batches[idx] or "").strip() if idx < len(batches) else ""
+        barcode = (barcodes[idx] or "").strip() if idx < len(barcodes) else ""
         expiry_raw = (expiries[idx] or "").strip() if idx < len(expiries) else ""
         expiry = normalize_expiry(expiry_raw)
         qty = to_int(qtys[idx]) if idx < len(qtys) else 0
@@ -3455,6 +4905,7 @@ def add_vendor_purchase(id):
             "pack_type": pack_type,
             "pack_qty": pack_qty,
             "batch": batch,
+            "barcode": barcode,
             "expiry": expiry,
             "qty": qty,
             "free_qty": free_qty,
@@ -3507,6 +4958,7 @@ def add_vendor_purchase(id):
                 pack_type=item["pack_type"],
                 pack_qty=item["pack_qty"],
                 batch=item["batch"],
+                barcode=item["barcode"] or "",
                 expiry=item["expiry"],
                 mrp=item["mrp"] or 0,
                 qty=0,
@@ -3533,6 +4985,10 @@ def add_vendor_purchase(id):
                 med.pack_type = item["pack_type"]
             if item.get("pack_qty") is not None:
                 med.pack_qty = item["pack_qty"]
+        if item["barcode"]:
+            med.barcode = item["barcode"]
+
+        effective_barcode = item["barcode"] or ((getattr(med, "barcode", "") or "").strip())
 
         old_stock = med.qty
         med.qty += item["qty"] + item["free_qty"]
@@ -3555,6 +5011,7 @@ def add_vendor_purchase(id):
             vendor_id=vendor.id,
             medicine_id=med.id,
             medicine_name=item["name"],
+            barcode=effective_barcode,
             composition=item["composition"],
             company=item["company"],
             distributor_name=item["distributor_name"],
@@ -3790,6 +5247,7 @@ def edit_vendor_purchase_item(item_id):
         pack_qty_raw = (request.form.get("pack_qty") or "").strip()
         pack_qty = parse_pack_qty(pack_qty_raw)
         batch = (request.form.get("batch") or "").strip()
+        barcode = (request.form.get("barcode") or "").strip()
         expiry_raw = (request.form.get("expiry") or "").strip()
         expiry = normalize_expiry(expiry_raw)
         qty = to_int(request.form.get("qty"))
@@ -3846,8 +5304,12 @@ def edit_vendor_purchase_item(item_id):
             med.pack_type = pack_type
             if pack_qty_raw:
                 med.pack_qty = pack_qty
+            if barcode:
+                med.barcode = barcode
 
         item.medicine_name = name
+        if barcode:
+            item.barcode = barcode
         item.composition = composition
         item.company = company
         item.distributor_name = distributor_name
@@ -3895,12 +5357,14 @@ def edit_vendor_purchase_item(item_id):
         flash("Purchase item updated successfully", "success")
         return redirect(f"/vendor/edit/{item.vendor_id}")
 
+    resolved_barcode = (getattr(item, "barcode", "") or (getattr(med, "barcode", "") if med else "") or "")
     return render_template(
         "edit_purchase_item.html",
         item=item,
         vendor=vendor,
         purchase=purchase,
-        sold_qty=sold_qty
+        sold_qty=sold_qty,
+        resolved_barcode=resolved_barcode
     )
 
 @app.route("/api/vendor-purchases/<int:purchase_id>/items", methods=["GET"])
@@ -3917,6 +5381,7 @@ def api_vendor_purchase_items(purchase_id):
             "medicine_id": it.medicine_id,
             "medicine_name": it.medicine_name,
             "batch": it.batch,
+            "barcode": getattr(it, "barcode", "") or "",
             "expiry": it.expiry,
             "qty": to_int(it.qty),
             "free_qty": to_int(it.free_qty),
@@ -4398,57 +5863,793 @@ def api_delete_vendor_note(note_id):
 @login_required
 @inventory_access_required
 def delete_vendor(id):
-    v = Vendor.query.get_or_404(id)
+    v = active_vendor_query().filter(Vendor.id == id).first_or_404()
     has_purchases = VendorPurchase.query.filter_by(vendor_id=v.id).first()
     if has_purchases:
         flash("Vendor cannot be deleted because purchase history exists.", "danger")
         return redirect("/vendor")
-    db.session.delete(v)
+    v.is_active = False
+    v.deleted_at = datetime.utcnow()
+    v.deleted_by = session.get("username")
     db.session.commit()
-    flash("Vendor deleted successfully", "danger")
+    flash("Vendor archived successfully.", "success")
     return redirect("/vendor")
+
+def build_patient_invoice_query(patient):
+    patient_name = (patient.name or "").strip()
+    mobile_digits = normalize_patient_mobile(patient.mobile)
+    conditions = [Invoice.patient_id == patient.id]
+    if mobile_digits:
+        conditions.append(Invoice.mobile.ilike(f"%{mobile_digits}%"))
+    if patient_name:
+        conditions.append(
+            db.func.lower(db.func.coalesce(Invoice.customer, "")) == patient_name.lower()
+        )
+    if not conditions:
+        return Invoice.query.filter(text("1=0"))
+    return Invoice.query.filter(or_(*conditions))
+
+def build_patient_appointment_query(patient):
+    patient_name = (patient.name or "").strip()
+    mobile_digits = normalize_patient_mobile(patient.mobile)
+    conditions = [Appointment.patient_id == patient.id]
+    if mobile_digits:
+        conditions.append(Appointment.mobile == mobile_digits)
+    if patient_name:
+        conditions.append(
+            db.func.lower(db.func.coalesce(Appointment.patient_name, "")) == patient_name.lower()
+        )
+    return active_appointment_query().filter(or_(*conditions))
+
+def build_global_search_results(raw_query, per_group=4):
+    query = (raw_query or "").strip()
+    if len(query) < 2:
+        return []
+
+    query_lower = query.lower()
+    search_digits = normalize_patient_mobile(query)
+    per_group = max(1, min(to_int_safe(per_group, 4), 8))
+    expanded_limit = max(per_group * 3, 8)
+
+    def score_text(value):
+        text_value = (value or "").strip().lower()
+        if not text_value:
+            return 0
+        if text_value == query_lower:
+            return 120
+        if text_value.startswith(query_lower):
+            return 90
+        if query_lower in text_value:
+            return 50
+        return 0
+
+    def score_digits(value):
+        digits_value = normalize_patient_mobile(value)
+        if not search_digits or not digits_value:
+            return 0
+        if digits_value == search_digits:
+            return 110
+        if digits_value.startswith(search_digits):
+            return 85
+        if search_digits in digits_value:
+            return 45
+        return 0
+
+    patient_filters = [Patient.name.ilike(f"%{query}%")]
+    if search_digits:
+        patient_filters.append(Patient.mobile.ilike(f"%{search_digits}%"))
+    patient_rows = Patient.query.filter(or_(*patient_filters)).order_by(
+        Patient.updated_at.desc(),
+        Patient.id.desc()
+    ).limit(expanded_limit).all()
+    patient_rows.sort(
+        key=lambda row: (
+            -max(score_digits(row.mobile), score_text(row.name)),
+            -(row.updated_at.timestamp() if row.updated_at else 0),
+            -(row.id or 0)
+        )
+    )
+
+    can_edit_medicine = bool(
+        session.get("role") == "admin" or session.get("can_edit_medicine")
+    )
+    medicine_filters = [
+        Medicine.name.ilike(f"%{query}%"),
+        Medicine.batch.ilike(f"%{query}%")
+    ]
+    if query:
+        medicine_filters.append(Medicine.barcode.ilike(f"%{query}%"))
+    medicine_rows = Medicine.query.filter(or_(*medicine_filters)).order_by(
+        db.func.lower(Medicine.name).asc(),
+        Medicine.id.desc()
+    ).limit(expanded_limit).all()
+    medicine_rows.sort(
+        key=lambda row: (
+            -max(score_text(row.name), score_text(row.batch), score_text(getattr(row, "barcode", ""))),
+            (row.name or "").lower(),
+            -(row.id or 0)
+        )
+    )
+
+    invoice_filters = [
+        Invoice.invoice_no.ilike(f"%{query}%"),
+        Invoice.customer.ilike(f"%{query}%")
+    ]
+    if search_digits:
+        invoice_filters.append(Invoice.mobile.ilike(f"%{search_digits}%"))
+    invoice_rows = Invoice.query.filter(or_(*invoice_filters)).order_by(
+        Invoice.created_at.desc(),
+        Invoice.id.desc()
+    ).limit(expanded_limit).all()
+    invoice_rows.sort(
+        key=lambda row: (
+            -max(score_text(row.invoice_no), score_digits(row.mobile), score_text(row.customer)),
+            -(row.created_at.timestamp() if row.created_at else 0),
+            -(row.id or 0)
+        )
+    )
+
+    appointment_filters = [
+        Appointment.appointment_no.ilike(f"%{query}%"),
+        Appointment.patient_name.ilike(f"%{query}%")
+    ]
+    if search_digits:
+        appointment_filters.append(Appointment.mobile.ilike(f"%{search_digits}%"))
+    appointment_rows = active_appointment_query().filter(or_(*appointment_filters)).order_by(
+        Appointment.appointment_date.desc(),
+        Appointment.id.desc()
+    ).limit(expanded_limit).all()
+    appointment_rows.sort(
+        key=lambda row: (
+            -max(score_text(row.appointment_no), score_digits(row.mobile), score_text(row.patient_name)),
+            -(row.appointment_date.toordinal() if row.appointment_date else 0),
+            -(row.id or 0)
+        )
+    )
+
+    groups = []
+    if patient_rows:
+        patient_items = [
+            {
+                "title": (patient.name or "Unnamed Patient").strip(),
+                "subtitle": (patient.mobile or "No mobile").strip() or "No mobile",
+                "meta": f"Updated {patient.updated_at.strftime('%d-%m-%Y') if patient.updated_at else '-'}",
+                "href": url_for("patient_profile", patient_id=patient.id)
+            }
+            for patient in patient_rows[:per_group]
+        ]
+        groups.append({
+            "key": "patients",
+            "label": "Patients",
+            "items": patient_items,
+            "hint": f"Showing top {len(patient_items)} patient matches",
+            "view_all_href": url_for("customer", search=query)
+        })
+    if medicine_rows:
+        medicine_items = []
+        for med in medicine_rows[:per_group]:
+            if can_edit_medicine:
+                href = url_for("edit_medicine", id=med.id)
+            else:
+                search_value = " ".join(
+                    part for part in (
+                        (med.name or "").strip(),
+                        (med.batch or "").strip(),
+                        (getattr(med, "barcode", "") or "").strip()
+                    ) if part
+                )
+                search_kwargs = {"search": search_value}
+                if to_int_safe(med.qty, 0) <= 0:
+                    search_kwargs["show_archived"] = 1
+                href = url_for("medicines", **search_kwargs)
+            medicine_items.append({
+                "title": (med.name or "Medicine").strip(),
+                "subtitle": f"Batch {(med.batch or '-').strip()} · Stock {to_int_safe(med.qty, 0)}",
+                "meta": f"MRP Rs {to_float_safe(med.mrp, 0):.2f}",
+                "href": href
+            })
+        groups.append({
+            "key": "medicines",
+            "label": "Medicines",
+            "items": medicine_items,
+            "hint": f"Showing top {len(medicine_items)} medicine matches",
+            "view_all_href": url_for("medicines", search=query)
+        })
+    if invoice_rows:
+        invoice_items = [
+            {
+                "title": (inv.invoice_no or f"Invoice #{inv.id}").strip(),
+                "subtitle": f"{(inv.customer or 'Walk-in').strip()} · {(inv.mobile or '-').strip() or '-'}",
+                "meta": f"Rs {to_float_safe(inv.total, 0):.2f} · {inv.created_at.strftime('%d-%m-%Y') if inv.created_at else '-'}",
+                "href": url_for("view_invoice", id=inv.id)
+            }
+            for inv in invoice_rows[:per_group]
+        ]
+        groups.append({
+            "key": "invoices",
+            "label": "Invoices",
+            "items": invoice_items,
+            "hint": f"Showing top {len(invoice_items)} invoice matches"
+        })
+    if appointment_rows:
+        appointment_items = [
+            {
+                "title": (appt.appointment_no or f"Appointment #{appt.id}").strip(),
+                "subtitle": f"{(appt.patient_name or 'Patient').strip()} · {(appt.mobile or '-').strip() or '-'}",
+                "meta": f"{appt.appointment_date.strftime('%d-%m-%Y') if appt.appointment_date else '-'} · {(appt.status or 'BOOKED').replace('_', ' ').title()}",
+                "href": url_for("edit_appointment", id=appt.id)
+            }
+            for appt in appointment_rows[:per_group]
+        ]
+        groups.append({
+            "key": "appointments",
+            "label": "Appointments",
+            "items": appointment_items,
+            "hint": f"Showing top {len(appointment_items)} appointment matches"
+        })
+    return groups
 
 @app.route("/customer")
 @login_required
 def customer():
-    return "<h2>Customer Master – Coming Soon</h2>"
+    search_query = (request.args.get("search") or "").strip()
+    with_mobile_only = is_truthy(request.args.get("with_mobile"))
+    with_notes_only = is_truthy(request.args.get("with_notes"))
+    duplicates_only = is_truthy(request.args.get("duplicates"))
+    sort_by = (request.args.get("sort") or "recent").strip().lower() or "recent"
+    query = Patient.query
+    duplicate_name_counts = build_patient_duplicate_name_counts()
+    duplicate_names = sorted(duplicate_name_counts.keys())
+    if search_query:
+        conditions = [Patient.name.ilike(f"%{search_query}%")]
+        digits = normalize_patient_mobile(search_query)
+        if digits:
+            conditions.append(Patient.mobile.ilike(f"%{digits}%"))
+        query = query.filter(or_(*conditions))
+    if with_mobile_only:
+        query = query.filter(db.func.length(db.func.trim(db.func.coalesce(Patient.mobile, ""))) > 0)
+    if with_notes_only:
+        query = query.filter(db.func.length(db.func.trim(db.func.coalesce(Patient.notes, ""))) > 0)
+    if duplicates_only:
+        if duplicate_names:
+            query = query.filter(patient_master_name_expression().in_(duplicate_names))
+        else:
+            query = query.filter(text("1=0"))
+
+    matching_patients = query.count()
+    patients = query.order_by(Patient.updated_at.desc(), Patient.id.desc()).limit(300).all()
+    customer_rows = build_customer_directory_rows(patients)
+    for row in customer_rows:
+        normalized_name = normalize_patient_name(row["patient"].name)
+        row["duplicate_count"] = max(0, duplicate_name_counts.get(normalized_name, 0) - 1)
+
+    if sort_by == "name":
+        customer_rows.sort(key=lambda row: ((row["patient"].name or "").lower(), -(row["patient"].id or 0)))
+    elif sort_by == "visits":
+        customer_rows.sort(
+            key=lambda row: (
+                -row["appointment_count"],
+                -(row["invoice_count"]),
+                -to_float_safe(row["total_billed"], 0),
+                (row["patient"].name or "").lower()
+            )
+        )
+    elif sort_by == "billing":
+        customer_rows.sort(
+            key=lambda row: (
+                -to_float_safe(row["total_billed"], 0),
+                -row["invoice_count"],
+                -row["appointment_count"],
+                (row["patient"].name or "").lower()
+            )
+        )
+    else:
+        customer_rows.sort(
+            key=lambda row: (
+                -(row["last_activity_at"].timestamp() if row["last_activity_at"] else 0),
+                -(row["patient"].updated_at.timestamp() if row["patient"].updated_at else 0),
+                -(row["patient"].id or 0)
+            )
+        )
+
+    customer_rows = customer_rows[:250]
+    customer_stats = {
+        "matching_patients": matching_patients,
+        "visible_patients": len(customer_rows),
+        "with_mobile": sum(1 for row in customer_rows if row["has_mobile"]),
+        "with_notes": sum(1 for row in customer_rows if row["has_notes"]),
+        "duplicate_patients": sum(1 for row in customer_rows if row["duplicate_count"] > 0),
+        "total_visits": sum(row["appointment_count"] for row in customer_rows),
+        "total_invoices": sum(row["invoice_count"] for row in customer_rows),
+        "total_billed": round(sum(to_float_safe(row["total_billed"], 0) for row in customer_rows), 2)
+    }
+    return render_template(
+        "customers.html",
+        customer_rows=customer_rows,
+        search_query=search_query,
+        customer_stats=customer_stats,
+        with_mobile_only=with_mobile_only,
+        with_notes_only=with_notes_only,
+        duplicates_only=duplicates_only,
+        sort_by=sort_by
+    )
+
+@app.route("/patients/<int:patient_id>")
+@login_required
+def patient_profile(patient_id):
+    patient = Patient.query.get_or_404(patient_id)
+    management_enabled = can_manage_patient_records()
+    appointment_query = build_patient_appointment_query(patient)
+    invoice_query = build_patient_invoice_query(patient)
+    appointment_count = appointment_query.count()
+    invoice_count = invoice_query.count()
+    total_billed = round(
+        invoice_query.with_entities(
+            db.func.coalesce(db.func.sum(Invoice.total), 0)
+        ).scalar() or 0,
+        2
+    )
+    appointment_status_counts = {status: 0 for status in APPOINTMENT_STATUSES}
+    for status, count in appointment_query.with_entities(
+        Appointment.status,
+        db.func.count(Appointment.id)
+    ).group_by(Appointment.status).all():
+        normalized_status = (status or "BOOKED").strip().upper()
+        if normalized_status in appointment_status_counts:
+            appointment_status_counts[normalized_status] = int(count or 0)
+
+    invoice_payment_counts = {}
+    for mode, count in invoice_query.with_entities(
+        Invoice.payment_mode,
+        db.func.count(Invoice.id)
+    ).group_by(Invoice.payment_mode).all():
+        normalized_mode = (mode or "CASH").strip().upper() or "CASH"
+        invoice_payment_counts[normalized_mode] = int(count or 0)
+
+    appointments = appointment_query.order_by(
+        Appointment.appointment_date.desc(),
+        Appointment.appointment_time.desc(),
+        Appointment.id.desc()
+    ).limit(40).all()
+    invoices = invoice_query.order_by(
+        Invoice.created_at.desc(),
+        Invoice.id.desc()
+    ).limit(40).all()
+
+    invoice_ids = [invoice.id for invoice in invoices]
+    invoice_items = []
+    if invoice_ids:
+        invoice_items = InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(invoice_ids)).all()
+
+    medicine_summary = {}
+    for item in invoice_items:
+        key = (item.name or "").strip().upper()
+        if not key:
+            continue
+        row = medicine_summary.get(key)
+        if not row:
+            row = {
+                "medicine": (item.name or "").strip(),
+                "qty": 0,
+                "amount": 0.0,
+                "last_batch": (item.batch or "").strip()
+            }
+            medicine_summary[key] = row
+        row["qty"] += to_int_safe(item.qty, 0)
+        row["amount"] += to_float_safe(item.net_amount if item.net_amount not in (None, 0) else item.amount, 0)
+        if (item.batch or "").strip():
+            row["last_batch"] = (item.batch or "").strip()
+
+    medicine_rows = sorted(
+        medicine_summary.values(),
+        key=lambda row: (-row["qty"], (row["medicine"] or "").lower())
+    )[:20]
+
+    timeline = []
+    for appt in appointments[:12]:
+        occurred_at = None
+        if appt.appointment_date:
+            occurred_at = datetime.combine(
+                appt.appointment_date,
+                appt.appointment_time or time.min
+            )
+        timeline.append({
+            "type": "Appointment",
+            "title": (appt.appointment_no or f"Appointment #{appt.id}").strip(),
+            "subtitle": f"Token {appt.token_no or '-'} · {(appt.status or 'BOOKED').replace('_', ' ').title()}",
+            "amount": round(to_float_safe(appt.consultation_fee, 0), 2),
+            "occurred_at": occurred_at,
+            "href": url_for("edit_appointment", id=appt.id)
+        })
+
+    for invoice in invoices[:12]:
+        timeline.append({
+            "type": "Invoice",
+            "title": (invoice.invoice_no or f"Invoice #{invoice.id}").strip(),
+            "subtitle": f"{(invoice.payment_mode or 'CASH').strip().upper()} · {(invoice.mobile or patient.mobile or '-').strip() or '-'}",
+            "amount": round(to_float_safe(invoice.total, 0), 2),
+            "occurred_at": invoice.created_at,
+            "href": url_for("view_invoice", id=invoice.id)
+        })
+
+    timeline.sort(
+        key=lambda row: row["occurred_at"] or datetime.min,
+        reverse=True
+    )
+    timeline = timeline[:12]
+    duplicate_candidates = build_patient_duplicate_candidates(patient)
+    link_summary = build_patient_link_summary(patient)
+    profile_search_value = patient.mobile or patient.name or ""
+    stats = {
+        "appointment_count": appointment_count,
+        "invoice_count": invoice_count,
+        "medicine_count": len(medicine_summary),
+        "total_billed": total_billed,
+        "last_invoice_at": invoices[0].created_at if invoices else None,
+        "last_appointment_at": appointments[0].appointment_date if appointments else None,
+        "completed_visits": appointment_status_counts.get("COMPLETED", 0),
+        "cancelled_visits": appointment_status_counts.get("CANCELLED", 0),
+        "paid_invoice_count": sum(invoice_payment_counts.values()),
+        "cash_invoice_count": invoice_payment_counts.get("CASH", 0),
+        "online_invoice_count": sum(
+            count for mode, count in invoice_payment_counts.items() if mode != "CASH"
+        )
+    }
+    return render_template(
+        "patient_profile.html",
+        patient=patient,
+        appointments=appointments,
+        invoices=invoices,
+        medicine_rows=medicine_rows,
+        stats=stats,
+        management_enabled=management_enabled,
+        duplicate_candidates=duplicate_candidates,
+        link_summary=link_summary,
+        profile_search_value=profile_search_value,
+        appointment_status_counts=appointment_status_counts,
+        invoice_payment_counts=invoice_payment_counts,
+        timeline=timeline
+    )
+
+@app.route("/patients/<int:patient_id>/notes", methods=["POST"])
+@login_required
+def update_patient_notes(patient_id):
+    patient = Patient.query.get_or_404(patient_id)
+    before_snapshot = build_patient_audit_snapshot(patient)
+    patient.notes = (request.form.get("notes") or "").strip()
+    db.session.commit()
+    record_audit_event(
+        action="Updated patient notes",
+        entity_type="PATIENT",
+        entity_id=patient.id,
+        ref_code=patient.mobile or patient.name,
+        before=before_snapshot,
+        after=build_patient_audit_snapshot(patient)
+    )
+    flash("Patient notes updated successfully.", "success")
+    return redirect(url_for("patient_profile", patient_id=patient.id))
+
+@app.route("/patients/<int:patient_id>/update", methods=["POST"])
+@login_required
+def update_patient_profile(patient_id):
+    patient = Patient.query.get_or_404(patient_id)
+    if not can_manage_patient_records():
+        flash("Access denied", "danger")
+        return redirect(url_for("patient_profile", patient_id=patient.id))
+
+    before_snapshot = build_patient_audit_snapshot(patient)
+    old_name = patient.name
+    old_mobile = patient.mobile
+
+    name = (request.form.get("name") or "").strip()
+    mobile = normalize_patient_mobile(request.form.get("mobile"))
+    gender = (request.form.get("gender") or "").strip().upper() or None
+    age_raw = (request.form.get("age") or "").strip()
+    sync_linked_records = is_truthy(request.form.get("sync_linked_records"))
+
+    if not name:
+        flash("Patient name is required.", "danger")
+        return redirect(url_for("patient_profile", patient_id=patient.id))
+
+    age_value = None
+    if age_raw:
+        try:
+            age_value = int(age_raw)
+        except ValueError:
+            flash("Age must be a valid number.", "danger")
+            return redirect(url_for("patient_profile", patient_id=patient.id))
+
+    existing_mobile = None
+    if mobile:
+        existing_mobile = Patient.query.filter(
+            Patient.mobile == mobile,
+            Patient.id != patient.id
+        ).first()
+    if existing_mobile:
+        flash("This mobile number is already linked to another patient profile.", "danger")
+        return redirect(url_for("patient_profile", patient_id=patient.id))
+
+    patient.name = name
+    patient.mobile = mobile or None
+    patient.gender = gender
+    patient.age = age_value
+
+    sync_result = {
+        "appointment_relinked": 0,
+        "appointment_synced": 0,
+        "invoice_relinked": 0,
+        "invoice_synced": 0
+    }
+    if sync_linked_records:
+        sync_result = relink_patient_records(
+            patient,
+            matching_names=[old_name, patient.name],
+            matching_mobiles=[old_mobile, patient.mobile],
+            sync_display_fields=True
+        )
+
+    db.session.commit()
+    record_audit_event(
+        action="Updated patient profile",
+        entity_type="PATIENT",
+        entity_id=patient.id,
+        ref_code=patient.mobile or patient.name,
+        before=before_snapshot,
+        after=build_patient_audit_snapshot(patient),
+        extra={
+            "sync_linked_records": sync_linked_records,
+            **sync_result
+        }
+    )
+    flash("Patient profile updated successfully.", "success")
+    return redirect(url_for("patient_profile", patient_id=patient.id))
+
+@app.route("/patients/<int:patient_id>/relink", methods=["POST"])
+@login_required
+def relink_patient_profile(patient_id):
+    patient = Patient.query.get_or_404(patient_id)
+    if not can_manage_patient_records():
+        flash("Access denied", "danger")
+        return redirect(url_for("patient_profile", patient_id=patient.id))
+
+    before_snapshot = build_patient_audit_snapshot(patient)
+    sync_display_fields = not str(request.form.get("sync_display_fields") or "").strip().lower() == "0"
+    relink_result = relink_patient_records(
+        patient,
+        matching_names=[patient.name],
+        matching_mobiles=[patient.mobile],
+        sync_display_fields=sync_display_fields
+    )
+    db.session.commit()
+    record_audit_event(
+        action="Relinked patient records",
+        entity_type="PATIENT",
+        entity_id=patient.id,
+        ref_code=patient.mobile or patient.name,
+        before=before_snapshot,
+        after=build_patient_audit_snapshot(patient),
+        extra={
+            "sync_display_fields": sync_display_fields,
+            **relink_result
+        }
+    )
+    flash(
+        "Linked records refreshed. "
+        f"Appointments relinked: {relink_result['appointment_relinked']}, "
+        f"Invoices relinked: {relink_result['invoice_relinked']}.",
+        "success"
+    )
+    return redirect(url_for("patient_profile", patient_id=patient.id))
+
+@app.route("/patients/<int:patient_id>/merge", methods=["POST"])
+@login_required
+def merge_patient_profile(patient_id):
+    target = Patient.query.get_or_404(patient_id)
+    if not can_manage_patient_records():
+        flash("Access denied", "danger")
+        return redirect(url_for("patient_profile", patient_id=target.id))
+
+    source_id = to_int_safe(request.form.get("source_patient_id"), 0)
+    source = Patient.query.get_or_404(source_id)
+    if source.id == target.id:
+        flash("Select a different patient to merge.", "danger")
+        return redirect(url_for("patient_profile", patient_id=target.id))
+
+    before_target = build_patient_audit_snapshot(target)
+    before_source = build_patient_audit_snapshot(source)
+    adopted_source_mobile = None
+
+    if not (target.name or "").strip() and (source.name or "").strip():
+        target.name = source.name
+    if not (target.gender or "").strip() and (source.gender or "").strip():
+        target.gender = source.gender
+    if target.age in (None, "") and source.age not in (None, ""):
+        target.age = source.age
+
+    if not (target.mobile or "").strip() and (source.mobile or "").strip():
+        adopted_source_mobile = source.mobile
+        source.mobile = None
+        db.session.flush()
+        target.mobile = adopted_source_mobile
+
+    merged_note_parts = []
+    if (source.notes or "").strip():
+        source_note_text = source.notes.strip()
+        if source_note_text not in (target.notes or ""):
+            merged_note_parts.append(source_note_text)
+    if source.mobile and source.mobile != target.mobile:
+        merged_note_parts.append(f"Alternate mobile from merged profile: {source.mobile}")
+    if merged_note_parts:
+        base_notes = (target.notes or "").strip()
+        joiner = "\n\n" if base_notes else ""
+        merged_note_text = "\n\n".join(merged_note_parts)
+        target.notes = f"{base_notes}{joiner}{merged_note_text}".strip()
+
+    merge_result = relink_patient_records(
+        target,
+        matching_names=[target.name, before_target.get("name"), source.name],
+        matching_mobiles=[target.mobile, before_target.get("mobile"), source.mobile, adopted_source_mobile],
+        source_patient_ids=[source.id],
+        sync_display_fields=True
+    )
+
+    db.session.delete(source)
+    db.session.commit()
+    record_audit_event(
+        action="Merged patient records",
+        entity_type="PATIENT",
+        entity_id=target.id,
+        ref_code=target.mobile or target.name,
+        before={
+            "target": before_target,
+            "source": before_source
+        },
+        after=build_patient_audit_snapshot(target),
+        extra=merge_result
+    )
+    flash(
+        f"Merged patient #{source_id} into profile #{target.id}. "
+        f"Appointments relinked: {merge_result['appointment_relinked']}, "
+        f"Invoices relinked: {merge_result['invoice_relinked']}.",
+        "success"
+    )
+    return redirect(url_for("patient_profile", patient_id=target.id))
+
+@app.route("/api/global-search")
+@login_required
+def api_global_search():
+    query = (request.args.get("q") or "").strip()
+    return jsonify({
+        "query": query,
+        "groups": build_global_search_results(query)
+    })
+
+@app.route("/audit-logs")
+@login_required
+def audit_logs():
+    user = active_user_by_id(session.get("user_id"))
+    if not user or (
+        user.role != "admin"
+        and not user.can_manage_users
+        and not getattr(user, "can_view_audit_logs", False)
+    ):
+        flash("Access denied", "danger")
+        return redirect("/")
+
+    search_query = (request.args.get("search") or "").strip()
+    entity_filter = (request.args.get("entity") or "").strip().upper()
+    action_filter = (request.args.get("action") or "").strip().upper()
+    query = AuditLog.query
+    if search_query:
+        like = f"%{search_query}%"
+        query = query.filter(or_(
+            AuditLog.user.ilike(like),
+            AuditLog.action.ilike(like),
+            AuditLog.entity_type.ilike(like),
+            AuditLog.ref_code.ilike(like)
+        ))
+    if entity_filter:
+        query = query.filter(AuditLog.entity_type == entity_filter)
+    if action_filter == "CREATE":
+        query = query.filter(or_(
+            AuditLog.action.ilike("%create%"),
+            AuditLog.action.ilike("%added%"),
+            AuditLog.action.ilike("%booked%"),
+            AuditLog.action.ilike("new %")
+        ))
+    elif action_filter == "UPDATE":
+        query = query.filter(or_(
+            AuditLog.action.ilike("%update%"),
+            AuditLog.action.ilike("%edit%"),
+            AuditLog.action.ilike("%change%")
+        ))
+    elif action_filter == "STATUS":
+        query = query.filter(or_(
+            AuditLog.action.ilike("%status%"),
+            AuditLog.action.ilike("%paid%"),
+            AuditLog.action.ilike("%cancel%"),
+            AuditLog.action.ilike("%posted%"),
+            AuditLog.action.ilike("%restored%")
+        ))
+    elif action_filter == "DELETE":
+        query = query.filter(or_(
+            AuditLog.action.ilike("%delete%"),
+            AuditLog.action.ilike("%remove%")
+        ))
+
+    raw_logs = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(250).all()
+    logs = []
+    entity_values = set()
+    action_stats = {
+        "CREATE": 0,
+        "UPDATE": 0,
+        "STATUS": 0,
+        "DELETE": 0,
+        "OTHER": 0
+    }
+    for row in raw_logs:
+        before_data = parse_json_text(row.before_json)
+        after_data = parse_json_text(row.after_json)
+        extra_data = parse_json_text(row.extra_json)
+        action_category = classify_audit_action(row.action)
+        entity_values.add((row.entity_type or "").strip().upper())
+        change_rows, change_count = build_audit_change_rows(before_data, after_data)
+        action_stats[action_category] = action_stats.get(action_category, 0) + 1
+        logs.append({
+            "id": row.id,
+            "user": row.user,
+            "action": row.action,
+            "action_category": action_category,
+            "entity_type": row.entity_type,
+            "entity_id": row.entity_id,
+            "ref_code": row.ref_code,
+            "before_data": before_data,
+            "after_data": after_data,
+            "extra_data": extra_data,
+            "change_rows": change_rows,
+            "change_count": change_count,
+            "created_at": row.created_at
+        })
+
+    return render_template(
+        "audit_logs.html",
+        logs=logs,
+        search_query=search_query,
+        entity_filter=entity_filter,
+        action_filter=action_filter,
+        action_options=("CREATE", "UPDATE", "STATUS", "DELETE", "OTHER"),
+        entity_options=sorted(value for value in entity_values if value),
+        audit_stats={
+            "visible_logs": len(logs),
+            "create_count": action_stats.get("CREATE", 0),
+            "update_count": action_stats.get("UPDATE", 0) + action_stats.get("STATUS", 0),
+            "delete_count": action_stats.get("DELETE", 0),
+            "other_count": action_stats.get("OTHER", 0)
+        }
+    )
 
 @app.route("/appointments")
 @login_required
 def appointments():
-    payload = build_appointment_report_payload(request.args, flash_errors=True)
-    appointments = payload["appointments"]
-    list_only = (request.args.get("view") or "").strip().lower() == "list"
-    summary_payload = payload
-    if payload["search_query"]:
-        summary_payload = build_appointment_report_payload(
-            request.args,
-            flash_errors=False,
-            include_search=False
-        )
-    appointment_summary = build_appointment_summary(summary_payload["appointments"])
-
-    calendar_days = build_appointment_calendar_days(
-        appointments,
-        payload["calendar_view"],
-        payload["focus_date"]
+    return render_appointments_page(
+        request.args,
+        all_statuses=APPOINTMENT_STATUSES,
+        build_appointment_report_payload=build_appointment_report_payload,
+        build_appointment_summary=build_appointment_summary,
+        build_live_queue_snapshot=build_live_queue_snapshot,
+        build_appointment_calendar_days=build_appointment_calendar_days,
+        clinic_now=clinic_now,
     )
 
+@app.route("/appointments/queue/live")
+@login_required
+def appointments_queue_live():
+    target_date = parse_date(request.args.get("date")) or clinic_now().date()
+    queue_snapshot = build_live_queue_snapshot(target_date)
     return render_template(
-        "appointments.html",
-        appointments=appointments,
-        all_statuses=APPOINTMENT_STATUSES,
-        list_only=list_only,
-        report_filters=payload["report_filters"],
-        report_label=payload["report_label"],
-        quick_filter=payload["quick_filter"],
-        search_query=payload["search_query"],
-        calendar_view=payload["calendar_view"],
-        calendar_days=calendar_days,
-        summary_label=summary_payload["report_label"],
-        summary_counts=appointment_summary["counts"],
-        summary_revenue=appointment_summary["revenue"],
-        summary_revenue_breakdown=appointment_summary["revenue_breakdown"]
+        "queue_board.html",
+        queue_snapshot=queue_snapshot,
+        target_date=target_date
     )
 
 def normalize_patient_mobile(raw_mobile):
@@ -4465,7 +6666,9 @@ def appointment_net_amount(appt):
 def build_appointment_summary(appointments):
     counts = {
         "BOOKED": 0,
+        "WAITING": 0,
         "CHECKED_IN": 0,
+        "IN_CONSULTATION": 0,
         "COMPLETED": 0,
         "CANCELLED": 0
     }
@@ -4505,8 +6708,82 @@ def build_appointment_summary(appointments):
         }
     }
 
+def build_live_queue_snapshot(target_date):
+    selected_date = target_date or clinic_now().date()
+    appointments = active_appointment_query().filter(
+        Appointment.appointment_date == selected_date
+    ).order_by(
+        Appointment.token_no.asc(),
+        Appointment.appointment_time.asc(),
+        Appointment.id.asc()
+    ).all()
+
+    lanes = {
+        "scheduled": [],
+        "waiting": [],
+        "consulting": [],
+        "completed": [],
+        "cancelled": []
+    }
+    active_queue = []
+
+    for appt in appointments:
+        status = (appt.status or "BOOKED").strip().upper()
+        item = {
+            "id": appt.id,
+            "appointment_no": appt.appointment_no,
+            "patient_id": appt.patient_id,
+            "patient_name": appt.patient_name,
+            "mobile": appt.mobile,
+            "token_no": appt.token_no,
+            "appointment_time": appt.appointment_time,
+            "status": status,
+            "payment_status": (appt.payment_status or "UNPAID").strip().upper(),
+            "payment_mode": (appt.payment_mode or "CASH").strip().upper(),
+            "consultation_fee": round(to_float_safe(appt.consultation_fee, 0), 2)
+        }
+
+        if status == "BOOKED":
+            lanes["scheduled"].append(item)
+            active_queue.append(item)
+        elif status in {"WAITING", "CHECKED_IN"}:
+            lanes["waiting"].append(item)
+            active_queue.append(item)
+        elif status == "IN_CONSULTATION":
+            lanes["consulting"].append(item)
+            active_queue.append(item)
+        elif status == "COMPLETED":
+            lanes["completed"].append(item)
+        else:
+            lanes["cancelled"].append(item)
+
+    current_serving = lanes["consulting"][0] if lanes["consulting"] else (active_queue[0] if active_queue else None)
+    next_tokens = [
+        item["token_no"]
+        for item in active_queue[:6]
+        if item["token_no"] not in (None, "", " ")
+    ]
+    summary = build_appointment_summary(appointments)
+
+    return {
+        "target_date": selected_date,
+        "lanes": lanes,
+        "summary": summary,
+        "current_serving": current_serving,
+        "next_tokens": next_tokens,
+        "board_stats": {
+            "total": len(appointments),
+            "active": len(active_queue),
+            "scheduled": len(lanes["scheduled"]),
+            "waiting": len(lanes["waiting"]),
+            "consulting": len(lanes["consulting"]),
+            "completed": len(lanes["completed"]),
+            "cancelled": len(lanes["cancelled"])
+        }
+    }
+
 def calculate_appointment_revenue(from_date=None, to_date=None):
-    query = Appointment.query.filter(
+    query = active_appointment_query().filter(
         db.func.upper(db.func.coalesce(Appointment.payment_status, "UNPAID")) == "PAID"
     )
     if from_date:
@@ -4519,7 +6796,7 @@ def calculate_appointment_revenue(from_date=None, to_date=None):
     return round(total, 2)
 
 def calculate_appointment_revenue_breakdown(from_date=None, to_date=None):
-    query = Appointment.query.filter(
+    query = active_appointment_query().filter(
         db.func.upper(db.func.coalesce(Appointment.payment_status, "UNPAID")) == "PAID"
     )
     if from_date:
@@ -4551,6 +6828,7 @@ def calculate_appointment_revenue_breakdown(from_date=None, to_date=None):
 
 def get_next_daily_token(appt_date, exclude_appointment_id=None):
     query = db.session.query(db.func.max(Appointment.token_no)).filter(
+        or_(Appointment.is_deleted.is_(False), Appointment.is_deleted.is_(None)),
         Appointment.appointment_date == appt_date
     )
     if exclude_appointment_id:
@@ -4722,7 +7000,7 @@ def build_appointment_report_payload(args, flash_errors=False, include_search=Tr
     if calendar_view not in ("day", "week"):
         calendar_view = "day"
 
-    query = Appointment.query
+    query = active_appointment_query()
     report_label = "Today"
     focus_date = today
 
@@ -4746,7 +7024,7 @@ def build_appointment_report_payload(args, flash_errors=False, include_search=Tr
         focus_date = week_start
         calendar_view = "week"
     elif quick_filter == "pending":
-        query = query.filter(Appointment.status.in_(("BOOKED", "CHECKED_IN")))
+        query = query.filter(Appointment.status.in_(("BOOKED", "WAITING", "CHECKED_IN", "IN_CONSULTATION")))
         report_label = "Pending Appointments"
     elif quick_filter == "completed":
         query = query.filter(Appointment.status == "COMPLETED")
@@ -4794,6 +7072,9 @@ def build_appointment_report_payload(args, flash_errors=False, include_search=Tr
             focus_date = start_date
             from_date_raw = start_date.isoformat()
             to_date_raw = end_date.isoformat()
+        elif report_type == "all":
+            report_label = "All Appointments"
+            focus_date = today
         else:
             selected_date = today
             query = query.filter(Appointment.appointment_date == selected_date)
@@ -5047,6 +7328,18 @@ def add_appointment():
             )
 
         flash("Appointment booked successfully.", "success")
+        created_appointment = active_appointment_query().filter_by(
+            appointment_no=appointment.appointment_no
+        ).first() if appointment_saved else None
+        if created_appointment:
+            record_audit_event(
+                action="Created appointment",
+                entity_type="APPOINTMENT",
+                entity_id=created_appointment.id,
+                ref_code=created_appointment.appointment_no,
+                before=None,
+                after=build_appointment_audit_snapshot(created_appointment)
+            )
         return redirect(url_for(
             "appointments",
             appointment_report_type="day",
@@ -5066,11 +7359,12 @@ def add_appointment():
 @app.route("/appointments/<int:id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_appointment(id):
-    appointment = Appointment.query.get_or_404(id)
+    appointment = active_appointment_query().filter(Appointment.id == id).first_or_404()
     form_data = build_appointment_form_data(appointment)
     patient_suggestions = get_patient_suggestions()
 
     if request.method == "POST":
+        before_snapshot = build_appointment_audit_snapshot(appointment)
         schema_ok, schema_err = ensure_appointment_runtime_schema()
         if not schema_ok:
             flash("Unable to update appointment because database schema update failed.", "danger")
@@ -5106,7 +7400,7 @@ def edit_appointment(id):
             )
             if patient_err:
                 # Rollback in safe_upsert may detach loaded row; reload it.
-                appointment = Appointment.query.get_or_404(id)
+                appointment = active_appointment_query().filter(Appointment.id == id).first_or_404()
             old_date = appointment.appointment_date
             appointment.patient_name = form_data["patient_name"]
             appointment.patient_id = patient.id if patient else appointment.patient_id
@@ -5129,6 +7423,14 @@ def edit_appointment(id):
                 appointment.payment_status = "UNPAID"
 
             db.session.commit()
+            record_audit_event(
+                action="Updated appointment",
+                entity_type="APPOINTMENT",
+                entity_id=appointment.id,
+                ref_code=appointment.appointment_no,
+                before=before_snapshot,
+                after=build_appointment_audit_snapshot(appointment)
+            )
         except IntegrityError as exc:
             db.session.rollback()
             err_text = str(getattr(exc, "orig", exc)).lower()
@@ -5192,7 +7494,8 @@ def edit_appointment(id):
 @app.route("/appointments/<int:id>/status", methods=["POST"])
 @login_required
 def update_appointment_status(id):
-    appointment = Appointment.query.get_or_404(id)
+    appointment = active_appointment_query().filter(Appointment.id == id).first_or_404()
+    before_snapshot = build_appointment_audit_snapshot(appointment)
     new_status = (request.form.get("status") or "").strip().upper()
 
     if new_status not in APPOINTMENT_STATUSES:
@@ -5216,9 +7519,9 @@ def update_appointment_status(id):
 
     now = datetime.utcnow()
     appointment.status = new_status
-    if new_status == "CHECKED_IN":
+    if new_status in {"WAITING", "CHECKED_IN", "IN_CONSULTATION"}:
         appointment.checked_in_at = appointment.checked_in_at or now
-    elif new_status == "COMPLETED":
+    if new_status == "COMPLETED":
         appointment.completed_at = now
         appointment.checked_in_at = appointment.checked_in_at or now
     elif new_status == "CANCELLED":
@@ -5228,6 +7531,14 @@ def update_appointment_status(id):
         appointment.consultation_fee = 0
 
     db.session.commit()
+    record_audit_event(
+        action="Updated appointment status",
+        entity_type="APPOINTMENT",
+        entity_id=appointment.id,
+        ref_code=appointment.appointment_no,
+        before=before_snapshot,
+        after=build_appointment_audit_snapshot(appointment)
+    )
     flash("Appointment status updated.", "success")
     return redirect(
         request.referrer or url_for(
@@ -5240,214 +7551,68 @@ def update_appointment_status(id):
 @app.route("/appointments/<int:id>/payment/paid", methods=["POST"])
 @login_required
 def mark_appointment_paid(id):
-    appointment = Appointment.query.get_or_404(id)
-    selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
-    if (appointment.status or "").strip().upper() == "CANCELLED":
-        flash("Cancelled appointment cannot be marked as paid.", "danger")
-        return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
-    if (appointment.payment_status or "").strip().upper() == "PAID":
-        flash("Appointment is already marked as paid.", "info")
-        return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
-    appointment.payment_status = "PAID"
-    db.session.commit()
-    flash("Appointment marked as paid.", "success")
-    return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
+    return handle_mark_appointment_paid(
+        id,
+        build_appointment_audit_snapshot=build_appointment_audit_snapshot,
+        record_audit_event=record_audit_event,
+        validate_mark_paid_transition=validate_mark_paid_transition,
+    )
 
 @app.route("/appointments/delete/<int:id>", methods=["POST"])
 @login_required
 def delete_appointment(id):
-    appointment = Appointment.query.get_or_404(id)
+    appointment = active_appointment_query().filter(Appointment.id == id).first_or_404()
+    before_snapshot = build_appointment_audit_snapshot(appointment)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
-    db.session.delete(appointment)
+    appointment.is_deleted = True
+    appointment.deleted_at = datetime.utcnow()
+    appointment.deleted_by = session.get("username")
     db.session.commit()
-    flash("Appointment deleted successfully.", "success")
+    record_audit_event(
+        action="Archived appointment",
+        entity_type="APPOINTMENT",
+        entity_id=before_snapshot.get("id") if before_snapshot else None,
+        ref_code=before_snapshot.get("appointment_no", "") if before_snapshot else "",
+        before=before_snapshot,
+        after=None
+    )
+    flash("Appointment archived successfully.", "success")
     return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
 
 @app.route("/reports", methods=["GET", "POST"])
 @login_required
 def reports():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
     if user.role != "admin" and not user.can_view_reports:
         flash("Access denied", "danger")
         return redirect("/")
-    invoices = []
-    total = 0
-    profit_summary = None
-    medicine_summary = []
-    fast_movers = []
-    medicine_totals = None
-    patient_medicine_patients = []
-    patient_medicine_rows = []
-    patient_medicine_summary = None
-    report_filters = {
-        "month": "",
-        "year": "",
-        "from_date": "",
-        "to_date": "",
-        "patient": "",
-        "mobile": "",
-        "search_query": "",
-        "medicine_query": "",
-        "top_n": "10"
-    }
-
-    report_type = request.form.get("report_type")
+    report_validation_error = None
     if request.method == "POST":
-        for key in report_filters.keys():
-            report_filters[key] = (request.form.get(key) or "").strip()
-        if not report_filters["top_n"]:
-            report_filters["top_n"] = "10"
+        report_validation_error = validate_report_request(request.form, parse_date=parse_date)
 
-        # DAILY
-        if report_type == "daily":
-            today = clinic_now().date()
-            start_bound, end_bound = local_date_range_to_storage_bounds(today, today)
-
-            invoices = Invoice.query.filter(
-                Invoice.created_at >= start_bound,
-                Invoice.created_at < end_bound
-            ).all()
-
-        # MONTHLY
-        elif report_type == "monthly":
-            month = to_int_safe(request.form.get("month"), 0)
-            year = to_int_safe(request.form.get("year"), 0)
-            if month < 1 or month > 12 or year < 1900:
-                flash("Please enter a valid month and year.", "danger")
-            else:
-                start_bound, end_bound = local_month_to_storage_bounds(year, month)
-                invoices = Invoice.query.filter(
-                    Invoice.created_at >= start_bound,
-                    Invoice.created_at < end_bound
-                ).all()
-
-        # CUSTOM DATE
-        elif report_type == "custom":
-            from_date = request.form.get("from_date")
-            to_date = request.form.get("to_date")
-
-            if from_date and to_date:
-                from_date_value = parse_date(from_date)
-                to_date_value = parse_date(to_date)
-                if not from_date_value or not to_date_value:
-                    flash("Please enter valid from/to dates.", "danger")
-                elif to_date_value < from_date_value:
-                    flash("To date must be greater than or equal to from date.", "danger")
-                else:
-                    from_dt, to_dt = local_date_range_to_storage_bounds(from_date_value, to_date_value)
-                    invoices = Invoice.query.filter(
-                        Invoice.created_at >= from_dt,
-                        Invoice.created_at < to_dt
-                    ).all()
-            else:
-                flash("Please select both from date and to date.", "danger")
-
-        # PATIENT WISE
-        elif report_type == "patient":
-            patient = (request.form.get("patient") or "").strip()
-            if not patient:
-                flash("Please enter patient name.", "danger")
-            else:
-                invoices = Invoice.query.filter(
-                    Invoice.customer.ilike(f"%{patient}%")
-                ).all()
-
-        # MOBILE WISE
-        elif report_type == "mobile":
-            mobile_raw = (request.form.get("mobile") or "").strip()
-            if not mobile_raw:
-                flash("Please enter mobile number.", "danger")
-            else:
-                mobile_digits = normalize_patient_mobile(mobile_raw)
-                normalized_mobile = db.func.replace(
-                    db.func.replace(
-                        db.func.replace(
-                            db.func.replace(
-                                db.func.replace(
-                                    db.func.replace(db.func.coalesce(Invoice.mobile, ""), " ", ""),
-                                    "-", ""
-                                ),
-                                "+", ""
-                            ),
-                            "(", ""
-                        ),
-                        ")", ""
-                    ),
-                    ".", ""
-                )
-                if mobile_digits:
-                    invoices = Invoice.query.filter(
-                        or_(
-                            normalized_mobile.like(f"%{mobile_digits}%"),
-                            Invoice.mobile.ilike(f"%{mobile_raw}%")
-                        )
-                    ).all()
-                else:
-                    invoices = Invoice.query.filter(
-                        Invoice.mobile.ilike(f"%{mobile_raw}%")
-                    ).all()
-
-        # PATIENT MEDICINE USAGE
-        elif report_type == "patient_medicine":
-            patient_medicine_patients, patient_medicine_rows, patient_medicine_summary, usage_error = (
-                build_patient_medicine_usage_report(
-                    report_filters["from_date"],
-                    report_filters["to_date"],
-                    search_query=report_filters["search_query"]
-                )
-            )
-            if usage_error:
-                flash(usage_error, "danger")
-
-        # PROFIT / LOSS (FIFO)
-        elif report_type == "profit":
-            profit_summary, profit_error = build_profit_report_summary(
-                request.form.get("from_date"),
-                request.form.get("to_date")
-            )
-            if profit_error:
-                flash(profit_error, "danger")
-
-        # MEDICINE SUMMARY / FAST MOVERS
-        elif report_type == "medicine":
-            medicine_report, medicine_errors = build_medicine_report_data(
-                report_filters["from_date"],
-                report_filters["to_date"],
-                medicine_query=report_filters["medicine_query"],
-                top_n=report_filters["top_n"]
-            )
-            for error in medicine_errors:
-                flash(error, "danger")
-            report_filters["top_n"] = str(medicine_report["top_n"])
-            medicine_summary = medicine_report["medicine_summary"]
-            fast_movers = medicine_report["fast_movers"]
-            medicine_totals = medicine_report["medicine_totals"]
-
-        total = sum(i.total for i in invoices)
-
-    return render_template(
-        "reports.html",
-        invoices=invoices,
-        total=round(total, 2),
-        report_type=report_type,
-        profit_summary=profit_summary,
-        medicine_summary=medicine_summary,
-        fast_movers=fast_movers,
-        medicine_totals=medicine_totals,
-        patient_medicine_patients=patient_medicine_patients,
-        patient_medicine_rows=patient_medicine_rows,
-        patient_medicine_summary=patient_medicine_summary,
-        report_filters=report_filters
+    return render_reports_page(
+        request_method=request.method,
+        form_data=request.form if request.method == "POST" else request.args,
+        prevalidated_error=report_validation_error,
+        clinic_now=clinic_now,
+        parse_date=parse_date,
+        to_int_safe=to_int_safe,
+        local_date_range_to_storage_bounds=local_date_range_to_storage_bounds,
+        normalize_patient_mobile=normalize_patient_mobile,
+        or_=or_,
+        build_patient_medicine_usage_report=build_patient_medicine_usage_report,
+        build_profit_report_summary=build_profit_report_summary,
+        build_medicine_report_data=build_medicine_report_data,
     )
 
 
 @app.route("/reports/export")
 @login_required
 def export_excel():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -5459,6 +7624,25 @@ def export_excel():
     from io import BytesIO
 
     now = clinic_now()
+    delivery_mode = (request.args.get("delivery") or "").strip().lower()
+    if delivery_mode == "background":
+        queued_job = queue_report_export_job(
+            app,
+            {
+                "queued_at": datetime.utcnow().isoformat(),
+                "queued_by": session.get("username"),
+                "route": "/reports/export",
+                "query": {key: value for key, value in request.args.items()},
+            }
+        )
+        if is_async_request():
+            return jsonify({
+                "ok": True,
+                "job_id": queued_job["job_id"],
+                "message": "Report export queued for background processing."
+            }), 202
+        flash(f"Report export queued in background. Job ID: {queued_job['job_id']}", "success")
+        return redirect(request.referrer or url_for("reports"))
     db_dialect = db.engine.dialect.name if db.engine else "unknown"
     scope = (request.args.get("scope") or "filtered").strip().lower()
     if scope not in ("filtered", "all"):
@@ -5782,7 +7966,7 @@ def export_excel():
 
     invoices = Invoice.query.order_by(Invoice.created_at.desc(), Invoice.id.desc()).all()
     invoice_items = InvoiceItem.query.order_by(InvoiceItem.id.asc()).all()
-    appointments = Appointment.query.order_by(
+    appointments = active_appointment_query().order_by(
         Appointment.appointment_date.desc(),
         Appointment.appointment_time.desc(),
         Appointment.id.desc()
@@ -5912,7 +8096,7 @@ def export_excel():
 @app.route("/reports/appointments/export")
 @login_required
 def export_appointments_excel():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -5992,7 +8176,7 @@ def export_appointments_excel():
 @app.route("/reports/appointments/print")
 @login_required
 def print_appointments_report():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -6018,76 +8202,120 @@ def print_appointments_report():
 @login_required
 @admin_required
 def users():
-    users = User.query.all()
-    return render_template("users.html", users=users)
+    users = active_user_query().order_by(User.username.asc()).all()
+    for listed_user in users:
+        if listed_user.role == "admin":
+            listed_user.access_profile = "admin"
+        elif not listed_user.access_profile:
+            listed_user.access_profile = derive_access_profile(
+                {field_name: getattr(listed_user, field_name, False) for field_name in USER_PERMISSION_FIELDS}
+            )
+    return render_template(
+        "users.html",
+        users=users,
+        permission_fields=USER_PERMISSION_FIELDS
+    )
 @app.route("/users/edit/<int:user_id>", methods=["GET", "POST"])
 @login_required
 @admin_required
 def edit_user(user_id):
-    user = User.query.get_or_404(user_id)
+    user = active_user_query().filter(User.id == user_id).first_or_404()
 
     if request.method == "POST":
-        user.role = request.form.get("role")
-
-        user.can_view_medicine = True if request.form.get("can_view_medicine") else False
-        user.can_add_medicine = True if request.form.get("can_add_medicine") else False
-        user.can_edit_medicine = True if request.form.get("can_edit_medicine") else False
-        user.can_delete_medicine = True if request.form.get("can_delete_medicine") else False
-        user.can_edit_invoice = True if request.form.get("can_edit_invoice") else False
-        user.can_delete_invoice = True if request.form.get("can_delete_invoice") else False
-        user.can_invoice_action = True if request.form.get("can_invoice_action") else False
-        if user.can_edit_invoice or user.can_delete_invoice:
-            user.can_invoice_action = True
-        user.can_view_stock_history = True if request.form.get("can_view_stock_history") else False
-        user.can_view_reports = True if request.form.get("can_view_reports") else False
-        user.can_manage_users = True if request.form.get("can_manage_users") else False
+        payload = validate_user_form(request.form, is_create=False)
+        if payload["errors"]:
+            for error in payload["errors"]:
+                flash(error, "danger")
+            return render_template(
+                "user_form.html",
+                user=user,
+                form_title="Edit User",
+                submit_label="Save Changes",
+                profile_options=ACCESS_PROFILE_PRESETS
+            )
+        duplicate = active_user_query().filter(
+            db.func.lower(User.username) == payload["username"].lower(),
+            User.id != user.id
+        ).first()
+        if duplicate:
+            flash("Username already exists.", "danger")
+            return render_template(
+                "user_form.html",
+                user=user,
+                form_title="Edit User",
+                submit_label="Save Changes",
+                profile_options=ACCESS_PROFILE_PRESETS
+            )
+        user.username = payload["username"]
+        user.role = payload["role"]
+        user.access_profile = payload["access_profile"]
+        for field_name, enabled in payload["permissions"].items():
+            setattr(user, field_name, bool(enabled))
         user.session_version = int(user.session_version or 0) + 1
 
         db.session.commit()
-        flash("User updated successfully")
+        flash("User updated successfully", "success")
         return redirect("/users")
 
-    return render_template("edit_user.html", user=user)
+    if not user.access_profile:
+        user.access_profile = derive_access_profile({field: getattr(user, field, False) for field in USER_PERMISSION_FIELDS})
+    return render_template(
+        "user_form.html",
+        user=user,
+        form_title="Edit User",
+        submit_label="Save Changes",
+        profile_options=ACCESS_PROFILE_PRESETS
+    )
 @app.route("/users/add", methods=["GET", "POST"])
 @login_required
 @admin_required
 def add_user():
     if request.method == "POST":
-        can_edit_invoice = bool(request.form.get("can_edit_invoice"))
-        can_delete_invoice = bool(request.form.get("can_delete_invoice"))
-        username = (request.form.get("username") or "").strip()
-        role = (request.form.get("role") or "user").strip()
-        password = request.form.get("password") or ""
-        if not username or not password:
-            flash("Username and password are required", "danger")
-            return redirect("/users/add")
-        user = User(
-            username=username,
-            role=role,
-            can_view_medicine=bool(request.form.get("can_view_medicine")),
-            can_add_medicine=bool(request.form.get("can_add_medicine")),
-            can_edit_medicine=bool(request.form.get("can_edit_medicine")),
-            can_delete_medicine=bool(request.form.get("can_delete_medicine")),
-            can_edit_invoice=can_edit_invoice,
-            can_delete_invoice=can_delete_invoice,
-            can_invoice_action=bool(request.form.get("can_invoice_action")) or can_edit_invoice or can_delete_invoice,
-            can_view_stock_history=bool(request.form.get("can_view_stock_history")),
-            can_view_reports=bool(request.form.get("can_view_reports")),
-            can_manage_users=bool(request.form.get("can_manage_users"))
+        payload = validate_user_form(request.form, is_create=True)
+        if payload["errors"]:
+            for error in payload["errors"]:
+                flash(error, "danger")
+            return render_template(
+                "user_form.html",
+                user=None,
+                form_title="Add User",
+                submit_label="Create User",
+                profile_options=ACCESS_PROFILE_PRESETS
             )
-        user.set_password(password)
+        if active_user_query().filter(db.func.lower(User.username) == payload["username"].lower()).first():
+            flash("Username already exists.", "danger")
+            return render_template(
+                "user_form.html",
+                user=None,
+                form_title="Add User",
+                submit_label="Create User",
+                profile_options=ACCESS_PROFILE_PRESETS
+            )
+        user = User(
+            username=payload["username"],
+            role=payload["role"],
+            access_profile=payload["access_profile"],
+            **payload["permissions"]
+        )
+        user.set_password(payload["password"])
         
         db.session.add(user)
         db.session.commit()
-        flash("User created")
+        flash("User created", "success")
         return redirect("/users")
 
-    return render_template("add_user.html")
+    return render_template(
+        "user_form.html",
+        user=None,
+        form_title="Add User",
+        submit_label="Create User",
+        profile_options=ACCESS_PROFILE_PRESETS
+    )
 @app.route("/users/change-password/<int:user_id>", methods=["GET","POST"])
 @login_required
 @admin_required
 def change_user_password(user_id):
-    user = User.query.get_or_404(user_id)
+    user = active_user_query().filter(User.id == user_id).first_or_404()
 
     if request.method == "POST":
         new_password = (request.form.get("new_password") or request.form.get("password") or "").strip()
@@ -6114,20 +8342,23 @@ def change_user_password(user_id):
 @login_required
 @admin_required
 def delete_user(user_id):
-    user = User.query.get_or_404(user_id)
+    user = active_user_query().filter(User.id == user_id).first_or_404()
     if user.username == "admin":
         flash("Admin user cannot be deleted", "danger")
         return redirect("/users")
 
-    db.session.delete(user)
+    user.is_active = False
+    user.deleted_at = datetime.utcnow()
+    user.deleted_by = session.get("username")
+    user.session_version = int(user.session_version or 0) + 1
     db.session.commit()
-    flash("User deleted successfully", "success")
+    flash("User archived successfully", "success")
     return redirect("/users")
 
 @app.route("/medicines/export")
 @login_required
 def export_medicines():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -6213,7 +8444,7 @@ from datetime import datetime, time
 @app.route("/stock-history")
 @login_required
 def stock_history():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
@@ -6253,7 +8484,7 @@ def stock_history():
 @app.route("/stock-history/export")
 @login_required
 def export_stock_history():
-    user = User.query.get(session.get("user_id"))
+    user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
         return redirect("/")

@@ -6,8 +6,8 @@
 .card {
     background:#fff;
     padding:20px;
-    border-radius:8px;
-    box-shadow:0 0 8px #cfd8e3;
+    border-radius:16px;
+    box-shadow:0 16px 36px rgba(15, 23, 42, 0.08);
 }
 .btn {
     padding:6px 12px;
@@ -26,6 +26,15 @@
 }
 .admin { background:#198754;color:#fff; }
 .staff { background:#6c757d;color:#fff; }
+.profile-chip {
+    display:inline-block;
+    padding:4px 10px;
+    margin:2px 4px 2px 0;
+    border-radius:999px;
+    background:#e8f1ff;
+    color:#1e40af;
+    font-size:12px;
+}
 table { width:100%;border-collapse:collapse;margin-top:15px; }
 th,td { padding:10px;border-bottom:1px solid #ddd;text-align:center; }
 th { background:#0d6efd;color:#fff; }
@@ -41,6 +50,7 @@ th { background:#0d6efd;color:#fff; }
             <th>ID</th>
             <th>Username</th>
             <th>Role</th>
+            <th>Access Profile</th>
             <th>Permissions</th>
             <th>Actions</th>
         </tr>
@@ -54,17 +64,24 @@ th { background:#0d6efd;color:#fff; }
                     {{ u.role.upper() }}
                 </span>
             </td>
+            <td>
+                <span class="profile-chip">{{ (u.access_profile or 'custom').replace('_', ' ').title() }}</span>
+            </td>
 
             <td style="text-align:left">
                 View Medicine: {{ "Yes" if u.can_view_medicine else "No" }}<br>
                 Add Medicine: {{ "Yes" if u.can_add_medicine else "No" }}<br>
                 Edit Medicine: {{ "Yes" if u.can_edit_medicine else "No" }}<br>
                 Delete Medicine: {{ "Yes" if u.can_delete_medicine else "No" }}<br>
+                Billing Access: {{ "Yes" if u.can_invoice_action else "No" }}<br>
                 Edit Invoice: {{ "Yes" if u.can_edit_invoice else "No" }}<br>
                 Delete Invoice: {{ "Yes" if u.can_delete_invoice else "No" }}<br>
                 Stock History: {{ "Yes" if u.can_view_stock_history else "No" }}<br>
+                Purchase Manager: {{ "Yes" if u.can_manage_purchases else "No" }}<br>
                 Reports: {{ "Yes" if u.can_view_reports else "No" }}<br>
-                Users: {{ "Yes" if u.can_manage_users else "No" }}
+                Dashboard Profit: {{ "Yes" if u.can_view_profit_dashboard else "No" }}<br>
+                Users: {{ "Yes" if u.can_manage_users else "No" }}<br>
+                Audit Logs: {{ "Yes" if u.can_view_audit_logs else "No" }}
             </td>
 
             <td>
@@ -75,8 +92,8 @@ th { background:#0d6efd;color:#fff; }
                     <a href="/users/delete/{{ u.id }}"
                        class="btn btn-del"
                        data-async-action="true"
-                       onclick="return confirm('Delete user?')">
-                       Delete
+                       onclick="return confirm('Archive this user?')">
+                       Archive
                     </a>
                 {% endif %}
             </td>
