@@ -13,7 +13,7 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 from werkzeug.utils import secure_filename
-from sqlalchemy import text, or_, and_, inspect
+from sqlalchemy import text, or_, and_, inspect, cast, String
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 try:
     from flask_migrate import Migrate
@@ -494,8 +494,21 @@ def current_user_agent():
     return (request.headers.get("User-Agent") or "").strip()[:255]
 
 
+def _normalized_boolish_column(column):
+    return db.func.lower(db.func.trim(cast(column, String)))
+
+
+def truthy_column_expr(column):
+    return _normalized_boolish_column(column).in_(("1", "true", "t", "yes", "on"))
+
+
+def falsey_or_null_column_expr(column):
+    normalized = _normalized_boolish_column(column)
+    return or_(column.is_(None), normalized.in_(("0", "false", "f", "no", "off", "")))
+
+
 def active_user_query():
-    return User.query.filter(User.deleted_at.is_(None), User.is_active.is_(True))
+    return User.query.filter(User.deleted_at.is_(None), truthy_column_expr(User.is_active))
 
 
 def active_vendor_query():
@@ -503,15 +516,11 @@ def active_vendor_query():
 
 
 def active_hold_bill_query():
-    return HoldBill.query.filter(
-        or_(HoldBill.is_deleted.is_(False), HoldBill.is_deleted.is_(None))
-    )
+    return HoldBill.query.filter(falsey_or_null_column_expr(HoldBill.is_deleted))
 
 
 def active_appointment_query():
-    return Appointment.query.filter(
-        or_(Appointment.is_deleted.is_(False), Appointment.is_deleted.is_(None))
-    )
+    return Appointment.query.filter(falsey_or_null_column_expr(Appointment.is_deleted))
 
 
 def active_user_by_id(user_id):
@@ -584,7 +593,7 @@ def run_system_health_checks(include_counts=False):
         "backups": backup_summary,
         "security": {
             "suspicious_logins_24h": LoginSecurityEvent.query.filter(
-                LoginSecurityEvent.is_suspicious.is_(True),
+                truthy_column_expr(LoginSecurityEvent.is_suspicious),
                 LoginSecurityEvent.created_at >= suspicious_since,
             ).count(),
             "failed_logins_24h": LoginSecurityEvent.query.filter(
@@ -619,7 +628,7 @@ def run_system_health_checks(include_counts=False):
             "invoices": Invoice.query.count(),
             "returns": Return.query.count(),
             "medicines": Medicine.query.count(),
-            "active_medicines": Medicine.query.filter(Medicine.is_active.is_(True)).count(),
+            "active_medicines": Medicine.query.filter(truthy_column_expr(Medicine.is_active)).count(),
             "low_stock_medicines": Medicine.query.filter(Medicine.qty <= Medicine.reorder_level).count(),
             "vendors": active_vendor_query().count(),
             "audit_events": AuditLog.query.count(),
@@ -713,7 +722,7 @@ def build_dashboard_sales_trend(days=7):
     returns = Return.query.filter(
         Return.created_at >= start_bound,
         Return.created_at < end_bound,
-        Return.is_cancelled == False
+        falsey_or_null_column_expr(Return.is_cancelled)
     ).all()
     for return_bill in returns:
         local_day = storage_datetime_to_local_date(return_bill.created_at)
@@ -2259,22 +2268,22 @@ with app.app_context():
     # Safe schema upgrades for return system (no data loss)
     try:
         # User permissions
-        ensure_column("user", "can_view_medicine", "INTEGER")
-        ensure_column("user", "can_add_medicine", "INTEGER")
-        ensure_column("user", "can_edit_medicine", "INTEGER")
-        ensure_column("user", "can_delete_medicine", "INTEGER")
-        ensure_column("user", "can_edit_invoice", "INTEGER")
-        ensure_column("user", "can_delete_invoice", "INTEGER")
-        ensure_column("user", "can_invoice_action", "INTEGER")
-        ensure_column("user", "can_view_stock_history", "INTEGER")
-        ensure_column("user", "can_view_reports", "INTEGER")
-        ensure_column("user", "can_manage_users", "INTEGER")
-        ensure_column("user", "can_manage_purchases", "INTEGER")
-        ensure_column("user", "can_view_audit_logs", "INTEGER")
-        ensure_column("user", "can_view_profit_dashboard", "INTEGER")
+        ensure_column("user", "can_view_medicine", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_add_medicine", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_edit_medicine", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_delete_medicine", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_edit_invoice", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_delete_invoice", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_invoice_action", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_view_stock_history", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_view_reports", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_manage_users", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_manage_purchases", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_view_audit_logs", "BOOLEAN DEFAULT FALSE")
+        ensure_column("user", "can_view_profit_dashboard", "BOOLEAN DEFAULT FALSE")
         ensure_column("user", "access_profile", "TEXT")
         ensure_column("user", "session_version", "INTEGER DEFAULT 0")
-        ensure_column("user", "is_active", "INTEGER DEFAULT 1")
+        ensure_column("user", "is_active", "BOOLEAN DEFAULT TRUE")
         ensure_column("user", "deleted_at", "TIMESTAMP")
         ensure_column("user", "deleted_by", "TEXT")
         ensure_column("user", "last_login_at", "TIMESTAMP")
@@ -2299,7 +2308,7 @@ with app.app_context():
         ensure_column("medicine", "pack_qty", "INTEGER")
         ensure_column("medicine", "barcode", "TEXT")
         ensure_column("medicine", "reorder_level", "INTEGER DEFAULT 10")
-        ensure_column("medicine", "is_active", "INTEGER DEFAULT 1")
+        ensure_column("medicine", "is_active", "BOOLEAN DEFAULT TRUE")
 
         # Vendor extra fields
         ensure_column("vendor", "shop_name", "TEXT")
@@ -2316,7 +2325,7 @@ with app.app_context():
         ensure_column("return_bill", "payment_mode", "TEXT")
         ensure_column("return_bill", "cgst", "REAL")
         ensure_column("return_bill", "sgst", "REAL")
-        ensure_column("return_bill", "is_cancelled", "INTEGER")
+        ensure_column("return_bill", "is_cancelled", "BOOLEAN DEFAULT FALSE")
         ensure_column("return_bill", "cancelled_by", "TEXT")
         ensure_column("return_bill", "cancelled_at", "TEXT")
         ensure_column("return_item", "medicine_id", "INTEGER")
@@ -2355,14 +2364,64 @@ with app.app_context():
         ensure_column("appointment", "gender", "TEXT")
         ensure_column("appointment", "symptoms", "TEXT")
         ensure_column("appointment", "previous_visit_notes", "TEXT")
-        ensure_column("appointment", "is_deleted", "INTEGER DEFAULT 0")
+        ensure_column("appointment", "is_deleted", "BOOLEAN DEFAULT FALSE")
         ensure_column("appointment", "deleted_at", "TIMESTAMP")
         ensure_column("appointment", "deleted_by", "TEXT")
-        ensure_column("hold_bill", "is_deleted", "INTEGER DEFAULT 0")
+        ensure_column("hold_bill", "is_deleted", "BOOLEAN DEFAULT FALSE")
         ensure_column("hold_bill", "deleted_at", "TIMESTAMP")
         ensure_column("hold_bill", "deleted_by", "TEXT")
+        ensure_column("vendor", "is_active", "BOOLEAN DEFAULT TRUE")
         ensure_column("vendor", "deleted_at", "TIMESTAMP")
         ensure_column("vendor", "deleted_by", "TEXT")
+        if (db.session.bind.dialect.name if db.session.bind else "").lower() == "postgresql":
+            legacy_boolean_columns = {
+                "user": {
+                    "is_active": True,
+                    "can_view_medicine": False,
+                    "can_add_medicine": False,
+                    "can_edit_medicine": False,
+                    "can_delete_medicine": False,
+                    "can_edit_invoice": False,
+                    "can_delete_invoice": False,
+                    "can_invoice_action": False,
+                    "can_view_stock_history": False,
+                    "can_view_reports": False,
+                    "can_manage_users": False,
+                    "can_manage_purchases": False,
+                    "can_view_audit_logs": False,
+                    "can_view_profit_dashboard": False,
+                },
+                "medicine": {"is_active": True},
+                "vendor": {"is_active": True},
+                "return_bill": {"is_cancelled": False},
+                "appointment": {"is_deleted": False},
+                "hold_bill": {"is_deleted": False},
+                "login_security_event": {"is_suspicious": False},
+            }
+            pg_inspector = inspect(db.engine)
+            for table_name, columns in legacy_boolean_columns.items():
+                if not pg_inspector.has_table(table_name):
+                    continue
+                existing_columns = {col["name"]: col for col in pg_inspector.get_columns(table_name)}
+                for column_name, default_value in columns.items():
+                    column_meta = existing_columns.get(column_name)
+                    if not column_meta:
+                        continue
+                    type_name = column_meta["type"].__class__.__name__.lower()
+                    if "bool" in type_name:
+                        continue
+                    default_sql = "TRUE" if default_value else "FALSE"
+                    db.session.execute(text(
+                        f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" '
+                        'TYPE BOOLEAN USING ('
+                        f'CASE WHEN "{column_name}" IS NULL THEN NULL '
+                        f'WHEN LOWER(TRIM(CAST("{column_name}" AS TEXT))) IN '
+                        "('1', 'true', 't', 'yes', 'on') THEN TRUE ELSE FALSE END)"
+                    ))
+                    db.session.execute(text(
+                        f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" SET DEFAULT {default_sql}'
+                    ))
+            db.session.commit()
         if AUTO_DATA_BACKFILL_ON_BOOT:
             db.session.execute(text(
                 'UPDATE "appointment" '
@@ -2828,7 +2887,7 @@ def system_center():
         backup_snapshots=list_backup_snapshots(app, limit=8),
         restore_commands=build_restore_commands(app, "latest"),
         recent_suspicious_logins=LoginSecurityEvent.query.filter(
-            LoginSecurityEvent.is_suspicious.is_(True)
+            truthy_column_expr(LoginSecurityEvent.is_suspicious)
         ).order_by(LoginSecurityEvent.created_at.desc()).limit(8).all(),
         migrate_enabled=bool(migrate),
         sentry_configured=bool((os.environ.get("SENTRY_DSN") or "").strip())
@@ -3236,7 +3295,7 @@ def build_profit_report_summary(from_date_raw, to_date_raw):
     ).filter(
         Return.created_at >= start_bound,
         Return.created_at < end_bound,
-        Return.is_cancelled == False
+        falsey_or_null_column_expr(Return.is_cancelled)
     ).scalar() or 0
     cogs = db.session.query(db.func.coalesce(db.func.sum(InvoiceItem.cost_amount), 0)).join(
         Invoice, InvoiceItem.invoice_id == Invoice.id
@@ -3249,7 +3308,7 @@ def build_profit_report_summary(from_date_raw, to_date_raw):
     ).filter(
         Return.created_at >= start_bound,
         Return.created_at < end_bound,
-        Return.is_cancelled == False
+        falsey_or_null_column_expr(Return.is_cancelled)
     ).scalar() or 0
 
     net_sales = sales_total - returns_total
@@ -3382,7 +3441,7 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
         row["purchase_amount"] += to_float(item.cost_amount)
 
     return_query = ReturnItem.query.join(Return, ReturnItem.return_id == Return.id).filter(
-        Return.is_cancelled == False
+        falsey_or_null_column_expr(Return.is_cancelled)
     )
     if start_bound:
         return_query = return_query.filter(Return.created_at >= start_bound)
@@ -4030,7 +4089,7 @@ def return_medicine():
             .join(Return, Return.id == ReturnItem.return_id)
             .filter(
                 Return.invoice_id == invoice.id,
-                Return.is_cancelled == False
+                falsey_or_null_column_expr(Return.is_cancelled)
             )
             .group_by(ReturnItem.invoice_item_id)
             .all()
@@ -4160,7 +4219,7 @@ def return_medicine():
                 .join(Return, Return.id == ReturnItem.return_id)
                 .filter(
                     Return.invoice_id == invoice.id,
-                    Return.is_cancelled == False
+                    falsey_or_null_column_expr(Return.is_cancelled)
                 )
                 .group_by(ReturnItem.invoice_item_id)
                 .all()
@@ -4517,7 +4576,10 @@ def delete_invoice(id):
         return redirect("/invoices")
     inv = Invoice.query.get_or_404(id)
     before_snapshot = build_invoice_audit_snapshot(inv)
-    has_returns = Return.query.filter(Return.invoice_id == inv.id, Return.is_cancelled == False).first()
+    has_returns = Return.query.filter(
+        Return.invoice_id == inv.id,
+        falsey_or_null_column_expr(Return.is_cancelled)
+    ).first()
     if has_returns:
         flash("Cannot delete invoice with returns. Cancel returns first.", "danger")
         return redirect("/invoices")
@@ -6900,7 +6962,7 @@ def calculate_appointment_revenue_breakdown(from_date=None, to_date=None):
 
 def get_next_daily_token(appt_date, exclude_appointment_id=None):
     query = db.session.query(db.func.max(Appointment.token_no)).filter(
-        or_(Appointment.is_deleted.is_(False), Appointment.is_deleted.is_(None)),
+        falsey_or_null_column_expr(Appointment.is_deleted),
         Appointment.appointment_date == appt_date
     )
     if exclude_appointment_id:
