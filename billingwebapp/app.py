@@ -7080,6 +7080,40 @@ def ensure_appointment_runtime_schema():
                     if "duplicate column" in low or "already exists" in low:
                         continue
                     errors.append(f"{table_name}.{col_name}: {err_text}")
+        if dialect == "postgresql":
+            postgres_boolean_columns = {
+                "appointment": {"is_deleted": False},
+                "hold_bill": {"is_deleted": False},
+                "return_bill": {"is_cancelled": False},
+                "user": {"is_active": True},
+                "medicine": {"is_active": True},
+                "vendor": {"is_active": True},
+                "login_security_event": {"is_suspicious": False},
+            }
+            pg_insp = inspect(db.engine)
+            for table_name, columns in postgres_boolean_columns.items():
+                if not pg_insp.has_table(table_name):
+                    continue
+                existing = {c["name"]: c for c in pg_insp.get_columns(table_name)}
+                for col_name, default_value in columns.items():
+                    column_meta = existing.get(col_name)
+                    if not column_meta:
+                        continue
+                    type_name = column_meta["type"].__class__.__name__.lower()
+                    if "bool" in type_name:
+                        continue
+                    default_sql = "TRUE" if default_value else "FALSE"
+                    db.session.execute(text(
+                        f'ALTER TABLE "{table_name}" ALTER COLUMN "{col_name}" '
+                        'TYPE BOOLEAN USING ('
+                        f'CASE WHEN "{col_name}" IS NULL THEN NULL '
+                        f'WHEN LOWER(TRIM(CAST("{col_name}" AS TEXT))) IN '
+                        "('1', 'true', 't', 'yes', 'on') THEN TRUE ELSE FALSE END)"
+                    ))
+                    db.session.execute(text(
+                        f'ALTER TABLE "{table_name}" ALTER COLUMN "{col_name}" SET DEFAULT {default_sql}'
+                    ))
+            db.session.commit()
     except Exception:
         db.session.rollback()
         app.logger.exception("Runtime appointment schema check failed")
@@ -7431,7 +7465,12 @@ def add_appointment():
                 except Exception:
                     err_text = str(exc)
                 low = err_text.lower()
-                if ("undefined column" in low or "does not exist" in low) and attempt == 0:
+                if (
+                    "undefined column" in low
+                    or "does not exist" in low
+                    or ("type integer but expression is of type boolean" in low)
+                    or ("datatype mismatch" in low and "boolean" in low and "integer" in low)
+                ) and attempt == 0:
                     schema_retry_ok, _ = ensure_appointment_runtime_schema()
                     if schema_retry_ok:
                         continue
@@ -7589,7 +7628,12 @@ def edit_appointment(id):
             except Exception:
                 err_text = str(exc)
             low = err_text.lower()
-            if "undefined column" in low or "does not exist" in low:
+            if (
+                "undefined column" in low
+                or "does not exist" in low
+                or ("type integer but expression is of type boolean" in low)
+                or ("datatype mismatch" in low and "boolean" in low and "integer" in low)
+            ):
                 ensure_appointment_runtime_schema()
             app.logger.exception("Appointment update failed")
             short_err = (err_text or "database error").replace("\n", " ").strip()
