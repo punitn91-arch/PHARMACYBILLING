@@ -7174,10 +7174,44 @@ def table_runtime_columns(table_name):
     return {}
 
 
-def appointment_soft_delete_uses_legacy_integer():
+def postgres_runtime_column_data_type(table_name, column_name):
     try:
         if (db.session.bind.dialect.name if db.session.bind else "").lower() != "postgresql":
+            return ""
+        row = db.session.execute(
+            text(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = :table_name
+                  AND column_name = :column_name
+                LIMIT 1
+                """
+            ),
+            {
+                "table_name": (table_name or "").strip(),
+                "column_name": (column_name or "").strip(),
+            },
+        ).fetchone()
+        return str(row[0] or "").strip().lower() if row else ""
+    except Exception:
+        app.logger.exception(
+            "Unable to inspect PostgreSQL data type for %s.%s",
+            table_name,
+            column_name,
+        )
+    return ""
+
+
+def appointment_soft_delete_uses_legacy_integer():
+    try:
+        dialect = (db.session.bind.dialect.name if db.session.bind else "").lower()
+        if dialect != "postgresql":
             return False
+        data_type = postgres_runtime_column_data_type("appointment", "is_deleted")
+        if data_type:
+            return data_type in {"smallint", "integer", "bigint"}
         column = table_runtime_columns("appointment").get("is_deleted")
         if not column:
             return False
@@ -7807,10 +7841,11 @@ def delete_appointment(id):
         appointment_columns = table_runtime_columns("appointment")
 
         if appointment_columns:
+            use_legacy_integer = appointment_soft_delete_uses_legacy_integer()
             set_clauses = ['"is_deleted" = :is_deleted']
             params = {
                 "appointment_id": appointment.id,
-                "is_deleted": 1 if appointment_soft_delete_uses_legacy_integer() else True,
+                "is_deleted": 1 if use_legacy_integer else True,
             }
             if "deleted_at" in appointment_columns:
                 set_clauses.append('"deleted_at" = :deleted_at')
@@ -7818,14 +7853,26 @@ def delete_appointment(id):
             if "deleted_by" in appointment_columns:
                 set_clauses.append('"deleted_by" = :deleted_by')
                 params["deleted_by"] = deleted_by
-            db.session.execute(
-                text(
-                    'UPDATE "appointment" '
-                    f'SET {", ".join(set_clauses)} '
-                    'WHERE "id" = :appointment_id'
-                ),
-                params,
+            update_sql = text(
+                'UPDATE "appointment" '
+                f'SET {", ".join(set_clauses)} '
+                'WHERE "id" = :appointment_id'
             )
+            try:
+                db.session.execute(update_sql, params)
+            except SQLAlchemyError as exc:
+                db.session.rollback()
+                err_text = str(getattr(exc, "orig", exc) or exc).lower()
+                if "of type integer but expression is of type boolean" in err_text:
+                    retry_params = dict(params)
+                    retry_params["is_deleted"] = 1
+                    db.session.execute(update_sql, retry_params)
+                elif "of type boolean but expression is of type integer" in err_text:
+                    retry_params = dict(params)
+                    retry_params["is_deleted"] = True
+                    db.session.execute(update_sql, retry_params)
+                else:
+                    raise
         else:
             appointment.is_deleted = True
             if hasattr(appointment, "deleted_at"):
