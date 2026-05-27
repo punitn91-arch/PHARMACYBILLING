@@ -7148,22 +7148,7 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         "created_at": datetime.utcnow(),
     }
 
-    db.session.execute(
-        text(
-            'INSERT INTO "appointment" ('
-            '"appointment_no", "token_no", "patient_id", "patient_name", "mobile", "age", "gender", '
-            '"doctor_name", "appointment_date", "appointment_time", "payment_mode", "payment_status", '
-            '"doctor_discount", "consultation_fee", "status", "symptoms", "previous_visit_notes", '
-            '"notes", "created_by", "created_at"'
-            ') VALUES ('
-            ':appointment_no, :token_no, :patient_id, :patient_name, :mobile, :age, :gender, '
-            ':doctor_name, :appointment_date, :appointment_time, :payment_mode, :payment_status, '
-            ':doctor_discount, :consultation_fee, :status, :symptoms, :previous_visit_notes, '
-            ':notes, :created_by, :created_at'
-            ')'
-        ),
-        common_values,
-    )
+    db.session.execute(Appointment.__table__.insert().values(**common_values))
     db.session.commit()
 
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
@@ -7452,6 +7437,7 @@ def add_appointment():
             )
 
         appointment_saved = False
+        created_appointment_no = None
         for attempt in range(2):
             try:
                 patient, mobile, _patient_err = safe_upsert_patient_profile(form_data)
@@ -7463,6 +7449,7 @@ def add_appointment():
                     validated=validated,
                     form_data=form_data,
                 )
+                created_appointment_no = appointment_no
                 appointment_saved = True
                 break
             except IntegrityError as exc:
@@ -7529,7 +7516,7 @@ def add_appointment():
 
         flash("Appointment booked successfully.", "success")
         created_appointment = active_appointment_query().filter_by(
-            appointment_no=appointment.appointment_no
+            appointment_no=created_appointment_no
         ).first() if appointment_saved else None
         if created_appointment:
             record_audit_event(
