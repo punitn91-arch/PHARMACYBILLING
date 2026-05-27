@@ -7154,9 +7154,28 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         "created_by": session.get("username"),
         "created_at": datetime.utcnow(),
     }
+    insert_values = dict(common_values)
+    insert_values["is_deleted"] = 0 if appointment_soft_delete_uses_legacy_integer() else False
 
-    db.session.execute(Appointment.__table__.insert().values(**common_values))
-    db.session.commit()
+    try:
+        db.session.execute(Appointment.__table__.insert().values(**insert_values))
+        db.session.commit()
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        err_text = str(getattr(exc, "orig", exc) or exc).lower()
+        if "of type integer but expression is of type boolean" in err_text:
+            retry_values = dict(insert_values)
+            retry_values["is_deleted"] = 0
+            db.session.execute(Appointment.__table__.insert().values(**retry_values))
+            db.session.commit()
+            return
+        if "of type boolean but expression is of type integer" in err_text:
+            retry_values = dict(insert_values)
+            retry_values["is_deleted"] = False
+            db.session.execute(Appointment.__table__.insert().values(**retry_values))
+            db.session.commit()
+            return
+        raise
 
 
 def table_runtime_columns(table_name):

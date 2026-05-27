@@ -339,6 +339,37 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(second_response.status_code, 200)
         self.assertIn(b"already marked as paid", second_response.data)
 
+    def test_appointment_create_handles_legacy_integer_soft_delete_column(self):
+        self.login()
+        original_helper = self.app_module.appointment_soft_delete_uses_legacy_integer
+        self.app_module.appointment_soft_delete_uses_legacy_integer = lambda: True
+        try:
+            response = self.client.post(
+                "/appointments/add",
+                data={
+                    "patient_name": "Legacy Create",
+                    "mobile": "9766655544",
+                    "gender": "MALE",
+                    "appointment_date": date.today().isoformat(),
+                    "appointment_time": "09:45",
+                    "payment_mode": "ONLINE",
+                    "doctor_discount": "0",
+                    "consultation_fee": "600",
+                    "symptoms": "",
+                    "previous_visit_notes": "",
+                    "notes": "",
+                },
+                follow_redirects=False,
+            )
+        finally:
+            self.app_module.appointment_soft_delete_uses_legacy_integer = original_helper
+
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            appointment = self.app_module.Appointment.query.filter_by(patient_name="Legacy Create").first()
+            self.assertIsNotNone(appointment)
+            self.assertFalse(bool(appointment.is_deleted))
+
     def test_profit_report_accuracy(self):
         with self.app.app_context():
             patient = self._seed_patient()
