@@ -7043,7 +7043,14 @@ def ensure_appointment_runtime_schema():
             ("age", "INTEGER"),
             ("gender", "TEXT"),
             ("symptoms", "TEXT"),
-            ("previous_visit_notes", "TEXT")
+            ("previous_visit_notes", "TEXT"),
+            ("reason", "TEXT"),
+            ("checked_in_at", "TIMESTAMP"),
+            ("completed_at", "TIMESTAMP"),
+            ("cancelled_at", "TIMESTAMP"),
+            ("is_deleted", "BOOLEAN DEFAULT FALSE"),
+            ("deleted_at", "TIMESTAMP"),
+            ("deleted_by", "TEXT"),
         ],
         "patient": [
             ("age", "INTEGER"),
@@ -7152,18 +7159,30 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
     db.session.commit()
 
 
+def table_runtime_columns(table_name):
+    try:
+        inspector = inspect(db.engine)
+        if not inspector.has_table(table_name):
+            return {}
+        return {
+            (column.get("name") or ""): column
+            for column in inspector.get_columns(table_name)
+            if column.get("name")
+        }
+    except Exception:
+        app.logger.exception("Unable to inspect %s table columns", table_name)
+    return {}
+
+
 def appointment_soft_delete_uses_legacy_integer():
     try:
         if (db.session.bind.dialect.name if db.session.bind else "").lower() != "postgresql":
             return False
-        inspector = inspect(db.engine)
-        if not inspector.has_table("appointment"):
+        column = table_runtime_columns("appointment").get("is_deleted")
+        if not column:
             return False
-        for column in inspector.get_columns("appointment"):
-            if column.get("name") != "is_deleted":
-                continue
-            type_name = column["type"].__class__.__name__.lower()
-            return "bool" not in type_name
+        type_name = column["type"].__class__.__name__.lower()
+        return "bool" not in type_name
     except Exception:
         app.logger.exception("Unable to inspect appointment.is_deleted column type")
     return False
@@ -7770,39 +7789,71 @@ def mark_appointment_paid(id):
 @app.route("/appointments/delete/<int:id>", methods=["POST"])
 @login_required
 def delete_appointment(id):
-    appointment = active_appointment_query().filter(Appointment.id == id).first_or_404()
-    before_snapshot = build_appointment_audit_snapshot(appointment)
-    selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
-    deleted_at = datetime.utcnow()
-    deleted_by = session.get("username")
-    if appointment_soft_delete_uses_legacy_integer():
-        db.session.execute(
-            text(
-                'UPDATE "appointment" '
-                'SET "is_deleted" = :is_deleted, "deleted_at" = :deleted_at, "deleted_by" = :deleted_by '
-                'WHERE "id" = :appointment_id'
-            ),
-            {
-                "is_deleted": 1,
-                "deleted_at": deleted_at,
-                "deleted_by": deleted_by,
+    selected_date = date.today().isoformat()
+    try:
+        ensure_appointment_runtime_schema()
+        appointment = active_appointment_query().filter(Appointment.id == id).first()
+        if not appointment:
+            flash("Appointment not found or already archived.", "warning")
+            return redirect(
+                request.referrer
+                or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date)
+            )
+
+        before_snapshot = build_appointment_audit_snapshot(appointment)
+        selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else selected_date
+        deleted_at = datetime.utcnow()
+        deleted_by = session.get("username")
+        appointment_columns = table_runtime_columns("appointment")
+
+        if appointment_columns:
+            set_clauses = ['"is_deleted" = :is_deleted']
+            params = {
                 "appointment_id": appointment.id,
-            },
+                "is_deleted": 1 if appointment_soft_delete_uses_legacy_integer() else True,
+            }
+            if "deleted_at" in appointment_columns:
+                set_clauses.append('"deleted_at" = :deleted_at')
+                params["deleted_at"] = deleted_at
+            if "deleted_by" in appointment_columns:
+                set_clauses.append('"deleted_by" = :deleted_by')
+                params["deleted_by"] = deleted_by
+            db.session.execute(
+                text(
+                    'UPDATE "appointment" '
+                    f'SET {", ".join(set_clauses)} '
+                    'WHERE "id" = :appointment_id'
+                ),
+                params,
+            )
+        else:
+            appointment.is_deleted = True
+            if hasattr(appointment, "deleted_at"):
+                appointment.deleted_at = deleted_at
+            if hasattr(appointment, "deleted_by"):
+                appointment.deleted_by = deleted_by
+        db.session.commit()
+
+        record_audit_event(
+            action="Archived appointment",
+            entity_type="APPOINTMENT",
+            entity_id=before_snapshot.get("id") if before_snapshot else None,
+            ref_code=before_snapshot.get("appointment_no", "") if before_snapshot else "",
+            before=before_snapshot,
+            after=None
         )
-    else:
-        appointment.is_deleted = True
-        appointment.deleted_at = deleted_at
-        appointment.deleted_by = deleted_by
-    db.session.commit()
-    record_audit_event(
-        action="Archived appointment",
-        entity_type="APPOINTMENT",
-        entity_id=before_snapshot.get("id") if before_snapshot else None,
-        ref_code=before_snapshot.get("appointment_no", "") if before_snapshot else "",
-        before=before_snapshot,
-        after=None
-    )
-    flash("Appointment archived successfully.", "success")
+        flash("Appointment archived successfully.", "success")
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        err_text = str(getattr(exc, "orig", exc) or exc).replace("\n", " ").strip()
+        if len(err_text) > 160:
+            err_text = err_text[:160] + "..."
+        app.logger.exception("Appointment delete failed")
+        flash(f"Unable to archive appointment due to a database error. {err_text}", "danger")
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Appointment delete failed unexpectedly")
+        flash("Unable to archive appointment due to an unexpected error.", "danger")
     return redirect(request.referrer or url_for("appointments", appointment_report_type="day", appointment_day_date=selected_date))
 
 @app.route("/reports", methods=["GET", "POST"])

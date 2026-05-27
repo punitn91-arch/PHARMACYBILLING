@@ -606,6 +606,45 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertIsNotNone(appointment.deleted_at)
             self.assertEqual(self.app_module.active_appointment_query().filter_by(id=appointment_id).count(), 0)
 
+    def test_appointment_delete_async_returns_success_payload(self):
+        with self.app.app_context():
+            patient = self._seed_patient(name="Delete Async", mobile="9777766666")
+            appointment = self.app_module.Appointment(
+                appointment_no="APT-DEL-ASYNC",
+                token_no=4,
+                patient_id=patient.id,
+                patient_name=patient.name,
+                mobile=patient.mobile,
+                gender="MALE",
+                age=31,
+                doctor_name="Dr. Delete",
+                appointment_date=date.today(),
+                appointment_time=time(1, 0),
+                consultation_fee=500.0,
+                payment_mode="ONLINE",
+                payment_status="UNPAID",
+                status="BOOKED",
+                created_by="admin",
+            )
+            self.db.session.add(appointment)
+            self.db.session.commit()
+            appointment_id = appointment.id
+
+        self.login()
+        response = self.client.post(
+            f"/appointments/delete/{appointment_id}",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+
+        with self.app.app_context():
+            appointment = self.app_module.Appointment.query.get(appointment_id)
+            self.assertTrue(appointment.is_deleted)
+            self.assertEqual(self.app_module.active_appointment_query().filter_by(id=appointment_id).count(), 0)
+
     def test_backup_snapshot_and_restore_drill(self):
         with self.app.app_context():
             upload_dirs = self.app.config["INFRA_UPLOAD_DIRECTORIES"]
