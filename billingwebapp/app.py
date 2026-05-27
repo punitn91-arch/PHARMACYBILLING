@@ -7124,23 +7124,6 @@ def ensure_appointment_runtime_schema():
     return True, ""
 
 
-def appointment_soft_delete_uses_legacy_integer():
-    try:
-        if (db.session.bind.dialect.name if db.session.bind else "").lower() != "postgresql":
-            return False
-        inspector = inspect(db.engine)
-        if not inspector.has_table("appointment"):
-            return False
-        for column in inspector.get_columns("appointment"):
-            if column.get("name") != "is_deleted":
-                continue
-            type_name = column["type"].__class__.__name__.lower()
-            return "bool" not in type_name
-    except Exception:
-        app.logger.exception("Unable to inspect appointment.is_deleted column type")
-    return False
-
-
 def create_appointment_record(*, appointment_no, patient, mobile, validated, form_data):
     common_values = {
         "appointment_no": appointment_no,
@@ -7165,28 +7148,22 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         "created_at": datetime.utcnow(),
     }
 
-    if appointment_soft_delete_uses_legacy_integer():
-        db.session.execute(
-            text(
-                'INSERT INTO "appointment" ('
-                '"appointment_no", "token_no", "patient_id", "patient_name", "mobile", "age", "gender", '
-                '"doctor_name", "appointment_date", "appointment_time", "payment_mode", "payment_status", '
-                '"doctor_discount", "consultation_fee", "status", "symptoms", "previous_visit_notes", '
-                '"notes", "created_by", "created_at", "is_deleted"'
-                ') VALUES ('
-                ':appointment_no, :token_no, :patient_id, :patient_name, :mobile, :age, :gender, '
-                ':doctor_name, :appointment_date, :appointment_time, :payment_mode, :payment_status, '
-                ':doctor_discount, :consultation_fee, :status, :symptoms, :previous_visit_notes, '
-                ':notes, :created_by, :created_at, :is_deleted'
-                ')'
-            ),
-            {**common_values, "is_deleted": 0},
-        )
-        db.session.commit()
-        return
-
-    appointment = Appointment(**common_values)
-    db.session.add(appointment)
+    db.session.execute(
+        text(
+            'INSERT INTO "appointment" ('
+            '"appointment_no", "token_no", "patient_id", "patient_name", "mobile", "age", "gender", '
+            '"doctor_name", "appointment_date", "appointment_time", "payment_mode", "payment_status", '
+            '"doctor_discount", "consultation_fee", "status", "symptoms", "previous_visit_notes", '
+            '"notes", "created_by", "created_at"'
+            ') VALUES ('
+            ':appointment_no, :token_no, :patient_id, :patient_name, :mobile, :age, :gender, '
+            ':doctor_name, :appointment_date, :appointment_time, :payment_mode, :payment_status, '
+            ':doctor_discount, :consultation_fee, :status, :symptoms, :previous_visit_notes, '
+            ':notes, :created_by, :created_at'
+            ')'
+        ),
+        common_values,
+    )
     db.session.commit()
 
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
