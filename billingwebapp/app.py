@@ -7154,8 +7154,30 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         "created_by": session.get("username"),
         "created_at": datetime.utcnow(),
     }
+    use_legacy_integer = appointment_soft_delete_uses_legacy_integer()
     insert_values = dict(common_values)
-    insert_values["is_deleted"] = 0 if appointment_soft_delete_uses_legacy_integer() else False
+    insert_values["is_deleted"] = 0 if use_legacy_integer else False
+
+    if use_legacy_integer:
+        appointment_columns = table_runtime_columns("appointment")
+        filtered_values = {
+            key: sql_text_bindable_value(value)
+            for key, value in insert_values.items()
+            if not appointment_columns or key in appointment_columns
+        }
+        column_names = list(filtered_values.keys())
+        placeholders = [f":{name}" for name in column_names]
+        quoted_columns = [f'"{name}"' for name in column_names]
+        db.session.execute(
+            text(
+                'INSERT INTO "appointment" '
+                f'({", ".join(quoted_columns)}) '
+                f'VALUES ({", ".join(placeholders)})'
+            ),
+            filtered_values,
+        )
+        db.session.commit()
+        return
 
     try:
         db.session.execute(Appointment.__table__.insert().values(**insert_values))
@@ -7164,9 +7186,24 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         db.session.rollback()
         err_text = str(getattr(exc, "orig", exc) or exc).lower()
         if "of type integer but expression is of type boolean" in err_text:
-            retry_values = dict(insert_values)
+            appointment_columns = table_runtime_columns("appointment")
+            retry_values = {
+                key: sql_text_bindable_value(value)
+                for key, value in insert_values.items()
+                if not appointment_columns or key in appointment_columns
+            }
             retry_values["is_deleted"] = 0
-            db.session.execute(Appointment.__table__.insert().values(**retry_values))
+            column_names = list(retry_values.keys())
+            placeholders = [f":{name}" for name in column_names]
+            quoted_columns = [f'"{name}"' for name in column_names]
+            db.session.execute(
+                text(
+                    'INSERT INTO "appointment" '
+                    f'({", ".join(quoted_columns)}) '
+                    f'VALUES ({", ".join(placeholders)})'
+                ),
+                retry_values,
+            )
             db.session.commit()
             return
         if "of type boolean but expression is of type integer" in err_text:
@@ -7221,6 +7258,16 @@ def postgres_runtime_column_data_type(table_name, column_name):
             column_name,
         )
     return ""
+
+
+def sql_text_bindable_value(value):
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, time):
+        return value.strftime("%H:%M:%S")
+    return value
 
 
 def appointment_soft_delete_uses_legacy_integer():
