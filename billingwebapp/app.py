@@ -7123,6 +7123,72 @@ def ensure_appointment_runtime_schema():
         return False, errors[0]
     return True, ""
 
+
+def appointment_soft_delete_uses_legacy_integer():
+    try:
+        if (db.session.bind.dialect.name if db.session.bind else "").lower() != "postgresql":
+            return False
+        inspector = inspect(db.engine)
+        if not inspector.has_table("appointment"):
+            return False
+        for column in inspector.get_columns("appointment"):
+            if column.get("name") != "is_deleted":
+                continue
+            type_name = column["type"].__class__.__name__.lower()
+            return "bool" not in type_name
+    except Exception:
+        app.logger.exception("Unable to inspect appointment.is_deleted column type")
+    return False
+
+
+def create_appointment_record(*, appointment_no, patient, mobile, validated, form_data):
+    common_values = {
+        "appointment_no": appointment_no,
+        "token_no": get_next_daily_token(validated["appointment_date"]),
+        "patient_id": patient.id if patient else None,
+        "patient_name": form_data["patient_name"],
+        "mobile": mobile,
+        "age": None,
+        "gender": validated["gender"],
+        "doctor_name": APPOINTMENT_DEFAULT_DOCTOR,
+        "appointment_date": validated["appointment_date"],
+        "appointment_time": validated["appointment_time"],
+        "payment_mode": form_data["payment_mode"],
+        "payment_status": "UNPAID",
+        "doctor_discount": validated["doctor_discount"],
+        "consultation_fee": validated["consultation_fee"],
+        "status": "BOOKED",
+        "symptoms": form_data["symptoms"],
+        "previous_visit_notes": form_data["previous_visit_notes"],
+        "notes": form_data["notes"],
+        "created_by": session.get("username"),
+        "created_at": datetime.utcnow(),
+    }
+
+    if appointment_soft_delete_uses_legacy_integer():
+        db.session.execute(
+            text(
+                'INSERT INTO "appointment" ('
+                '"appointment_no", "token_no", "patient_id", "patient_name", "mobile", "age", "gender", '
+                '"doctor_name", "appointment_date", "appointment_time", "payment_mode", "payment_status", '
+                '"doctor_discount", "consultation_fee", "status", "symptoms", "previous_visit_notes", '
+                '"notes", "created_by", "created_at", "is_deleted"'
+                ') VALUES ('
+                ':appointment_no, :token_no, :patient_id, :patient_name, :mobile, :age, :gender, '
+                ':doctor_name, :appointment_date, :appointment_time, :payment_mode, :payment_status, '
+                ':doctor_discount, :consultation_fee, :status, :symptoms, :previous_visit_notes, '
+                ':notes, :created_by, :created_at, :is_deleted'
+                ')'
+            ),
+            {**common_values, "is_deleted": 0},
+        )
+        db.session.commit()
+        return
+
+    appointment = Appointment(**common_values)
+    db.session.add(appointment)
+    db.session.commit()
+
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
     by_date = {}
     for appt in appointments:
@@ -7412,30 +7478,14 @@ def add_appointment():
         for attempt in range(2):
             try:
                 patient, mobile, _patient_err = safe_upsert_patient_profile(form_data)
-
-                appointment = Appointment(
-                    appointment_no=generate_appointment_no(),
-                    patient_name=form_data["patient_name"],
-                    token_no=get_next_daily_token(validated["appointment_date"]),
-                    patient_id=patient.id if patient else None,
+                appointment_no = generate_appointment_no()
+                create_appointment_record(
+                    appointment_no=appointment_no,
+                    patient=patient,
                     mobile=mobile,
-                    age=None,
-                    gender=validated["gender"],
-                    doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
-                    appointment_date=validated["appointment_date"],
-                    appointment_time=validated["appointment_time"],
-                    payment_mode=form_data["payment_mode"],
-                    payment_status="UNPAID",
-                    doctor_discount=validated["doctor_discount"],
-                    consultation_fee=validated["consultation_fee"],
-                    status="BOOKED",
-                    symptoms=form_data["symptoms"],
-                    previous_visit_notes=form_data["previous_visit_notes"],
-                    notes=form_data["notes"],
-                    created_by=session.get("username")
+                    validated=validated,
+                    form_data=form_data,
                 )
-                db.session.add(appointment)
-                db.session.commit()
                 appointment_saved = True
                 break
             except IntegrityError as exc:
