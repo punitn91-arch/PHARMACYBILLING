@@ -7151,6 +7151,23 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
     db.session.execute(Appointment.__table__.insert().values(**common_values))
     db.session.commit()
 
+
+def appointment_soft_delete_uses_legacy_integer():
+    try:
+        if (db.session.bind.dialect.name if db.session.bind else "").lower() != "postgresql":
+            return False
+        inspector = inspect(db.engine)
+        if not inspector.has_table("appointment"):
+            return False
+        for column in inspector.get_columns("appointment"):
+            if column.get("name") != "is_deleted":
+                continue
+            type_name = column["type"].__class__.__name__.lower()
+            return "bool" not in type_name
+    except Exception:
+        app.logger.exception("Unable to inspect appointment.is_deleted column type")
+    return False
+
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
     by_date = {}
     for appt in appointments:
@@ -7756,9 +7773,26 @@ def delete_appointment(id):
     appointment = active_appointment_query().filter(Appointment.id == id).first_or_404()
     before_snapshot = build_appointment_audit_snapshot(appointment)
     selected_date = appointment.appointment_date.isoformat() if appointment.appointment_date else date.today().isoformat()
-    appointment.is_deleted = True
-    appointment.deleted_at = datetime.utcnow()
-    appointment.deleted_by = session.get("username")
+    deleted_at = datetime.utcnow()
+    deleted_by = session.get("username")
+    if appointment_soft_delete_uses_legacy_integer():
+        db.session.execute(
+            text(
+                'UPDATE "appointment" '
+                'SET "is_deleted" = :is_deleted, "deleted_at" = :deleted_at, "deleted_by" = :deleted_by '
+                'WHERE "id" = :appointment_id'
+            ),
+            {
+                "is_deleted": 1,
+                "deleted_at": deleted_at,
+                "deleted_by": deleted_by,
+                "appointment_id": appointment.id,
+            },
+        )
+    else:
+        appointment.is_deleted = True
+        appointment.deleted_at = deleted_at
+        appointment.deleted_by = deleted_by
     db.session.commit()
     record_audit_event(
         action="Archived appointment",
