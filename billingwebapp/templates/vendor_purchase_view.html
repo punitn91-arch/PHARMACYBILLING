@@ -154,6 +154,7 @@ td {
     <table>
         <tr>
             <th>Medicine</th>
+            <th>Code</th>
             <th>Barcode</th>
             <th>Batch</th>
             <th>Pack</th>
@@ -172,6 +173,7 @@ td {
         {% for it in items %}
         <tr>
             <td>{{ it.medicine_name }}</td>
+            <td>{{ it.medicine_code or '-' }}</td>
             <td>{{ it.barcode or '-' }}</td>
             <td>{{ it.batch }}</td>
             <td>

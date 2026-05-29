@@ -2,13 +2,13 @@
 {% block title %}Vendor Form{% endblock %}
 
 {% block body %}
-
 <style>
 .content .card {
-    background: white;
+    background: #fff;
     padding: 18px;
-    border-radius: 12px;
-    box-shadow: 0 0 6px #cfd8e3;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(32, 76, 151, 0.08);
+    border: 1px solid rgba(214, 226, 243, 0.9);
 }
 
 .grid {
@@ -18,24 +18,37 @@
 }
 
 label {
-    font-weight: 600;
+    font-weight: 700;
     font-size: 13px;
     display: block;
     margin-bottom: 6px;
+    color: #203047;
 }
 
 .content input:not([type="checkbox"]):not([type="radio"]),
 .content select,
 .content textarea {
     width: 100%;
-    padding: 8px;
-    border: 1px solid #ccc;
-    border-radius: 10px;
+    padding: 10px 12px;
+    border: 1px solid #c9d5e6;
+    border-radius: 12px;
     font-size: 14px;
+    background: #fff;
+    transition: border-color 0.22s ease-in-out, box-shadow 0.22s ease-in-out, transform 0.22s ease-in-out;
+    box-sizing: border-box;
+}
+
+.content input:not([type="checkbox"]):not([type="radio"]):focus,
+.content select:focus,
+.content textarea:focus {
+    outline: none;
+    border-color: #2f73f0;
+    box-shadow: 0 0 0 4px rgba(47, 115, 240, 0.12);
 }
 
 textarea {
-    min-height: 70px;
+    min-height: 90px;
+    resize: vertical;
 }
 
 .actions {
@@ -43,77 +56,66 @@ textarea {
 }
 
 .btn {
-    background: #198754;
+    background: linear-gradient(135deg, #12884d, #1aa45d);
     color: white;
-    padding: 8px 14px;
+    padding: 10px 16px;
     border: none;
-    border-radius: 10px;
+    border-radius: 12px;
     cursor: pointer;
+    font-weight: 700;
+    transition: transform 0.22s ease-in-out, box-shadow 0.22s ease-in-out, filter 0.22s ease-in-out;
+}
+
+.btn:hover {
+    transform: scale(1.04);
+    box-shadow: 0 12px 20px rgba(26, 164, 93, 0.18);
+    filter: brightness(1.02);
 }
 
 .btn-secondary {
-    background: #6c757d;
-    color: white;
+    background: linear-gradient(135deg, #eef3fb, #ffffff);
+    color: #203047;
+    border: 1px solid #c9d5e6;
 }
 
 .btn-danger {
-    background: #dc3545;
+    background: linear-gradient(135deg, #dc3545, #e85765);
     color: white;
 }
 
 .section-title {
-    margin: 12px 0 6px;
-    font-size: 14px;
-    font-weight: 700;
+    margin: 12px 0 8px;
+    font-size: 15px;
+    font-weight: 800;
     color: #0d6efd;
 }
 
-.full { grid-column: 1 / -1; }
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-#purchaseTable,
-.purchase-history-table {
-    min-width: 1100px;
+.full {
+    grid-column: 1 / -1;
 }
 
 .table-wrap {
     width: 100%;
     overflow: auto;
     border: 1px solid #e0e6ef;
-    border-radius: 12px;
+    border-radius: 14px;
 }
 
-#purchaseTable th,
-#purchaseTable td,
+.purchase-history-table {
+    min-width: 1100px;
+    width: 100%;
+    border-collapse: collapse;
+}
+
 .purchase-history-table th,
 .purchase-history-table td {
     white-space: nowrap;
 }
 
-#purchaseTable input,
-#purchaseTable select {
-    min-width: 70px;
-}
-
-.pack-cell {
-    display: grid;
-    gap: 4px;
-}
-
-.pack-qty-label {
-    font-size: 11px;
-    color: #6c757d;
-    text-align: left;
-}
-
 th {
     background: #0d6efd;
     color: white;
-    padding: 8px;
+    padding: 9px;
     font-size: 13px;
 }
 
@@ -124,54 +126,683 @@ td {
     font-size: 13px;
 }
 
-.purchase-actions {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    margin-top: 10px;
-}
-
-.purchase-actions .left-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
 .badge {
     display: inline-block;
     padding: 3px 8px;
     border-radius: 999px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
     background: #eef3ff;
     color: #0d47a1;
 }
 
-.total-box-wrap {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 8px;
+.purchase-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 18px;
+    margin-top: 16px;
+    align-items: start;
 }
 
-.total-box {
-    text-align: right;
-    font-weight: 700;
-    padding: 8px 12px;
-    border: 1px solid #d9e2ef;
-    border-radius: 10px;
-    background: #f8fbff;
-    box-shadow: 0 2px 6px rgba(13, 110, 253, 0.08);
+.purchase-main {
     display: grid;
-    gap: 4px;
+    gap: 16px;
+}
+
+.purchase-shell {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 249, 255, 0.96));
+}
+
+.purchase-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at top right, rgba(13, 110, 253, 0.12), transparent 32%),
+        radial-gradient(circle at bottom left, rgba(15, 167, 111, 0.09), transparent 28%);
+    pointer-events: none;
+}
+
+.purchase-shell > * {
+    position: relative;
+    z-index: 1;
+}
+
+.purchase-shell-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    margin-bottom: 18px;
+}
+
+.purchase-shell-header h3 {
+    margin: 0 0 6px;
+    font-size: 28px;
+    line-height: 1.1;
+    color: #18273c;
+}
+
+.purchase-shell-sub {
+    margin: 0;
+    color: #5a6e89;
+    font-size: 14px;
+}
+
+.purchase-shell-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.purchase-btn {
+    border: none;
+    border-radius: 14px;
+    padding: 10px 16px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 0.22s ease-in-out, box-shadow 0.22s ease-in-out, filter 0.22s ease-in-out;
+}
+
+.purchase-btn:hover {
+    transform: scale(1.05);
+}
+
+.purchase-btn-primary {
+    background: linear-gradient(135deg, #1b6ef3, #4a8dff);
+    color: #fff;
+    box-shadow: 0 14px 28px rgba(27, 110, 243, 0.18);
+}
+
+.purchase-btn-success {
+    background: linear-gradient(135deg, #0f9f67, #1cbe7c);
+    color: #fff;
+    box-shadow: 0 14px 28px rgba(15, 159, 103, 0.18);
+}
+
+.purchase-btn-ghost {
+    background: rgba(255, 255, 255, 0.92);
+    color: #203047;
+    border: 1px solid #d1dcec;
+}
+
+.purchase-btn-danger {
+    background: linear-gradient(135deg, #e24d5f, #f16b7c);
+    color: #fff;
+}
+
+.purchase-header-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.purchase-field-group.full {
+    grid-column: 1 / -1;
+}
+
+.purchase-field-helper {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #6a7f99;
+}
+
+.purchase-grid-card {
+    border: 1px solid rgba(202, 214, 231, 0.95);
+    border-radius: 18px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.purchase-grid-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 18px;
+    border-bottom: 1px solid #e7eef8;
+    background: rgba(248, 251, 255, 0.95);
+}
+
+.purchase-grid-title {
+    font-size: 18px;
+    font-weight: 800;
+    color: #1e3048;
+}
+
+.purchase-grid-hint {
+    margin-top: 4px;
+    color: #607693;
     font-size: 13px;
 }
 
-.total-box .rounded-row {
+.purchase-grid-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: #eef4ff;
+    color: #1e5ec5;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.purchase-table-wrap {
+    width: 100%;
+    overflow: auto;
+}
+
+.purchase-grid-table {
+    width: 100%;
+    min-width: 1080px;
+    border-collapse: collapse;
+}
+
+.purchase-grid-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: linear-gradient(135deg, #1f5fcf, #2477f1);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    border-bottom: 1px solid #1e55b7;
+}
+
+.purchase-grid-table tbody tr {
+    transition: background-color 0.22s ease-in-out, transform 0.22s ease-in-out;
+}
+
+.purchase-grid-table tbody tr:nth-child(even) {
+    background: #f8fbff;
+}
+
+.purchase-grid-table tbody tr:hover {
+    background: #edf5ff;
+}
+
+.purchase-grid-table td {
+    text-align: left;
+    vertical-align: middle;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: #23364d;
+}
+
+.purchase-grid-meta {
+    display: grid;
+    gap: 3px;
+}
+
+.purchase-grid-meta strong {
+    font-size: 13px;
+    color: #17273e;
+}
+
+.purchase-grid-sub {
+    font-size: 11px;
+    color: #6a809b;
+}
+
+.purchase-inline-input {
+    width: 100%;
+    min-width: 64px;
+    padding: 7px 8px;
+    border: 1px solid #cbd7e8;
+    border-radius: 10px;
+    background: #fff;
+    font-size: 13px;
+}
+
+.purchase-inline-input:focus {
+    outline: none;
+    border-color: #2f73f0;
+    box-shadow: 0 0 0 3px rgba(47, 115, 240, 0.12);
+}
+
+.purchase-action-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.purchase-action-buttons button {
+    padding: 7px 10px;
+    border: none;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 0.18s ease-in-out, filter 0.18s ease-in-out;
+}
+
+.purchase-action-buttons button:hover {
+    transform: scale(1.04);
+}
+
+.purchase-action-edit {
+    background: #eaf2ff;
+    color: #1f5fcf;
+}
+
+.purchase-action-copy {
+    background: #eefbf4;
+    color: #0f9f67;
+}
+
+.purchase-action-delete {
+    background: #ffeef1;
+    color: #d9364b;
+}
+
+.purchase-empty-row td {
+    padding: 30px 18px;
+    text-align: center;
+    color: #617694;
+    font-size: 14px;
+}
+
+.purchase-grid-footer {
+    padding: 14px 18px 16px;
+    border-top: 1px solid #e7eef8;
+    background: rgba(248, 251, 255, 0.9);
+}
+
+.purchase-inline-help {
+    color: #617694;
+    font-size: 13px;
+}
+
+.purchase-feedback {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.purchase-feedback.success {
+    background: #e9fbf1;
+    color: #0f834d;
+    border: 1px solid #b5e8c7;
+}
+
+.purchase-feedback.error {
+    background: #fff1f3;
+    color: #c22c43;
+    border: 1px solid #f7c0ca;
+}
+
+.purchase-summary-card {
+    position: sticky;
+    top: 92px;
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 20px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(242, 247, 255, 0.96));
+    border: 1px solid rgba(210, 223, 240, 0.92);
+    box-shadow: 0 16px 40px rgba(24, 70, 146, 0.14);
+}
+
+.purchase-summary-card h4 {
+    margin: 0;
+    font-size: 20px;
+    color: #1d2e46;
+}
+
+.purchase-summary-sub {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: #617694;
+}
+
+.summary-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.86);
+    border: 1px solid rgba(214, 226, 243, 0.88);
+}
+
+.summary-metric span {
+    color: #617694;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.summary-metric strong {
+    color: #1d2e46;
+    font-size: 16px;
+}
+
+.summary-metric.total strong {
     color: #0d6efd;
+}
+
+.summary-metric.rounded strong {
+    color: #0f9f67;
+}
+
+.summary-shortcuts {
+    display: grid;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed #d4deee;
+}
+
+.summary-shortcuts div {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    color: #5f738e;
+    font-size: 12px;
+}
+
+.summary-shortcuts kbd {
+    background: #edf4ff;
+    border: 1px solid #d4deee;
+    border-bottom-width: 2px;
+    border-radius: 8px;
+    padding: 2px 6px;
+    font-size: 11px;
+    color: #204b97;
+}
+
+.purchase-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.54);
+    backdrop-filter: blur(6px);
+    z-index: 1200;
+    opacity: 0;
+    transition: opacity 0.24s ease-in-out;
+}
+
+.purchase-modal {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    z-index: 1201;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.24s ease-in-out;
+}
+
+.purchase-modal.is-open,
+.purchase-modal-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.purchase-modal-dialog {
+    width: min(1120px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    border-radius: 24px;
+    border: 1px solid rgba(215, 225, 240, 0.95);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 255, 0.98));
+    box-shadow: 0 30px 70px rgba(15, 23, 42, 0.28);
+    transform: translateY(24px) scale(0.985);
+    transition: transform 0.24s ease-in-out;
+}
+
+.purchase-modal.is-open .purchase-modal-dialog {
+    transform: translateY(0) scale(1);
+}
+
+.purchase-modal-header,
+.purchase-modal-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+    padding: 18px 22px;
+    border-bottom: 1px solid #e3ebf7;
+}
+
+.purchase-modal-footer {
+    border-top: 1px solid #e3ebf7;
+    border-bottom: none;
+}
+
+.purchase-modal-header h4 {
+    margin: 0 0 4px;
+    font-size: 24px;
+    color: #1c2b42;
+}
+
+.purchase-modal-header p {
+    margin: 0;
+    color: #647994;
+    font-size: 13px;
+}
+
+.purchase-modal-close {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: #eef4ff;
+    color: #1f5fcf;
+    font-size: 22px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.purchase-modal-body {
+    padding: 20px 22px 24px;
+    display: grid;
+    gap: 18px;
+}
+
+.purchase-modal-search label {
+    margin-bottom: 8px;
+}
+
+.purchase-search-shell {
+    position: relative;
+}
+
+.purchase-search-results {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    border: 1px solid #d7e2f1;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 20px 36px rgba(16, 44, 89, 0.14);
+    max-height: 280px;
+    overflow: auto;
+    z-index: 4;
+}
+
+.purchase-search-item {
+    padding: 12px 14px;
+    border-bottom: 1px solid #eef3fb;
+    cursor: pointer;
+    transition: background-color 0.18s ease-in-out;
+}
+
+.purchase-search-item:last-child {
+    border-bottom: none;
+}
+
+.purchase-search-item.active,
+.purchase-search-item:hover {
+    background: #eef5ff;
+}
+
+.purchase-search-item strong {
+    display: block;
+    color: #1b2b42;
+    font-size: 14px;
+}
+
+.purchase-search-meta {
+    margin-top: 4px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: #617694;
+}
+
+.purchase-recent {
+    display: grid;
+    gap: 10px;
+}
+
+.purchase-recent-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.purchase-recent-head span {
+    font-size: 14px;
+    font-weight: 800;
+    color: #1d2e46;
+}
+
+.purchase-recent-head small {
+    color: #607693;
+}
+
+.purchase-chip-list {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.purchase-chip {
+    border: 1px solid #d4deee;
+    background: #f4f8ff;
+    color: #1f5fcf;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 0.18s ease-in-out, background-color 0.18s ease-in-out;
+}
+
+.purchase-chip:hover {
+    transform: scale(1.04);
+    background: #eaf2ff;
+}
+
+.purchase-modal-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(170px, 1fr));
+    gap: 14px;
+}
+
+.purchase-modal-grid .full {
+    grid-column: 1 / -1;
+}
+
+.purchase-modal-meta {
+    color: #5f738e;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.purchase-modal-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.purchase-row-animate {
+    animation: purchaseRowIn 0.24s ease-in-out;
+}
+
+@keyframes purchaseRowIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (max-width: 1280px) {
+    .purchase-workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .purchase-summary-card {
+        top: auto;
+        bottom: 12px;
+        z-index: 9;
+    }
+}
+
+@media (max-width: 900px) {
+    .grid,
+    .purchase-header-grid,
+    .purchase-modal-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .purchase-shell-header,
+    .purchase-grid-toolbar,
+    .purchase-modal-header,
+    .purchase-modal-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .purchase-shell-actions,
+    .purchase-modal-actions {
+        justify-content: stretch;
+    }
+
+    .purchase-shell-actions .purchase-btn,
+    .purchase-modal-actions .purchase-btn {
+        width: 100%;
+    }
+}
+
+@media (max-width: 720px) {
+    .purchase-modal {
+        padding: 0;
+    }
+
+    .purchase-modal-dialog {
+        width: 100%;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+
+    .purchase-summary-card {
+        position: sticky;
+        bottom: 10px;
+        border-radius: 16px;
+    }
 }
 </style>
 
-<div class="card">
+<div class="card vendor-card">
     <h2>{% if vendor %}Edit Vendor{% else %}Add Vendor{% endif %}</h2>
 
     <form method="POST" enctype="multipart/form-data">
@@ -195,123 +826,6 @@ td {
             </div>
         </div>
 
-        <div class="section-title">Address</div>
-        <div class="grid">
-            <div>
-                <label>Shop Name</label>
-                <input type="text" name="shop_name" value="{{ vendor.shop_name if vendor else '' }}">
-            </div>
-            <div>
-                <label>Area</label>
-                <input type="text" name="area" value="{{ vendor.area if vendor else '' }}">
-            </div>
-            <div>
-                <label>City</label>
-                <input type="text" name="city" value="{{ vendor.city if vendor else '' }}">
-            </div>
-            <div>
-                <label>State</label>
-                <input type="text" name="state" value="{{ vendor.state if vendor else '' }}">
-            </div>
-            <div>
-                <label>Pincode</label>
-                <input type="text" name="pincode" value="{{ vendor.pincode if vendor else '' }}">
-            </div>
-            <div class="full">
-                <label>Full Address</label>
-                <input type="text" name="address" value="{{ vendor.address if vendor else '' }}">
-            </div>
-        </div>
-
-        <div class="section-title">Bank Details</div>
-        <div class="grid">
-            <div>
-                <label>Bank Name</label>
-                <input type="text" name="bank_name" value="{{ vendor.bank_name if vendor else '' }}">
-            </div>
-            <div>
-                <label>Account Holder Name</label>
-                <input type="text" name="account_holder_name" value="{{ vendor.account_holder_name if vendor else '' }}">
-            </div>
-            <div>
-                <label>Account No</label>
-                <input type="text" name="account_no" value="{{ vendor.account_no if vendor else '' }}">
-            </div>
-            <div>
-                <label>IFSC</label>
-                <input type="text" name="ifsc" value="{{ vendor.ifsc if vendor else '' }}">
-            </div>
-            <div>
-                <label>UPI</label>
-                <input type="text" name="upi" value="{{ vendor.upi if vendor else '' }}">
-            </div>
-        </div>
-
-        <div class="section-title">Payment & Status</div>
-        <div class="grid">
-            <div>
-                <label>Vendor Type</label>
-                <select name="vendor_type">
-                    <option {% if vendor and vendor.vendor_type == 'Distributor' %}selected{% endif %}>Distributor</option>
-                    <option {% if vendor and vendor.vendor_type == 'Company' %}selected{% endif %}>Company</option>
-                    <option {% if vendor and vendor.vendor_type == 'Local' %}selected{% endif %}>Local</option>
-                </select>
-            </div>
-            <div>
-                <label>Default Payment Mode</label>
-                <select name="default_payment_mode">
-                    <option {% if vendor and vendor.default_payment_mode == 'CASH' %}selected{% endif %}>CASH</option>
-                    <option {% if vendor and vendor.default_payment_mode == 'ONLINE' %}selected{% endif %}>ONLINE</option>
-                    <option {% if vendor and vendor.default_payment_mode == 'UPI' %}selected{% endif %}>UPI</option>
-                    <option {% if vendor and vendor.default_payment_mode == 'BANK TRANSFER' %}selected{% endif %}>BANK TRANSFER</option>
-                </select>
-            </div>
-            <div>
-                <label>Payment Status</label>
-                <select name="payment_status">
-                    <option {% if vendor and vendor.payment_status == 'Paid' %}selected{% endif %}>Paid</option>
-                    <option {% if vendor and vendor.payment_status == 'Unpaid' %}selected{% endif %}>Unpaid</option>
-                    <option {% if vendor and vendor.payment_status == 'Partial' %}selected{% endif %}>Partial</option>
-                </select>
-            </div>
-            <div>
-                <label>Last Purchase Date</label>
-                <input type="date" name="last_purchase_date" value="{{ vendor.last_purchase_date if vendor and vendor.last_purchase_date else '' }}">
-            </div>
-            <div>
-                <label>
-                    <input type="checkbox" name="is_active" {% if vendor and vendor.is_active %}checked{% endif %}>
-                    Active
-                </label>
-            </div>
-        </div>
-
-        <div class="section-title">Attachments & Notes</div>
-        <div class="grid">
-            <div class="full">
-                <label>Attachment Reference (filename or link)</label>
-                <input type="text" name="attachment_ref" value="{{ vendor.attachment_ref if vendor else '' }}">
-            </div>
-            <div class="full">
-                <label>Upload Attachment (PDF/JPG/PNG)</label>
-                <input type="file" name="attachment_file" accept=".pdf,.png,.jpg,.jpeg">
-                {% if vendor and vendor.attachment_ref %}
-                <div style="margin-top:6px; font-size:12px;">
-                    Current:
-                    {% if '://' in vendor.attachment_ref %}
-                    <a href="{{ vendor.attachment_ref }}" target="_blank" rel="noopener">{{ vendor.attachment_ref }}</a>
-                    {% else %}
-                    <a href="/vendor/attachment/{{ vendor.attachment_ref }}" target="_blank" rel="noopener">{{ vendor.attachment_ref }}</a>
-                    {% endif %}
-                </div>
-                {% endif %}
-            </div>
-            <div class="full">
-                <label>Notes</label>
-                <textarea name="notes">{{ vendor.notes if vendor else '' }}</textarea>
-            </div>
-        </div>
-
         <div class="actions">
             <button class="btn" type="submit">Save Vendor</button>
             <a href="/vendor" style="margin-left:10px;">Back</a>
@@ -320,415 +834,1175 @@ td {
 </div>
 
 {% if vendor %}
-<div class="card" style="margin-top:16px;">
-    <h3>Purchased Medicines</h3>
+<div class="purchase-workspace">
+    <div class="purchase-main">
+        <div class="card purchase-shell">
+            <form method="POST"
+                  action="/vendor/{{ vendor.id }}/purchase"
+                  id="purchaseForm"
+                  enctype="multipart/form-data">
+                <input type="hidden" name="purchase_items_json" id="purchaseItemsJson">
 
-    <form method="POST" action="/vendor/{{ vendor.id }}/purchase" id="purchaseForm" enctype="multipart/form-data" onsubmit="return confirm('Save purchase and update stock?')">
-        <div class="grid">
-            <div>
-                <label>Bill / Invoice No</label>
-                <input type="text" name="invoice_no" placeholder="Supplier Bill No" required>
-            </div>
-            <div>
-                <label>Bill Date</label>
-                <input type="date" name="purchase_date" required>
-            </div>
-            <div>
-                <label>Payment Mode</label>
-                <select name="payment_mode">
-                    <option>CASH</option>
-                    <option>ONLINE</option>
-                    <option>UPI</option>
-                    <option>BANK TRANSFER</option>
-                </select>
-            </div>
-            <div>
-                <label>Payment Status</label>
-                <select name="payment_status">
-                    <option>Paid</option>
-                    <option>Unpaid</option>
-                    <option>Partial</option>
-                </select>
-            </div>
-            <div>
-                <label>Paid Amount (for Partial)</label>
-                <input type="number" step="any" inputmode="decimal" class="decimal-input" name="paid_amount" value="0">
-            </div>
-            <div class="full">
-                <label>Bill Photo / PDF</label>
-                <input type="file" name="bill_attachment_file" accept=".pdf,.png,.jpg,.jpeg">
-            </div>
-        </div>
+                <div class="purchase-shell-header">
+                    <div>
+                        <h3>Purchase Entry</h3>
+                        <p class="purchase-shell-sub">
+                            Fast pharmacy purchase desk with modal medicine entry, live bill grid, inline edits and sticky totals.
+                        </p>
+                    </div>
+                    <div class="purchase-shell-actions">
+                        <button class="purchase-btn purchase-btn-primary" type="button" id="openPurchaseModal">+ Add Medicine</button>
+                        <button class="purchase-btn purchase-btn-ghost" type="button" id="clearPurchaseDraft">Clear Draft</button>
+                        <button class="purchase-btn purchase-btn-success" type="submit" id="savePurchaseBtn">Save Purchase</button>
+                    </div>
+                </div>
 
-        <div class="table-wrap">
-        <table id="purchaseTable">
-            <thead>
-                <tr>
-                    <th>Medicine Name</th>
-                    <th>Barcode</th>
-                    <th>Composition</th>
-                    <th>Company</th>
-                    <th>Distributor</th>
-                    <th>Pack</th>
-                    <th>Batch</th>
-                    <th>Expiry (MM/YYYY)</th>
-                    <th>Qty</th>
-                    <th>Free</th>
-                    <th>Purchase Rate</th>
-                    <th>MRP</th>
-                    <th>GST %</th>
-                    <th>Disc %</th>
-                    <th>Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr class="purchase-row">
-                    <td>
-                        <input type="text" name="medicine_name" list="medicineList">
-                    </td>
-                    <td><input type="text" name="barcode" placeholder="Scan or type barcode"></td>
-                    <td><input type="text" name="composition"></td>
-                    <td><input type="text" name="company"></td>
-                    <td><input type="text" name="distributor_name" value="{{ vendor.name }}"></td>
-                    <td class="pack-cell">
-                        <select name="pack_type" class="pack-type">
-                            <option>Strip</option>
-                            <option>Box</option>
-                            <option>Bottle</option>
-                            <option>Sachet</option>
-                            <option>Tube</option>
-                            <option>Vial</option>
-                            <option>Unit</option>
+                <div class="purchase-header-grid">
+                    <div class="purchase-field-group">
+                        <label>Vendor Name</label>
+                        <input type="text" value="{{ vendor.name }}" readonly>
+                    </div>
+                    <div class="purchase-field-group">
+                        <label>Invoice Number</label>
+                        <input type="text" name="invoice_no" id="purchaseInvoiceNo" placeholder="Supplier Bill No" required>
+                    </div>
+                    <div class="purchase-field-group">
+                        <label>Bill Date</label>
+                        <input type="date" name="purchase_date" id="purchaseDate" required>
+                    </div>
+                    <div class="purchase-field-group">
+                        <label>Payment Status</label>
+                        <select name="payment_status" id="purchasePaymentStatus">
+                            <option>Paid</option>
+                            <option>Unpaid</option>
+                            <option>Partial</option>
                         </select>
-                        <div class="pack-qty-label">Units per Pack</div>
-                        <input type="number" name="pack_qty" min="1" step="1" class="pack-qty" placeholder="e.g. 10">
-                    </td>
-                    <td><input type="text" name="batch" required></td>
-                    <td><input type="text" name="expiry" placeholder="MM/YYYY" required></td>
-                    <td><input type="number" name="qty" min="0" value="0"></td>
-                    <td><input type="number" name="free_qty" min="0" value="0"></td>
-                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="purchase_rate" value="0"></td>
-                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="mrp" value="0"></td>
-                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="gst_percent" value="0"></td>
-                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="discount_percent" value="0"></td>
-                    <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="total_value" readonly></td>
-                </tr>
-            </tbody>
-        </table>
-        </div>
-        <datalist id="medicineList">
-            {% for medicine_name in medicine_names %}
-            <option value="{{ medicine_name }}"></option>
-            {% endfor %}
-        </datalist>
+                    </div>
+                    <div class="purchase-field-group">
+                        <label>Payment Mode</label>
+                        <select name="payment_mode" id="purchasePaymentMode">
+                            <option>CASH</option>
+                            <option>ONLINE</option>
+                            <option>UPI</option>
+                            <option>BANK TRANSFER</option>
+                        </select>
+                    </div>
+                    <div class="purchase-field-group">
+                        <label>Paid Amount (for Partial)</label>
+                        <input type="number" step="any" inputmode="decimal" class="decimal-input" name="paid_amount" id="purchasePaidAmount" value="0">
+                    </div>
+                    <div class="purchase-field-group full">
+                        <label>Purchase Notes</label>
+                        <textarea name="purchase_notes" id="purchaseNotes" placeholder="Internal remarks, supplier comments, follow-up notes"></textarea>
+                    </div>
+                    <div class="purchase-field-group full">
+                        <label>Upload Bill Photo / PDF</label>
+                        <input type="file" name="bill_attachment_file" id="purchaseAttachment" accept=".pdf,.png,.jpg,.jpeg">
+                        <div class="purchase-field-helper">Attachment stays with this purchase bill for later view and audit.</div>
+                    </div>
+                </div>
 
-        <div class="purchase-actions">
-            <div class="left-actions">
-                <button class="btn-secondary" type="button" id="newPurchaseBill">Add New Purchase Bill</button>
-                <button class="btn-secondary" type="button" id="addPurchaseRow">Add Row</button>
-            </div>
-            <button class="btn" type="submit">Save Purchase</button>
+                <div class="purchase-grid-card">
+                    <div class="purchase-grid-toolbar">
+                        <div>
+                            <div class="purchase-grid-title">Live Purchase Grid</div>
+                            <div class="purchase-grid-hint">F2 search medicine, Ctrl + Enter save item, F4 save purchase, Esc close modal</div>
+                        </div>
+                        <div class="purchase-grid-chip" id="purchaseDraftStatus">Draft empty</div>
+                    </div>
+
+                    <div class="purchase-table-wrap">
+                        <table class="purchase-grid-table">
+                            <thead>
+                                <tr>
+                                    <th>Sr No</th>
+                                    <th>Medicine</th>
+                                    <th>Batch</th>
+                                    <th>Expiry</th>
+                                    <th>Qty</th>
+                                    <th>Free</th>
+                                    <th>Rate</th>
+                                    <th>MRP</th>
+                                    <th>GST</th>
+                                    <th>Discount</th>
+                                    <th>Total</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="purchaseGridBody">
+                                <tr class="purchase-empty-row">
+                                    <td colspan="12">No medicines added yet. Use <strong>+ Add Medicine</strong> to start building the purchase bill.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="purchase-grid-footer">
+                        <div class="purchase-inline-help">
+                            Inline editing is enabled for Qty, Free, Rate, GST and Discount. Use Edit to reopen the modal for full medicine details.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="purchase-feedback" id="purchaseFeedback" hidden></div>
+            </form>
         </div>
-        <div class="total-box-wrap">
-            <div class="total-box">
-                <div>Grand Total: <span id="grandTotal">0.00</span></div>
-                <div class="rounded-row">Rounded Amt: <span id="roundedTotal">0</span></div>
+
+        <div class="card" style="margin-top:0;">
+            <h3>Vendor Bill History</h3>
+            {% if purchase_bills and purchase_bills|length > 0 %}
+            <div class="table-wrap">
+                <table class="purchase-history-table">
+                    <tr>
+                        <th>Bill No</th>
+                        <th>Bill Date</th>
+                        <th>Bill Amount</th>
+                        <th>Payment Status</th>
+                        <th>Bill File</th>
+                        <th>Actions</th>
+                    </tr>
+                    {% for b in purchase_bills %}
+                    <tr>
+                        <td>{{ b.invoice_no if b.invoice_no else b.purchase_no }}</td>
+                        <td>{{ b.purchase_date.strftime('%d-%m-%Y') if b.purchase_date else '-' }}</td>
+                        <td>{{ b.total_amount or 0 }}</td>
+                        <td><span class="badge">{{ b.payment_status or '-' }}</span></td>
+                        <td>
+                            {% if b.bill_attachment_ref %}
+                            <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}/bill-file" target="_blank">View Photo</a>
+                            {% else %}
+                            <span class="badge">No Photo</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}">View</a>
+                            <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=edit">Edit</a>
+                            <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=return">Return</a>
+                            <a class="btn btn-sm btn-danger"
+                               href="/vendor/purchase/delete/{{ b.id }}"
+                               data-async-action="true"
+                               onclick="return confirm('Delete this bill? This will remove stock and all linked purchase entries from this bill.');">
+                                Delete
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
             </div>
+            {% else %}
+            <div>No bills yet.</div>
+            {% endif %}
         </div>
-    </form>
+
+    </div>
+
+    <aside class="purchase-summary-card">
+        <div>
+            <h4>Purchase Summary</h4>
+            <p class="purchase-summary-sub">Sticky live totals for fast verification while you build the purchase bill.</p>
+        </div>
+
+        <div class="summary-metric">
+            <span>Total Items</span>
+            <strong id="summaryItems">0</strong>
+        </div>
+        <div class="summary-metric">
+            <span>Total Quantity</span>
+            <strong id="summaryQty">0</strong>
+        </div>
+        <div class="summary-metric">
+            <span>Total GST</span>
+            <strong id="summaryGst">0.00</strong>
+        </div>
+        <div class="summary-metric">
+            <span>Gross Total</span>
+            <strong id="summaryGross">0.00</strong>
+        </div>
+        <div class="summary-metric">
+            <span>Discount</span>
+            <strong id="summaryDiscount">0.00</strong>
+        </div>
+        <div class="summary-metric total">
+            <span>Net Amount</span>
+            <strong id="summaryNet">0.00</strong>
+        </div>
+        <div class="summary-metric rounded">
+            <span>Rounded Amount</span>
+            <strong id="summaryRounded">0</strong>
+        </div>
+
+        <div class="summary-shortcuts">
+            <div><span>Search medicine</span><kbd>F2</kbd></div>
+            <div><span>Save item</span><kbd>Ctrl + Enter</kbd></div>
+            <div><span>Save purchase</span><kbd>F4</kbd></div>
+            <div><span>Close modal</span><kbd>Esc</kbd></div>
+        </div>
+    </aside>
 </div>
 
-<div class="card" style="margin-top:16px;">
-    <h3>Vendor Bill History</h3>
-    {% if purchase_bills and purchase_bills|length > 0 %}
-    <div class="table-wrap">
-    <table class="purchase-history-table">
-        <tr>
-            <th>Bill No</th>
-            <th>Bill Date</th>
-            <th>Bill Amount</th>
-            <th>Payment Status</th>
-            <th>Bill File</th>
-            <th>Actions</th>
-        </tr>
-        {% for b in purchase_bills %}
-        <tr>
-            <td>{{ b.invoice_no if b.invoice_no else b.purchase_no }}</td>
-            <td>{{ b.purchase_date.strftime('%d-%m-%Y') if b.purchase_date else '-' }}</td>
-            <td>{{ b.total_amount or 0 }}</td>
-            <td><span class="badge">{{ b.payment_status or '-' }}</span></td>
-            <td>
-                {% if b.bill_attachment_ref %}
-                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}/bill-file" target="_blank">View Photo</a>
-                {% else %}
-                <span class="badge">No Photo</span>
-                {% endif %}
-            </td>
-            <td>
-                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}">View</a>
-                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=edit">Edit</a>
-                <a class="btn btn-sm" href="/vendor/purchase/{{ b.id }}?mode=return">Return</a>
-                <a class="btn btn-sm btn-danger"
-                   href="/vendor/purchase/delete/{{ b.id }}"
-                   data-async-action="true"
-                   onclick="return confirm('Delete this bill? This will remove stock and all linked purchase entries from this bill.');">
-                   Delete
-                </a>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
-    </div>
-    {% else %}
-    <div>No bills yet.</div>
-    {% endif %}
-</div>
+<div class="purchase-modal-backdrop" id="purchaseModalBackdrop" hidden></div>
+<div class="purchase-modal" id="purchaseModal" hidden aria-hidden="true">
+    <div class="purchase-modal-dialog">
+        <div class="purchase-modal-header">
+            <div>
+                <h4 id="purchaseModalTitle">Add Medicine</h4>
+                <p>Code, barcode and master data auto-fill instantly. Batch, expiry and rates stay operator-controlled.</p>
+            </div>
+            <button type="button" class="purchase-modal-close" id="closePurchaseModal" aria-label="Close">&times;</button>
+        </div>
 
-<div class="card" style="margin-top:16px;">
-    <h3>Recent Purchases (Items)</h3>
-    {% if purchase_items and purchase_items|length > 0 %}
-    <div class="table-wrap">
-    <table class="purchase-history-table">
-        <tr>
-            <th>Medicine</th>
-            <th>Barcode</th>
-            <th>Batch</th>
-            <th>Pack</th>
-            <th>Expiry</th>
-            <th>Qty</th>
-            <th>Free</th>
-            <th>Rate</th>
-            <th>MRP</th>
-            <th>GST %</th>
-            <th>Disc %</th>
-            <th>Total</th>
-            <th>Date</th>
-            <th>Action</th>
-        </tr>
-        {% for p in purchase_items %}
-        <tr {% if p.is_expired %}style="background:#f8d7da;"{% endif %}>
-            <td>{{ p.medicine_name }}</td>
-            <td>{{ p.barcode or '-' }}</td>
-            <td>{{ p.batch }}</td>
-            <td>
-                {% if p.pack_type and p.pack_qty %}
-                    {{ p.pack_type }} of {{ p.pack_qty }}
-                {% elif p.pack_type %}
-                    {{ p.pack_type }}
-                {% elif p.pack_qty %}
-                    {{ p.pack_qty }}
-                {% else %}
-                    -
-                {% endif %}
-            </td>
-            <td>{{ p.expiry }}{% if p.is_expired %} (Expired){% endif %}</td>
-            <td>{{ p.qty }}</td>
-            <td>{{ p.free_qty }}</td>
-            <td>{{ p.purchase_rate }}</td>
-            <td>{{ p.mrp }}</td>
-            <td>{{ p.gst_percent }}</td>
-            <td>{{ p.discount_percent }}</td>
-            <td>{{ p.total_value }}</td>
-            <td>{{ p.created_at.strftime('%d-%m-%Y') }}</td>
-            <td>
-                <a class="btn btn-sm" href="/vendor/purchase-item/edit/{{ p.id }}">Edit</a>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+        <div class="purchase-modal-body">
+            <div class="purchase-modal-search">
+                <label for="modalMedicineSearch">Medicine Search / Code</label>
+                <div class="purchase-search-shell">
+                    <input type="text" id="modalMedicineSearch" placeholder="Type medicine code, medicine name or scan barcode">
+                    <div class="purchase-search-results" id="purchaseSearchResults" hidden></div>
+                </div>
+            </div>
+
+            <div class="purchase-recent">
+                <div class="purchase-recent-head">
+                    <span>Recently Added Medicines</span>
+                    <small>Quick reusable picks from recent purchases and the current bill</small>
+                </div>
+                <div class="purchase-chip-list" id="purchaseRecentChips">
+                    {% for chip in recent_purchase_medicine_chips or [] %}
+                    <button type="button"
+                            class="purchase-chip"
+                            data-chip-code="{{ chip.medicine_code or '' }}"
+                            data-chip-name="{{ chip.medicine_name }}">
+                        {{ chip.medicine_name }}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="purchase-modal-grid">
+                <div>
+                    <label for="modalMedicineCode">Medicine Code</label>
+                    <input type="text" id="modalMedicineCode" placeholder="e.g. MED001">
+                </div>
+                <div>
+                    <label for="modalMedicineName">Medicine Name</label>
+                    <input type="text" id="modalMedicineName" placeholder="Auto-filled from code" readonly>
+                </div>
+                <div>
+                    <label for="modalBarcode">Barcode</label>
+                    <input type="text" id="modalBarcode" placeholder="Barcode">
+                </div>
+                <div>
+                    <label for="modalDistributor">Distributor</label>
+                    <input type="text" id="modalDistributor" value="{{ vendor.name }}">
+                </div>
+
+                <div>
+                    <label for="modalBatch">Batch</label>
+                    <input type="text" id="modalBatch" placeholder="Batch">
+                </div>
+                <div>
+                    <label for="modalExpiry">Expiry Date</label>
+                    <input type="text" id="modalExpiry" placeholder="MM/YYYY">
+                </div>
+                <div>
+                    <label for="modalPackType">Pack Type</label>
+                    <select id="modalPackType">
+                        <option>Strip</option>
+                        <option>Box</option>
+                        <option>Bottle</option>
+                        <option>Sachet</option>
+                        <option>Tube</option>
+                        <option>Vial</option>
+                        <option>Unit</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="modalPackQty" id="modalPackQtyLabel">Tablets per Strip</label>
+                    <input type="number" id="modalPackQty" min="1" step="1" placeholder="e.g. 10">
+                </div>
+
+                <div>
+                    <label for="modalQty">Quantity</label>
+                    <input type="number" id="modalQty" min="0" value="0">
+                </div>
+                <div>
+                    <label for="modalFreeQty">Free Quantity</label>
+                    <input type="number" id="modalFreeQty" min="0" value="0">
+                </div>
+                <div>
+                    <label for="modalPurchaseRate">Purchase Rate</label>
+                    <input type="number" step="any" inputmode="decimal" id="modalPurchaseRate" value="0">
+                </div>
+                <div>
+                    <label for="modalMrp">MRP</label>
+                    <input type="number" step="any" inputmode="decimal" id="modalMrp" value="0">
+                </div>
+
+                <div>
+                    <label for="modalGst">GST %</label>
+                    <input type="number" step="any" inputmode="decimal" id="modalGst" value="0">
+                </div>
+                <div>
+                    <label for="modalDiscount">Discount %</label>
+                    <input type="number" step="any" inputmode="decimal" id="modalDiscount" value="0">
+                </div>
+                <div>
+                    <label for="modalComposition">Composition</label>
+                    <input type="text" id="modalComposition" placeholder="Composition">
+                </div>
+                <div>
+                    <label for="modalCompany">Company Name</label>
+                    <input type="text" id="modalCompany" placeholder="Company">
+                </div>
+
+                <div class="full">
+                    <label for="modalItemNotes">Notes</label>
+                    <textarea id="modalItemNotes" placeholder="Optional line-level note"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="purchase-modal-footer">
+            <div class="purchase-modal-meta" id="purchaseModalMeta">Line Total: 0.00</div>
+            <div class="purchase-modal-actions">
+                <button class="purchase-btn purchase-btn-ghost" type="button" id="cancelPurchaseItem">Cancel</button>
+                <button class="purchase-btn purchase-btn-primary" type="button" id="savePurchaseItem">Save Item</button>
+            </div>
+        </div>
     </div>
-    {% else %}
-    <div>No purchases yet.</div>
-    {% endif %}
 </div>
 {% endif %}
 
+{% if vendor %}
 <script>
-function sanitizeDecimalInput(input) {
-    if (!input) return;
-    let val = input.value || "";
-    let cleaned = "";
-    let dotSeen = false;
-    for (let i = 0; i < val.length; i++) {
-        let ch = val[i];
-        if (ch >= "0" && ch <= "9") {
-            cleaned += ch;
-        } else if (ch === "." && !dotSeen) {
-            cleaned += ch;
-            dotSeen = true;
-        }
-    }
-    if (cleaned !== val) input.value = cleaned;
+const vendorId = {{ vendor.id|tojson }};
+const vendorName = {{ vendor.name|tojson }};
+const medicineCatalog = {{ medicine_purchase_catalog|default([], true)|tojson }};
+const recentServerChips = {{ recent_purchase_medicine_chips|default([], true)|tojson }};
+
+const purchaseForm = document.getElementById("purchaseForm");
+const purchaseGridBody = document.getElementById("purchaseGridBody");
+const purchaseItemsJson = document.getElementById("purchaseItemsJson");
+const purchaseFeedback = document.getElementById("purchaseFeedback");
+const purchaseDraftStatus = document.getElementById("purchaseDraftStatus");
+const purchaseDateInput = document.getElementById("purchaseDate");
+const purchaseAttachmentInput = document.getElementById("purchaseAttachment");
+const savePurchaseBtn = document.getElementById("savePurchaseBtn");
+
+const purchaseModal = document.getElementById("purchaseModal");
+const purchaseModalBackdrop = document.getElementById("purchaseModalBackdrop");
+const purchaseModalTitle = document.getElementById("purchaseModalTitle");
+const purchaseModalMeta = document.getElementById("purchaseModalMeta");
+const purchaseSearchResults = document.getElementById("purchaseSearchResults");
+const purchaseRecentChips = document.getElementById("purchaseRecentChips");
+const modalMedicineSearch = document.getElementById("modalMedicineSearch");
+
+const modalFields = {
+    medicine_code: document.getElementById("modalMedicineCode"),
+    medicine_name: document.getElementById("modalMedicineName"),
+    barcode: document.getElementById("modalBarcode"),
+    distributor_name: document.getElementById("modalDistributor"),
+    batch: document.getElementById("modalBatch"),
+    expiry: document.getElementById("modalExpiry"),
+    pack_type: document.getElementById("modalPackType"),
+    pack_qty: document.getElementById("modalPackQty"),
+    qty: document.getElementById("modalQty"),
+    free_qty: document.getElementById("modalFreeQty"),
+    purchase_rate: document.getElementById("modalPurchaseRate"),
+    mrp: document.getElementById("modalMrp"),
+    gst_percent: document.getElementById("modalGst"),
+    discount_percent: document.getElementById("modalDiscount"),
+    composition: document.getElementById("modalComposition"),
+    company: document.getElementById("modalCompany"),
+    notes: document.getElementById("modalItemNotes")
+};
+
+const summaryEls = {
+    items: document.getElementById("summaryItems"),
+    qty: document.getElementById("summaryQty"),
+    gst: document.getElementById("summaryGst"),
+    gross: document.getElementById("summaryGross"),
+    discount: document.getElementById("summaryDiscount"),
+    net: document.getElementById("summaryNet"),
+    rounded: document.getElementById("summaryRounded")
+};
+
+const draftStorageKey = `vendor-purchase-draft-${vendorId}`;
+const modalFocusOrder = [
+    modalMedicineSearch,
+    modalFields.medicine_code,
+    modalFields.batch,
+    modalFields.expiry,
+    modalFields.pack_type,
+    modalFields.pack_qty,
+    modalFields.qty,
+    modalFields.free_qty,
+    modalFields.purchase_rate,
+    modalFields.mrp,
+    modalFields.gst_percent,
+    modalFields.discount_percent,
+    modalFields.barcode,
+    modalFields.composition,
+    modalFields.company,
+    modalFields.distributor_name,
+    modalFields.notes
+];
+
+let purchaseItems = [];
+let editingPurchaseIndex = null;
+let modalSearchMatches = [];
+let activeSearchIndex = -1;
+let purchaseDirty = false;
+
+function normalizeMedicineCode(value) {
+    return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
 }
 
-function getPackQtyLabel(packType) {
-    if ((packType || "").toLowerCase() === "strip") {
-        return "Tablets per Strip";
-    }
-    return "Units per Pack";
+function normalizeToken(value) {
+    return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function updatePackLabel(target) {
-    let row = target ? target.closest(".purchase-row") : null;
-    if (!row) return;
-    let select = row.querySelector(".pack-type");
-    let label = row.querySelector(".pack-qty-label");
-    if (!select || !label) return;
-    label.textContent = getPackQtyLabel(select.value);
-}
-
-function parseDecimal(val) {
-    if (val === "" || val === "." || val == null) return 0;
-    let num = Number(val);
+function parseNum(value) {
+    if (value === null || value === undefined || value === "" || value === ".") return 0;
+    const num = Number(value);
     return Number.isFinite(num) ? num : 0;
 }
 
-function formatDecimal(val) {
-    if (!Number.isFinite(val)) return "";
-    return String(val);
+function formatMoney(value) {
+    const num = parseNum(value);
+    return num.toFixed(2);
 }
 
-function calculateRowTotal(row) {
-    let qty = parseDecimal(row.querySelector("input[name='qty']").value || 0);
-    let rate = parseDecimal(row.querySelector("input[name='purchase_rate']").value || 0);
-    let gst = parseDecimal(row.querySelector("input[name='gst_percent']").value || 0);
-    let disc = parseDecimal(row.querySelector("input[name='discount_percent']").value || 0);
-    let base = qty * rate;
-    let discAmt = base * disc / 100;
-    let taxable = base - discAmt;
-    let gstAmt = taxable * gst / 100;
-    let total = taxable + gstAmt;
-    row.querySelector("input[name='total_value']").value = formatDecimal(total);
-    return total;
+function setPurchaseDirty(isDirty) {
+    purchaseDirty = !!isDirty;
 }
 
-function updateGrandTotal() {
-    let total = 0;
-    document.querySelectorAll("#purchaseTable .purchase-row").forEach(row => {
-        total += calculateRowTotal(row);
+function markDirtyAndPersist() {
+    setPurchaseDirty(true);
+    saveDraft();
+}
+
+function showPurchaseFeedback(message, kind) {
+    purchaseFeedback.hidden = false;
+    purchaseFeedback.className = `purchase-feedback ${kind === "success" ? "success" : "error"}`;
+    purchaseFeedback.textContent = message;
+}
+
+function clearPurchaseFeedback() {
+    purchaseFeedback.hidden = true;
+    purchaseFeedback.className = "purchase-feedback";
+    purchaseFeedback.textContent = "";
+}
+
+function getPackQtyLabel(packType) {
+    return String(packType || "").toLowerCase() === "strip" ? "Tablets per Strip" : "Units per Pack";
+}
+
+function updatePackQtyLabel() {
+    const label = document.getElementById("modalPackQtyLabel");
+    if (!label) return;
+    label.textContent = getPackQtyLabel(modalFields.pack_type.value);
+}
+
+function computeItemMetrics(item) {
+    const qty = parseNum(item.qty);
+    const freeQty = parseNum(item.free_qty);
+    const rate = parseNum(item.purchase_rate);
+    const mrp = parseNum(item.mrp);
+    const gstPercent = parseNum(item.gst_percent);
+    const discountPercent = parseNum(item.discount_percent);
+    const gross = qty * rate;
+    const discountAmount = gross * discountPercent / 100;
+    const taxable = gross - discountAmount;
+    const gstAmount = taxable * gstPercent / 100;
+    const total = taxable + gstAmount;
+    return {
+        qty,
+        freeQty,
+        rate,
+        mrp,
+        gstPercent,
+        discountPercent,
+        gross,
+        discountAmount,
+        taxable,
+        gstAmount,
+        total
+    };
+}
+
+function syncHiddenPurchaseJson() {
+    purchaseItemsJson.value = JSON.stringify(purchaseItems);
+}
+
+function updateDraftChip() {
+    if (!purchaseDraftStatus) return;
+    if (!purchaseItems.length) {
+        purchaseDraftStatus.textContent = "Draft empty";
+        return;
+    }
+    purchaseDraftStatus.textContent = `${purchaseItems.length} item${purchaseItems.length === 1 ? "" : "s"} ready`;
+}
+
+function updateSummary() {
+    let totalQty = 0;
+    let totalGst = 0;
+    let grossTotal = 0;
+    let discountTotal = 0;
+    let netTotal = 0;
+
+    purchaseItems.forEach(item => {
+        const metrics = computeItemMetrics(item);
+        totalQty += metrics.qty + metrics.freeQty;
+        totalGst += metrics.gstAmount;
+        grossTotal += metrics.gross;
+        discountTotal += metrics.discountAmount;
+        netTotal += metrics.total;
     });
-    document.getElementById("grandTotal").innerText = formatDecimal(total);
-    let roundedEl = document.getElementById("roundedTotal");
-    if (roundedEl) {
-        let rounded = Math.round(total);
-        roundedEl.innerText = String(rounded);
-    }
+
+    summaryEls.items.textContent = String(purchaseItems.length);
+    summaryEls.qty.textContent = String(totalQty);
+    summaryEls.gst.textContent = formatMoney(totalGst);
+    summaryEls.gross.textContent = formatMoney(grossTotal);
+    summaryEls.discount.textContent = formatMoney(discountTotal);
+    summaryEls.net.textContent = formatMoney(netTotal);
+    summaryEls.rounded.textContent = String(Math.round(netTotal));
 }
 
-document.addEventListener("input", function (e) {
-    if (e.target.classList && e.target.classList.contains("decimal-input")) {
-        sanitizeDecimalInput(e.target);
-    }
-    if (e.target.closest("#purchaseTable")) {
-        updateGrandTotal();
-    }
-});
+function buildMedicineCell(item) {
+    const code = item.medicine_code ? `<span class="purchase-grid-sub">Code: ${item.medicine_code}</span>` : "";
+    const barcode = item.barcode ? `<span class="purchase-grid-sub">Barcode: ${item.barcode}</span>` : "";
+    return `
+        <div class="purchase-grid-meta">
+            <strong>${escapeHtml(item.medicine_name || "-")}</strong>
+            ${code}
+            ${barcode}
+        </div>
+    `;
+}
 
-document.addEventListener("change", function (e) {
-    if (e.target.classList && e.target.classList.contains("pack-type")) {
-        updatePackLabel(e.target);
+function renderGrid() {
+    if (!purchaseGridBody) return;
+    if (!purchaseItems.length) {
+        purchaseGridBody.innerHTML = `
+            <tr class="purchase-empty-row">
+                <td colspan="12">No medicines added yet. Use <strong>+ Add Medicine</strong> to start building the purchase bill.</td>
+            </tr>
+        `;
+        syncHiddenPurchaseJson();
+        updateSummary();
+        updateDraftChip();
+        renderRecentChips();
+        return;
     }
-});
 
-let addBtn = document.getElementById("addPurchaseRow");
-if (addBtn) {
-    addBtn.addEventListener("click", function () {
-        let tbody = document.querySelector("#purchaseTable tbody");
-        let first = tbody.querySelector(".purchase-row");
-        if (!first) return;
-        let clone = first.cloneNode(true);
-        clone.querySelectorAll("input").forEach(i => {
-            if (i.name === "total_value") {
-                i.value = "";
-                return;
-            }
-            if (i.name === "pack_qty") {
-                i.value = "";
-                return;
-            }
-            if (i.type === "number" || (i.classList && i.classList.contains("decimal-input"))) {
-                i.value = "0";
-                return;
-            }
-            i.value = "";
+    purchaseGridBody.innerHTML = purchaseItems.map((item, index) => {
+        const metrics = computeItemMetrics(item);
+        return `
+            <tr class="purchase-row-animate" data-index="${index}">
+                <td>${index + 1}</td>
+                <td>${buildMedicineCell(item)}</td>
+                <td>${escapeHtml(item.batch || "-")}</td>
+                <td>${escapeHtml(item.expiry || "-")}</td>
+                <td><input class="purchase-inline-input" type="number" min="0" step="1" value="${metrics.qty}" data-inline-field="qty" data-index="${index}"></td>
+                <td><input class="purchase-inline-input" type="number" min="0" step="1" value="${metrics.freeQty}" data-inline-field="free_qty" data-index="${index}"></td>
+                <td><input class="purchase-inline-input" type="number" min="0" step="any" value="${formatMoney(metrics.rate)}" data-inline-field="purchase_rate" data-index="${index}"></td>
+                <td><input class="purchase-inline-input" type="number" min="0" step="any" value="${formatMoney(metrics.mrp)}" data-inline-field="mrp" data-index="${index}"></td>
+                <td><input class="purchase-inline-input" type="number" min="0" step="any" value="${formatMoney(metrics.gstPercent)}" data-inline-field="gst_percent" data-index="${index}"></td>
+                <td><input class="purchase-inline-input" type="number" min="0" step="any" value="${formatMoney(metrics.discountPercent)}" data-inline-field="discount_percent" data-index="${index}"></td>
+                <td><strong>${formatMoney(metrics.total)}</strong></td>
+                <td>
+                    <div class="purchase-action-buttons">
+                        <button type="button" class="purchase-action-edit" data-action="edit" data-index="${index}">Edit</button>
+                        <button type="button" class="purchase-action-copy" data-action="duplicate" data-index="${index}">Duplicate</button>
+                        <button type="button" class="purchase-action-delete" data-action="delete" data-index="${index}">Delete</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join("");
+
+    syncHiddenPurchaseJson();
+    updateSummary();
+    updateDraftChip();
+    renderRecentChips();
+}
+
+function escapeHtml(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function resetModalFields() {
+    editingPurchaseIndex = null;
+    purchaseModalTitle.textContent = "Add Medicine";
+    modalMedicineSearch.value = "";
+    modalFields.medicine_code.value = "";
+    modalFields.medicine_name.value = "";
+    modalFields.barcode.value = "";
+    modalFields.distributor_name.value = vendorName || "";
+    modalFields.batch.value = "";
+    modalFields.expiry.value = "";
+    modalFields.pack_type.selectedIndex = 0;
+    modalFields.pack_qty.value = "";
+    modalFields.qty.value = "0";
+    modalFields.free_qty.value = "0";
+    modalFields.purchase_rate.value = "0";
+    modalFields.mrp.value = "0";
+    modalFields.gst_percent.value = "0";
+    modalFields.discount_percent.value = "0";
+    modalFields.composition.value = "";
+    modalFields.company.value = "";
+    modalFields.notes.value = "";
+    updatePackQtyLabel();
+    updateModalMeta();
+    clearSearchResults();
+}
+
+function fillModalFromItem(item, title) {
+    editingPurchaseIndex = Number.isInteger(title) ? title : editingPurchaseIndex;
+    purchaseModalTitle.textContent = title || "Edit Medicine";
+    modalMedicineSearch.value = item.medicine_name || item.medicine_code || "";
+    modalFields.medicine_code.value = item.medicine_code || "";
+    modalFields.medicine_name.value = item.medicine_name || "";
+    modalFields.barcode.value = item.barcode || "";
+    modalFields.distributor_name.value = item.distributor_name || vendorName || "";
+    modalFields.batch.value = item.batch || "";
+    modalFields.expiry.value = item.expiry || "";
+    modalFields.pack_type.value = item.pack_type || "Strip";
+    modalFields.pack_qty.value = item.pack_qty || "";
+    modalFields.qty.value = String(parseNum(item.qty));
+    modalFields.free_qty.value = String(parseNum(item.free_qty));
+    modalFields.purchase_rate.value = String(parseNum(item.purchase_rate));
+    modalFields.mrp.value = String(parseNum(item.mrp));
+    modalFields.gst_percent.value = String(parseNum(item.gst_percent));
+    modalFields.discount_percent.value = String(parseNum(item.discount_percent));
+    modalFields.composition.value = item.composition || "";
+    modalFields.company.value = item.company || "";
+    modalFields.notes.value = item.notes || "";
+    updatePackQtyLabel();
+    updateModalMeta();
+}
+
+function openPurchaseModal(prefillItem, index) {
+    if (prefillItem) {
+        editingPurchaseIndex = typeof index === "number" ? index : null;
+        fillModalFromItem(prefillItem, typeof index === "number" ? "Edit Medicine" : "Add Medicine");
+    } else {
+        resetModalFields();
+    }
+    purchaseModal.hidden = false;
+    purchaseModalBackdrop.hidden = false;
+    requestAnimationFrame(() => {
+        purchaseModal.classList.add("is-open");
+        purchaseModalBackdrop.classList.add("is-open");
+    });
+    purchaseModal.setAttribute("aria-hidden", "false");
+    setTimeout(() => modalMedicineSearch.focus(), 40);
+}
+
+function closePurchaseModal() {
+    purchaseModal.classList.remove("is-open");
+    purchaseModalBackdrop.classList.remove("is-open");
+    purchaseModal.setAttribute("aria-hidden", "true");
+    setTimeout(() => {
+        purchaseModal.hidden = true;
+        purchaseModalBackdrop.hidden = true;
+    }, 220);
+    clearSearchResults();
+}
+
+function clearSearchResults() {
+    purchaseSearchResults.hidden = true;
+    purchaseSearchResults.innerHTML = "";
+    modalSearchMatches = [];
+    activeSearchIndex = -1;
+}
+
+function buildSearchText(entry) {
+    return [
+        entry.medicine_code,
+        entry.medicine_name,
+        entry.barcode,
+        entry.composition,
+        entry.company
+    ].map(normalizeToken).join(" ");
+}
+
+function getSearchMatches(query) {
+    const cleaned = normalizeToken(query);
+    if (!cleaned) return medicineCatalog.slice(0, 12);
+    return medicineCatalog.filter(entry => buildSearchText(entry).includes(cleaned)).slice(0, 12);
+}
+
+function renderSearchResults(matches) {
+    modalSearchMatches = matches;
+    activeSearchIndex = matches.length ? 0 : -1;
+    if (!matches.length) {
+        purchaseSearchResults.hidden = true;
+        purchaseSearchResults.innerHTML = "";
+        return;
+    }
+    purchaseSearchResults.hidden = false;
+    purchaseSearchResults.innerHTML = matches.map((entry, index) => `
+        <div class="purchase-search-item ${index === activeSearchIndex ? "active" : ""}" data-search-index="${index}">
+            <strong>${escapeHtml(entry.medicine_name)}</strong>
+            <div class="purchase-search-meta">
+                ${entry.medicine_code ? `<span>Code: ${escapeHtml(entry.medicine_code)}</span>` : ""}
+                ${entry.barcode ? `<span>Barcode: ${escapeHtml(entry.barcode)}</span>` : ""}
+                ${entry.company ? `<span>${escapeHtml(entry.company)}</span>` : ""}
+                ${entry.pack_type ? `<span>${escapeHtml(entry.pack_type)}${entry.pack_qty ? ` of ${escapeHtml(entry.pack_qty)}` : ""}</span>` : ""}
+            </div>
+        </div>
+    `).join("");
+}
+
+function highlightSearchIndex() {
+    Array.from(purchaseSearchResults.querySelectorAll(".purchase-search-item")).forEach((node, index) => {
+        node.classList.toggle("active", index === activeSearchIndex);
+    });
+}
+
+function selectCatalogEntry(entry) {
+    if (!entry) return;
+    modalFields.medicine_code.value = entry.medicine_code || "";
+    modalFields.medicine_name.value = entry.medicine_name || "";
+    modalFields.barcode.value = entry.barcode || modalFields.barcode.value;
+    modalFields.composition.value = entry.composition || modalFields.composition.value;
+    modalFields.company.value = entry.company || modalFields.company.value;
+    if (entry.pack_type) modalFields.pack_type.value = entry.pack_type;
+    if (entry.pack_qty) modalFields.pack_qty.value = entry.pack_qty;
+    if (parseNum(entry.mrp) > 0 && parseNum(modalFields.mrp.value) === 0) {
+        modalFields.mrp.value = entry.mrp;
+    }
+    if (parseNum(entry.discount_percent) > 0 && parseNum(modalFields.discount_percent.value) === 0) {
+        modalFields.discount_percent.value = entry.discount_percent;
+    }
+    updatePackQtyLabel();
+    updateModalMeta();
+    modalMedicineSearch.value = entry.medicine_code || entry.medicine_name;
+    clearSearchResults();
+    modalFields.batch.focus();
+}
+
+function findCatalogByCodeOrName(code, name) {
+    const normalizedCode = normalizeMedicineCode(code);
+    const normalizedName = normalizeToken(name);
+    return medicineCatalog.find(entry =>
+        (normalizedCode && normalizeMedicineCode(entry.medicine_code) === normalizedCode)
+        || (normalizedName && normalizeToken(entry.medicine_name) === normalizedName)
+    ) || null;
+}
+
+function renderRecentChips() {
+    if (!purchaseRecentChips) return;
+    const merged = [];
+    const seen = new Set();
+
+    recentServerChips.forEach(chip => {
+        const key = normalizeMedicineCode(chip.medicine_code) || normalizeToken(chip.medicine_name);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        merged.push(chip);
+    });
+
+    purchaseItems.forEach(item => {
+        const key = normalizeMedicineCode(item.medicine_code) || normalizeToken(item.medicine_name);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        merged.unshift({
+            medicine_code: item.medicine_code,
+            medicine_name: item.medicine_name
         });
-        let selects = clone.querySelectorAll("select");
-        selects.forEach(s => s.selectedIndex = 0);
-        tbody.appendChild(clone);
-        updatePackLabel(clone.querySelector(".pack-type"));
     });
+
+    purchaseRecentChips.innerHTML = merged.slice(0, 12).map(chip => `
+        <button type="button"
+                class="purchase-chip"
+                data-chip-code="${escapeHtml(chip.medicine_code || "")}"
+                data-chip-name="${escapeHtml(chip.medicine_name || "")}">
+            ${escapeHtml(chip.medicine_name || chip.medicine_code || "Recent")}
+        </button>
+    `).join("");
 }
 
-function clearPurchaseRow(row) {
-    row.querySelectorAll("input").forEach(i => {
-        if (i.name === "total_value") {
-            i.value = "";
-            return;
+function updateModalMeta() {
+    const preview = {
+        qty: modalFields.qty.value,
+        free_qty: modalFields.free_qty.value,
+        purchase_rate: modalFields.purchase_rate.value,
+        mrp: modalFields.mrp.value,
+        gst_percent: modalFields.gst_percent.value,
+        discount_percent: modalFields.discount_percent.value
+    };
+    const metrics = computeItemMetrics(preview);
+    purchaseModalMeta.textContent = `Line Total: ${formatMoney(metrics.total)} | GST: ${formatMoney(metrics.gstAmount)} | Discount: ${formatMoney(metrics.discountAmount)}`;
+}
+
+function validateModalItem() {
+    const medicineCode = normalizeMedicineCode(modalFields.medicine_code.value);
+    const medicineName = String(modalFields.medicine_name.value || "").trim();
+    const batch = String(modalFields.batch.value || "").trim();
+    const expiry = String(modalFields.expiry.value || "").trim();
+    const packType = String(modalFields.pack_type.value || "").trim();
+    const packQty = String(modalFields.pack_qty.value || "").trim();
+    const qty = parseNum(modalFields.qty.value);
+
+    if (!medicineCode) return "Medicine code is required.";
+    if (!medicineName) return "Medicine name must be auto-filled from a valid code.";
+    if (!batch) return "Batch is required.";
+    if (!expiry) return "Expiry date is required.";
+    if (!packType) return "Pack type is required.";
+    if (!packQty || parseNum(packQty) < 1) return "Pack quantity must be at least 1.";
+    if (qty <= 0) return "Quantity must be greater than 0.";
+    return "";
+}
+
+function collectModalItem() {
+    return {
+        medicine_code: normalizeMedicineCode(modalFields.medicine_code.value),
+        medicine_name: String(modalFields.medicine_name.value || "").trim(),
+        barcode: String(modalFields.barcode.value || "").trim(),
+        batch: String(modalFields.batch.value || "").trim(),
+        expiry: String(modalFields.expiry.value || "").trim(),
+        pack_type: String(modalFields.pack_type.value || "").trim(),
+        pack_qty: String(modalFields.pack_qty.value || "").trim(),
+        qty: parseNum(modalFields.qty.value),
+        free_qty: parseNum(modalFields.free_qty.value),
+        purchase_rate: parseNum(modalFields.purchase_rate.value),
+        mrp: parseNum(modalFields.mrp.value),
+        gst_percent: parseNum(modalFields.gst_percent.value),
+        discount_percent: parseNum(modalFields.discount_percent.value),
+        composition: String(modalFields.composition.value || "").trim(),
+        company: String(modalFields.company.value || "").trim(),
+        distributor_name: String(modalFields.distributor_name.value || "").trim() || vendorName,
+        notes: String(modalFields.notes.value || "").trim()
+    };
+}
+
+function saveModalItem() {
+    const error = validateModalItem();
+    if (error) {
+        showPurchaseFeedback(error, "error");
+        return;
+    }
+    clearPurchaseFeedback();
+    const item = collectModalItem();
+    if (editingPurchaseIndex !== null && purchaseItems[editingPurchaseIndex]) {
+        purchaseItems[editingPurchaseIndex] = item;
+    } else {
+        purchaseItems.push(item);
+    }
+    renderGrid();
+    markDirtyAndPersist();
+    closePurchaseModal();
+}
+
+function clearPurchaseBuilderState() {
+    purchaseItems = [];
+    editingPurchaseIndex = null;
+    purchaseItemsJson.value = "";
+    renderGrid();
+}
+
+function resetPurchaseHeader(keepDate) {
+    purchaseForm.reset();
+    if (keepDate) {
+        purchaseDateInput.value = keepDate;
+    }
+    document.getElementById("purchasePaymentStatus").value = "Paid";
+    document.getElementById("purchasePaymentMode").value = "CASH";
+    document.getElementById("purchasePaidAmount").value = "0";
+}
+
+function getDraftPayload() {
+    return {
+        invoice_no: document.getElementById("purchaseInvoiceNo").value,
+        purchase_date: purchaseDateInput.value,
+        payment_status: document.getElementById("purchasePaymentStatus").value,
+        payment_mode: document.getElementById("purchasePaymentMode").value,
+        paid_amount: document.getElementById("purchasePaidAmount").value,
+        purchase_notes: document.getElementById("purchaseNotes").value,
+        items: purchaseItems
+    };
+}
+
+function saveDraft() {
+    try {
+        localStorage.setItem(draftStorageKey, JSON.stringify(getDraftPayload()));
+    } catch (err) {
+        console.warn("Unable to save purchase draft", err);
+    }
+}
+
+function loadDraft() {
+    let raw = null;
+    try {
+        raw = localStorage.getItem(draftStorageKey);
+    } catch (err) {
+        raw = null;
+    }
+    if (!raw) return;
+    try {
+        const draft = JSON.parse(raw);
+        document.getElementById("purchaseInvoiceNo").value = draft.invoice_no || "";
+        purchaseDateInput.value = draft.purchase_date || purchaseDateInput.value;
+        document.getElementById("purchasePaymentStatus").value = draft.payment_status || "Paid";
+        document.getElementById("purchasePaymentMode").value = draft.payment_mode || "CASH";
+        document.getElementById("purchasePaidAmount").value = draft.paid_amount || "0";
+        document.getElementById("purchaseNotes").value = draft.purchase_notes || "";
+        purchaseItems = Array.isArray(draft.items) ? draft.items : [];
+        renderGrid();
+        if (purchaseItems.length) {
+            setPurchaseDirty(true);
         }
-        if (i.name === "pack_qty") {
-            i.value = "";
-            return;
-        }
-        if (i.type === "number" || (i.classList && i.classList.contains("decimal-input"))) {
-            i.value = "0";
-            return;
-        }
-        i.value = "";
-    });
-    row.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
-    updatePackLabel(row.querySelector(".pack-type"));
+    } catch (err) {
+        console.warn("Unable to load purchase draft", err);
+    }
+}
+
+function clearDraftStorage() {
+    try {
+        localStorage.removeItem(draftStorageKey);
+    } catch (err) {
+        console.warn("Unable to clear purchase draft", err);
+    }
 }
 
 function setTodayIfEmpty() {
-    let dateInput = document.querySelector("input[name='purchase_date']");
-    if (dateInput && !dateInput.value) {
-        let today = new Date().toISOString().slice(0, 10);
-        dateInput.value = today;
+    if (!purchaseDateInput.value) {
+        purchaseDateInput.value = new Date().toISOString().slice(0, 10);
     }
 }
 
-let newBillBtn = document.getElementById("newPurchaseBill");
-if (newBillBtn) {
-    newBillBtn.addEventListener("click", function () {
-        if (!confirm("Start a new purchase bill? Current entries will be cleared.")) return;
-        let form = document.getElementById("purchaseForm");
-        if (form) {
-            form.querySelector("input[name='invoice_no']").value = "";
-            form.querySelector("input[name='paid_amount']").value = "0";
-            let billFile = form.querySelector("input[name='bill_attachment_file']");
-            if (billFile) billFile.value = "";
-            form.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
-            let dateInput = form.querySelector("input[name='purchase_date']");
-            if (dateInput) {
-                let today = new Date().toISOString().slice(0, 10);
-                dateInput.value = today;
-            }
+function handleInlineGridInput(target) {
+    const index = Number(target.dataset.index);
+    const field = target.dataset.inlineField;
+    if (!Number.isInteger(index) || !field || !purchaseItems[index]) return;
+    purchaseItems[index][field] = parseNum(target.value);
+    const row = target.closest("tr");
+    if (row) {
+        const metrics = computeItemMetrics(purchaseItems[index]);
+        const totalCell = row.querySelector("td:nth-child(11) strong");
+        if (totalCell) totalCell.textContent = formatMoney(metrics.total);
+    }
+    syncHiddenPurchaseJson();
+    updateSummary();
+    markDirtyAndPersist();
+}
+
+function submitPurchaseForm() {
+    if (!purchaseItems.length) {
+        showPurchaseFeedback("Add at least one medicine before saving the purchase.", "error");
+        return;
+    }
+    syncHiddenPurchaseJson();
+    clearPurchaseFeedback();
+    const saveLabel = savePurchaseBtn.textContent;
+    savePurchaseBtn.disabled = true;
+    savePurchaseBtn.textContent = "Saving...";
+
+    const formData = new FormData(purchaseForm);
+    formData.set("purchase_items_json", JSON.stringify(purchaseItems));
+
+    fetch(purchaseForm.action, {
+        method: "POST",
+        body: formData,
+        headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json"
         }
-        let tbody = document.querySelector("#purchaseTable tbody");
-        if (tbody) {
-            let rows = Array.from(tbody.querySelectorAll(".purchase-row"));
-            rows.forEach((row, idx) => {
-                if (idx === 0) {
-                    clearPurchaseRow(row);
-                } else {
-                    row.remove();
-                }
-            });
+    })
+    .then(async response => {
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch (err) {
+            payload = {};
         }
-        updateGrandTotal();
-        document.querySelectorAll("#purchaseTable .purchase-row .pack-type").forEach(select => {
-            updatePackLabel(select);
-        });
+        if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || "Unable to save purchase right now.");
+        }
+        return payload;
+    })
+    .then(payload => {
+        const keepDate = purchaseDateInput.value || new Date().toISOString().slice(0, 10);
+        clearPurchaseBuilderState();
+        resetPurchaseHeader(keepDate);
+        if (purchaseAttachmentInput) purchaseAttachmentInput.value = "";
+        clearDraftStorage();
+        setPurchaseDirty(false);
+        renderGrid();
+        showPurchaseFeedback(`${payload.message} Purchase No: ${payload.purchase_no}`, "success");
+    })
+    .catch(err => {
+        showPurchaseFeedback(err.message || "Unable to save purchase right now.", "error");
+    })
+    .finally(() => {
+        savePurchaseBtn.disabled = false;
+        savePurchaseBtn.textContent = saveLabel;
     });
 }
 
-window.addEventListener("load", function () {
-    setTodayIfEmpty();
-    updateGrandTotal();
-    document.querySelectorAll("#purchaseTable .purchase-row .pack-type").forEach(select => {
-        updatePackLabel(select);
+document.getElementById("openPurchaseModal").addEventListener("click", () => openPurchaseModal());
+document.getElementById("closePurchaseModal").addEventListener("click", closePurchaseModal);
+document.getElementById("cancelPurchaseItem").addEventListener("click", closePurchaseModal);
+document.getElementById("savePurchaseItem").addEventListener("click", saveModalItem);
+document.getElementById("clearPurchaseDraft").addEventListener("click", () => {
+    if (!confirm("Clear the current purchase draft and all added medicines?")) return;
+    const keepDate = purchaseDateInput.value || new Date().toISOString().slice(0, 10);
+    clearPurchaseBuilderState();
+    resetPurchaseHeader(keepDate);
+    clearDraftStorage();
+    setPurchaseDirty(false);
+    renderGrid();
+    clearPurchaseFeedback();
+});
+
+purchaseModalBackdrop.addEventListener("click", closePurchaseModal);
+modalFields.pack_type.addEventListener("change", updatePackQtyLabel);
+
+[modalFields.qty, modalFields.free_qty, modalFields.purchase_rate, modalFields.mrp, modalFields.gst_percent, modalFields.discount_percent]
+    .forEach(field => field.addEventListener("input", updateModalMeta));
+
+modalMedicineSearch.addEventListener("input", () => {
+    const matches = getSearchMatches(modalMedicineSearch.value);
+    renderSearchResults(matches);
+});
+
+modalMedicineSearch.addEventListener("keydown", event => {
+    if (!modalSearchMatches.length) return;
+    if (event.key === "ArrowDown") {
+        event.preventDefault();
+        activeSearchIndex = Math.min(activeSearchIndex + 1, modalSearchMatches.length - 1);
+        highlightSearchIndex();
+        return;
+    }
+    if (event.key === "ArrowUp") {
+        event.preventDefault();
+        activeSearchIndex = Math.max(activeSearchIndex - 1, 0);
+        highlightSearchIndex();
+        return;
+    }
+    if (event.key === "Enter" && !event.ctrlKey) {
+        event.preventDefault();
+        selectCatalogEntry(modalSearchMatches[activeSearchIndex] || modalSearchMatches[0]);
+    }
+});
+
+purchaseSearchResults.addEventListener("mousedown", event => {
+    const item = event.target.closest(".purchase-search-item");
+    if (!item) return;
+    event.preventDefault();
+    const index = Number(item.dataset.searchIndex);
+    selectCatalogEntry(modalSearchMatches[index]);
+});
+
+purchaseRecentChips.addEventListener("click", event => {
+    const chip = event.target.closest(".purchase-chip");
+    if (!chip) return;
+    const code = chip.dataset.chipCode || "";
+    const name = chip.dataset.chipName || "";
+    const entry = findCatalogByCodeOrName(code, name);
+    openPurchaseModal(entry || {
+        medicine_code: code,
+        medicine_name: name,
+        distributor_name: vendorName,
+        pack_type: "Strip"
+    });
+    if (entry) {
+        selectCatalogEntry(entry);
+    } else {
+        modalFields.medicine_code.value = code;
+        modalFields.medicine_name.value = name;
+    }
+});
+
+purchaseGridBody.addEventListener("input", event => {
+    if (event.target.matches("[data-inline-field]")) {
+        handleInlineGridInput(event.target);
+    }
+});
+
+purchaseGridBody.addEventListener("click", event => {
+    const actionBtn = event.target.closest("[data-action]");
+    if (!actionBtn) return;
+    const index = Number(actionBtn.dataset.index);
+    const action = actionBtn.dataset.action;
+    if (!Number.isInteger(index) || !purchaseItems[index]) return;
+    if (action === "edit") {
+        openPurchaseModal(purchaseItems[index], index);
+        return;
+    }
+    if (action === "duplicate") {
+        const duplicated = { ...purchaseItems[index] };
+        purchaseItems.splice(index + 1, 0, duplicated);
+        renderGrid();
+        markDirtyAndPersist();
+        return;
+    }
+    if (action === "delete") {
+        purchaseItems.splice(index, 1);
+        renderGrid();
+        markDirtyAndPersist();
+    }
+});
+
+purchaseForm.addEventListener("submit", event => {
+    event.preventDefault();
+    submitPurchaseForm();
+});
+
+document.addEventListener("keydown", event => {
+    if (event.key === "F2") {
+        event.preventDefault();
+        if (purchaseModal.hidden) {
+            openPurchaseModal();
+        } else {
+            modalMedicineSearch.focus();
+        }
+    }
+    if (event.key === "F4") {
+        event.preventDefault();
+        submitPurchaseForm();
+    }
+    if (event.key === "Escape" && !purchaseModal.hidden) {
+        event.preventDefault();
+        closePurchaseModal();
+    }
+});
+
+[modalMedicineSearch, ...Object.values(modalFields)].forEach(field => {
+    field.addEventListener("keydown", event => {
+        if (event.key === "Enter" && event.ctrlKey) {
+            event.preventDefault();
+            saveModalItem();
+            return;
+        }
+        if (event.key === "Enter" && event.target.tagName !== "TEXTAREA" && !event.shiftKey) {
+            event.preventDefault();
+            const currentIndex = modalFocusOrder.indexOf(event.target);
+            if (currentIndex >= 0 && currentIndex < modalFocusOrder.length - 1) {
+                modalFocusOrder[currentIndex + 1].focus();
+            }
+        }
     });
 });
-</script>
 
+window.addEventListener("beforeunload", event => {
+    if (!purchaseDirty || !purchaseItems.length) return;
+    event.preventDefault();
+    event.returnValue = "";
+});
+
+setTodayIfEmpty();
+renderGrid();
+loadDraft();
+updatePackQtyLabel();
+updateModalMeta();
+</script>
+{% endif %}
 {% endblock %}

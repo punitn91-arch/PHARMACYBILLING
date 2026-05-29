@@ -71,6 +71,10 @@ input, select, textarea {
                 <input type="text" name="medicine_name" required value="{{ item.medicine_name }}">
             </div>
             <div>
+                <label>Medicine Code</label>
+                <input type="text" name="medicine_code" value="{{ resolved_medicine_code or '' }}" placeholder="e.g. MED001">
+            </div>
+            <div>
                 <label>Barcode</label>
                 <input type="text" name="barcode" value="{{ resolved_barcode or '' }}" placeholder="Scan or type barcode">
             </div>

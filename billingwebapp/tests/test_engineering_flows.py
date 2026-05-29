@@ -180,6 +180,7 @@ class EngineeringFlowTests(unittest.TestCase):
             vendor = self.app_module.Vendor(name="Sync Vendor", is_active=True)
             medicine = self.app_module.Medicine(
                 name="CALCITAB",
+                medicine_code="MED-CALCI",
                 batch="C100",
                 expiry="2027-12-31",
                 mrp=120.0,
@@ -204,6 +205,7 @@ class EngineeringFlowTests(unittest.TestCase):
                 "payment_status": "Paid",
                 "paid_amount": "0",
                 "medicine_name": ["CALCITAB"],
+                "medicine_code": ["MED-CALCI"],
                 "barcode": ["BARCODE-12345"],
                 "composition": [""],
                 "company": ["Test Pharma"],
@@ -226,8 +228,316 @@ class EngineeringFlowTests(unittest.TestCase):
         with self.app.app_context():
             medicine = self.app_module.Medicine.query.filter_by(name="CALCITAB", batch="C100").one()
             purchase_item = self.app_module.VendorPurchaseItem.query.one()
+            self.assertEqual(medicine.medicine_code, "MED-CALCI")
             self.assertEqual(medicine.barcode, "BARCODE-12345")
+            self.assertEqual(purchase_item.medicine_code, "MED-CALCI")
             self.assertEqual(purchase_item.barcode, "BARCODE-12345")
+
+    def test_vendor_purchase_resolves_existing_medicine_name_from_code(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(name="Code Vendor", is_active=True)
+            medicine = self.app_module.Medicine(
+                name="CALCITAB D3 LIQUID 5 ML 1X1",
+                medicine_code="MED-D3LQ",
+                batch="OLD100",
+                expiry="2027-12-31",
+                mrp=140.0,
+                qty=4,
+                discount_percent=10,
+                barcode="",
+                reorder_level=5,
+                is_active=True,
+            )
+            self.db.session.add(vendor)
+            self.db.session.add(medicine)
+            self.db.session.commit()
+            vendor_id = vendor.id
+
+        self.login()
+        response = self.client.post(
+            f"/vendor/{vendor_id}/purchase",
+            data={
+                "invoice_no": "SYNC-002",
+                "purchase_date": date.today().isoformat(),
+                "payment_mode": "CASH",
+                "payment_status": "Paid",
+                "paid_amount": "0",
+                "medicine_name": [""],
+                "medicine_code": ["MED-D3LQ"],
+                "barcode": [""],
+                "composition": [""],
+                "company": ["Test Pharma"],
+                "distributor_name": ["Code Vendor"],
+                "pack_type": ["Bottle"],
+                "pack_qty": ["1"],
+                "batch": ["NEW200"],
+                "expiry": ["12/2027"],
+                "qty": ["5"],
+                "free_qty": ["0"],
+                "purchase_rate": ["80"],
+                "mrp": ["140"],
+                "gst_percent": ["0"],
+                "discount_percent": ["0"],
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            new_batch = self.app_module.Medicine.query.filter_by(batch="NEW200").one()
+            purchase_item = self.app_module.VendorPurchaseItem.query.order_by(
+                self.app_module.VendorPurchaseItem.id.desc()
+            ).first()
+            self.assertEqual(new_batch.name, "CALCITAB D3 LIQUID 5 ML 1X1")
+            self.assertEqual(new_batch.medicine_code, "MED-D3LQ")
+            self.assertEqual(purchase_item.medicine_name, "CALCITAB D3 LIQUID 5 ML 1X1")
+            self.assertEqual(purchase_item.medicine_code, "MED-D3LQ")
+
+    def test_vendor_purchase_accepts_ajax_json_purchase_grid_payload(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(name="ERP Vendor", is_active=True)
+            medicine = self.app_module.Medicine(
+                name="DOLO 650",
+                medicine_code="MED-DOLO650",
+                batch="OLD-1",
+                expiry="2027-12-31",
+                mrp=35.0,
+                qty=10,
+                discount_percent=5,
+                barcode="8900000000011",
+                reorder_level=5,
+                is_active=True,
+                composition="Paracetamol 650",
+                company="Micro Labs",
+                pack_type="Strip",
+                pack_qty=15,
+            )
+            self.db.session.add(vendor)
+            self.db.session.add(medicine)
+            self.db.session.commit()
+            vendor_id = vendor.id
+
+        self.login()
+        payload = [
+            {
+                "medicine_code": "MED-DOLO650",
+                "medicine_name": "DOLO 650",
+                "barcode": "8900000000011",
+                "batch": "NEW-1",
+                "expiry": "12/2027",
+                "pack_type": "Strip",
+                "pack_qty": 15,
+                "qty": 20,
+                "free_qty": 2,
+                "purchase_rate": 18,
+                "mrp": 35,
+                "gst_percent": 12,
+                "discount_percent": 5,
+                "composition": "Paracetamol 650",
+                "company": "Micro Labs",
+                "distributor_name": "ERP Vendor",
+                "notes": "Fast lane item",
+            }
+        ]
+        response = self.client.post(
+            f"/vendor/{vendor_id}/purchase",
+            data={
+                "invoice_no": "ERP-001",
+                "purchase_date": date.today().isoformat(),
+                "payment_mode": "CASH",
+                "payment_status": "Paid",
+                "paid_amount": "0",
+                "purchase_notes": "Main purchase note",
+                "purchase_items_json": self.app_module.json.dumps(payload),
+            },
+            headers={
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["purchase_no"][:3], "PB-")
+
+        with self.app.app_context():
+            purchase = self.app_module.VendorPurchase.query.one()
+            purchase_item = self.app_module.VendorPurchaseItem.query.one()
+            saved_medicine = self.app_module.Medicine.query.filter_by(batch="NEW-1").one()
+            self.assertEqual(purchase.notes, "Main purchase note")
+            self.assertEqual(purchase_item.notes, "Fast lane item")
+            self.assertEqual(saved_medicine.medicine_code, "MED-DOLO650")
+            self.assertEqual(saved_medicine.qty, 22)
+
+    def test_vendor_form_renders_medicine_name_as_readonly_auto_fill(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(name="Readonly Vendor", is_active=True)
+            self.db.session.add(vendor)
+            self.db.session.commit()
+            vendor_id = vendor.id
+
+        self.login()
+        response = self.client.get(f"/vendor/edit/{vendor_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'purchase_items_json', response.data)
+        self.assertIn(b'Add Medicine', response.data)
+        self.assertIn(b'Live Purchase Grid', response.data)
+        self.assertIn(b'id="purchaseModal"', response.data)
+        self.assertIn(b'Auto-filled from code', response.data)
+        self.assertIn(b"purchase_items_json", response.data)
+
+    def test_vendor_form_hides_address_bank_and_payment_sections_but_preserves_existing_values(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(
+                name="Preserve Vendor",
+                mobile="9999988888",
+                email="vendor@example.com",
+                gst_no="GST123",
+                shop_name="Old Shop",
+                area="Old Area",
+                city="Old City",
+                state="Old State",
+                pincode="123456",
+                address="Old Address",
+                bank_name="Old Bank",
+                account_holder_name="Old Holder",
+                account_no="1234567890",
+                ifsc="IFSC0001",
+                upi="old@upi",
+                vendor_type="Distributor",
+                default_payment_mode="CASH",
+                payment_status="Paid",
+                attachment_ref="old-file.pdf",
+                notes="Old vendor note",
+                is_active=True,
+            )
+            self.db.session.add(vendor)
+            self.db.session.commit()
+            vendor_id = vendor.id
+
+        self.login()
+        get_response = self.client.get(f"/vendor/edit/{vendor_id}")
+        self.assertEqual(get_response.status_code, 200)
+        vendor_card_html = get_response.data.split(b'<div class="purchase-workspace">', 1)[0]
+        self.assertNotIn(b"Address", vendor_card_html)
+        self.assertNotIn(b"Bank Details", vendor_card_html)
+        self.assertNotIn(b"Shop Name", vendor_card_html)
+        self.assertNotIn(b"Account Holder Name", vendor_card_html)
+        self.assertNotIn(b'name="vendor_type"', vendor_card_html)
+        self.assertNotIn(b'name="default_payment_mode"', vendor_card_html)
+        self.assertNotIn(b'name="payment_status"', vendor_card_html)
+        self.assertNotIn(b'name="last_purchase_date"', vendor_card_html)
+        self.assertNotIn(b'name="is_active"', vendor_card_html)
+        self.assertNotIn(b"Attachments & Notes", vendor_card_html)
+        self.assertNotIn(b'name="attachment_ref"', vendor_card_html)
+        self.assertNotIn(b'name="attachment_file"', vendor_card_html)
+        self.assertNotIn(b'name="notes"', vendor_card_html)
+
+        post_response = self.client.post(
+            f"/vendor/edit/{vendor_id}",
+            data={
+                "name": "Preserve Vendor Updated",
+                "mobile": "9999988888",
+                "email": "vendor@example.com",
+                "gst_no": "GST123",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(post_response.status_code, 302)
+
+        with self.app.app_context():
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            self.assertEqual(vendor.shop_name, "Old Shop")
+            self.assertEqual(vendor.area, "Old Area")
+            self.assertEqual(vendor.city, "Old City")
+            self.assertEqual(vendor.state, "Old State")
+            self.assertEqual(vendor.pincode, "123456")
+            self.assertEqual(vendor.address, "Old Address")
+            self.assertEqual(vendor.bank_name, "Old Bank")
+            self.assertEqual(vendor.account_holder_name, "Old Holder")
+            self.assertEqual(vendor.account_no, "1234567890")
+            self.assertEqual(vendor.ifsc, "IFSC0001")
+            self.assertEqual(vendor.upi, "old@upi")
+            self.assertEqual(vendor.vendor_type, "Distributor")
+            self.assertEqual(vendor.default_payment_mode, "CASH")
+            self.assertEqual(vendor.payment_status, "Paid")
+            self.assertEqual(vendor.attachment_ref, "old-file.pdf")
+            self.assertEqual(vendor.notes, "Old vendor note")
+            self.assertTrue(vendor.is_active)
+
+    def test_vendor_purchase_blocks_manual_name_when_code_missing_or_unknown(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(name="Strict Code Vendor", is_active=True)
+            self.db.session.add(vendor)
+            self.db.session.commit()
+            vendor_id = vendor.id
+
+        self.login()
+        missing_code_response = self.client.post(
+            f"/vendor/{vendor_id}/purchase",
+            data={
+                "invoice_no": "STRICT-001",
+                "purchase_date": date.today().isoformat(),
+                "payment_mode": "CASH",
+                "payment_status": "Paid",
+                "paid_amount": "0",
+                "medicine_name": ["MANUAL MED"],
+                "medicine_code": [""],
+                "barcode": [""],
+                "composition": [""],
+                "company": ["Test Pharma"],
+                "distributor_name": ["Strict Code Vendor"],
+                "pack_type": ["Box"],
+                "pack_qty": ["1"],
+                "batch": ["MC100"],
+                "expiry": ["12/2027"],
+                "qty": ["2"],
+                "free_qty": ["0"],
+                "purchase_rate": ["50"],
+                "mrp": ["70"],
+                "gst_percent": ["0"],
+                "discount_percent": ["0"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(missing_code_response.status_code, 200)
+        self.assertIn(b"Medicine code is required for each purchase row", missing_code_response.data)
+
+        unknown_code_response = self.client.post(
+            f"/vendor/{vendor_id}/purchase",
+            data={
+                "invoice_no": "STRICT-002",
+                "purchase_date": date.today().isoformat(),
+                "payment_mode": "CASH",
+                "payment_status": "Paid",
+                "paid_amount": "0",
+                "medicine_name": [""],
+                "medicine_code": ["MED-UNKNOWN"],
+                "barcode": [""],
+                "composition": [""],
+                "company": ["Test Pharma"],
+                "distributor_name": ["Strict Code Vendor"],
+                "pack_type": ["Box"],
+                "pack_qty": ["1"],
+                "batch": ["MC101"],
+                "expiry": ["12/2027"],
+                "qty": ["2"],
+                "free_qty": ["0"],
+                "purchase_rate": ["50"],
+                "mrp": ["70"],
+                "gst_percent": ["0"],
+                "discount_percent": ["0"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(unknown_code_response.status_code, 200)
+        self.assertIn(b"was not found in Medicine Master", unknown_code_response.data)
+
+        with self.app.app_context():
+            self.assertEqual(self.app_module.VendorPurchase.query.count(), 0)
+            self.assertEqual(self.app_module.VendorPurchaseItem.query.count(), 0)
+            self.assertEqual(self.app_module.Medicine.query.count(), 0)
 
     def test_return_flow_restores_stock_and_purchase_remaining(self):
         with self.app.app_context():

@@ -58,6 +58,7 @@ class Medicine(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False, index=True)
+    medicine_code = db.Column(db.String(40), index=True)
     composition = db.Column(db.String(255))
     company = db.Column(db.String(150))
     pack_type = db.Column(db.String(50))
@@ -334,6 +335,7 @@ class VendorPurchase(db.Model):
     payment_mode = db.Column(db.String(30))
     payment_status = db.Column(db.String(30))
     paid_amount = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text)
     subtotal = db.Column(db.Float, default=0)
     gst_total = db.Column(db.Float, default=0)
     discount_total = db.Column(db.Float, default=0)
@@ -350,6 +352,7 @@ class VendorPurchaseItem(db.Model):
     vendor_id = db.Column(db.Integer, nullable=False)
     medicine_id = db.Column(db.Integer)
     medicine_name = db.Column(db.String(150), index=True)
+    medicine_code = db.Column(db.String(40), index=True)
     barcode = db.Column(db.String(80), index=True)
     composition = db.Column(db.String(255))
     company = db.Column(db.String(150))
@@ -365,6 +368,7 @@ class VendorPurchaseItem(db.Model):
     mrp = db.Column(db.Float, default=0)
     gst_percent = db.Column(db.Float, default=0)
     discount_percent = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text)
     total_value = db.Column(db.Float, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 

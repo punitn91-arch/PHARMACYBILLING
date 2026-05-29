@@ -504,7 +504,7 @@
         <div class="search-grid">
             <div class="field-stack">
                 <label for="medicineSearch">Search Medicine</label>
-                <input class="search-input" type="text" id="medicineSearch" value="{{ initial_search or '' }}" placeholder="Search by medicine name, batch, barcode, pack or status">
+                <input class="search-input" type="text" id="medicineSearch" value="{{ initial_search or '' }}" placeholder="Search by medicine name, code, batch, barcode, pack or status">
                 <div class="app-inline-help">Shortcut: <b>Alt + F</b> focus search, <b>Alt + M</b> add new batch. Review items with missing barcodes before rolling out barcode billing.</div>
             </div>
 
@@ -605,6 +605,9 @@
                                     <div>
                                         <div class="medicine-name">{{ group.name }}</div>
                                         <div class="medicine-meta js-meta-line">
+                                            {% if group.medicine_code_display %}
+                                            Code {{ group.medicine_code_display }} ·
+                                            {% endif %}
                                             {{ group.batches|length }} visible batch{{ "" if group.batches|length == 1 else "es" }}
                                             · {{ group.active_batches }} active
                                             {% if group.archived_batches %}
@@ -658,6 +661,7 @@
                             <table class="batch-table">
                                 <thead>
                                     <tr>
+                                        <th>Code</th>
                                         <th>Batch</th>
                                         <th>Pack</th>
                                         <th>Expiry</th>
@@ -677,6 +681,7 @@
                                         data-expiry="{{ batch_expiry_iso }}"
                                         data-expiry-label="{{ batch.expiry }}"
                                     >
+                                        <td>{{ batch.medicine_code or '-' }}</td>
                                         <td>{{ batch.batch }}</td>
                                         <td>{{ batch.pack }}</td>
                                         <td>{{ batch.expiry }}</td>

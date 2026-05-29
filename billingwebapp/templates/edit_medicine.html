@@ -44,6 +44,9 @@ button {
         <label class="field-label" for="medicineName">Medicine Name</label>
         <input type="text" id="medicineName" name="name" value="{{ med.name }}" required>
 
+        <label class="field-label" for="medicineCode">Medicine Code</label>
+        <input type="text" id="medicineCode" name="medicine_code" value="{{ med.medicine_code or '' }}">
+
         <label class="field-label" for="medicineBatch">Batch</label>
         <input type="text" id="medicineBatch" name="batch" value="{{ med.batch }}" required>
 

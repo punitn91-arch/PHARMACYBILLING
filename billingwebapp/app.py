@@ -371,6 +371,10 @@ def normalize_medicine_name(value):
     return " ".join(str(value or "").strip().split())
 
 
+def normalize_medicine_code(value):
+    return "".join(str(value or "").strip().upper().split())
+
+
 def build_medicine_name_suggestions(medicines):
     unique_names = {}
     for med in medicines:
@@ -379,6 +383,79 @@ def build_medicine_name_suggestions(medicines):
             continue
         unique_names.setdefault(cleaned_name.casefold(), cleaned_name)
     return sorted(unique_names.values(), key=str.lower)
+
+
+def build_medicine_code_lookup(medicines):
+    grouped = {}
+    for med in medicines:
+        code = normalize_medicine_code(getattr(med, "medicine_code", ""))
+        name = normalize_medicine_name(getattr(med, "name", ""))
+        if not code or not name:
+            continue
+        grouped.setdefault(code, {})
+        grouped[code][name.casefold()] = name
+
+    lookup = {}
+    for code, names in grouped.items():
+        if len(names) == 1:
+            lookup[code] = {"name": next(iter(names.values()))}
+    return lookup
+
+
+def build_medicine_purchase_catalog(medicines):
+    catalog = []
+    seen = set()
+    for med in medicines:
+        medicine_name = normalize_medicine_name(getattr(med, "name", ""))
+        if not medicine_name:
+            continue
+        medicine_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
+        company = (getattr(med, "company", "") or "").strip()
+        pack_type = (getattr(med, "pack_type", "") or "").strip()
+        pack_qty = getattr(med, "pack_qty", None)
+        barcode = (getattr(med, "barcode", "") or "").strip()
+        key = (
+            medicine_code
+            or f"{medicine_name.casefold()}|{company.casefold()}|{pack_type.casefold()}|{pack_qty or ''}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        catalog.append({
+            "medicine_id": getattr(med, "id", None),
+            "medicine_code": medicine_code,
+            "medicine_name": medicine_name,
+            "barcode": barcode,
+            "composition": (getattr(med, "composition", "") or "").strip(),
+            "company": company,
+            "pack_type": pack_type,
+            "pack_qty": pack_qty,
+            "mrp": to_float_safe(getattr(med, "mrp", 0), 0),
+            "discount_percent": to_float_safe(getattr(med, "discount_percent", 0), 0),
+        })
+    catalog.sort(key=lambda item: ((0 if item["medicine_code"] else 1), item["medicine_name"].lower()))
+    return catalog
+
+
+def build_recent_purchase_medicine_chips(purchase_items, limit=10):
+    chips = []
+    seen = set()
+    for item in purchase_items:
+        medicine_name = normalize_medicine_name(getattr(item, "medicine_name", ""))
+        medicine_code = normalize_medicine_code(getattr(item, "medicine_code", ""))
+        if not medicine_name:
+            continue
+        chip_key = medicine_code or medicine_name.casefold()
+        if chip_key in seen:
+            continue
+        seen.add(chip_key)
+        chips.append({
+            "medicine_code": medicine_code,
+            "medicine_name": medicine_name,
+        })
+        if len(chips) >= limit:
+            break
+    return chips
 
 def to_int_safe(val, default=0):
     try:
@@ -1108,6 +1185,7 @@ def build_medicine_audit_snapshot(med):
     return {
         "id": med.id,
         "name": (med.name or "").strip(),
+        "medicine_code": normalize_medicine_code(getattr(med, "medicine_code", "")),
         "batch": (med.batch or "").strip(),
         "expiry": med.expiry,
         "mrp": round(to_float_safe(med.mrp, 0), 3),
@@ -1742,6 +1820,8 @@ def build_medicine_master_groups(show_archived=False):
         if not group:
             group = {
                 "name": name,
+                "medicine_codes": set(),
+                "medicine_code_display": "",
                 "total_stock": 0,
                 "total_batches": 0,
                 "active_batches": 0,
@@ -1760,8 +1840,11 @@ def build_medicine_master_groups(show_archived=False):
         expiry_display, expiry_sort = medicine_expiry_display(med.expiry)
         is_expired = bool(expiry_sort and expiry_sort < today)
         status = "Archived" if is_archived else ("Expired" if is_expired else "Active")
+        code_value = normalize_medicine_code(getattr(med, "medicine_code", ""))
         if (getattr(med, "barcode", "") or "").strip():
             group["has_barcode"] = True
+        if code_value:
+            group["medicine_codes"].add(code_value)
 
         group["total_batches"] += 1
         group["total_stock"] += qty
@@ -1781,6 +1864,7 @@ def build_medicine_master_groups(show_archived=False):
         group["search_text"] += " " + " ".join(
             part.lower()
             for part in (
+                code_value,
                 med.batch or "",
                 getattr(med, "barcode", "") or "",
                 medicine_pack_display(med),
@@ -1795,6 +1879,7 @@ def build_medicine_master_groups(show_archived=False):
 
         batch_row = {
             "id": med.id,
+            "medicine_code": code_value,
             "batch": (med.batch or "").strip() or "-",
             "pack": medicine_pack_display(med),
             "expiry": expiry_display,
@@ -1812,6 +1897,8 @@ def build_medicine_master_groups(show_archived=False):
     for group in grouped.values():
         if not group["batches"]:
             continue
+        if len(group["medicine_codes"]) == 1:
+            group["medicine_code_display"] = next(iter(group["medicine_codes"]))
         group["batches"].sort(
             key=lambda item: (
                 item["status"] != "Active",
@@ -2072,6 +2159,85 @@ def find_medicine_by_name_batch(name, batch):
         db.func.lower(Medicine.batch) == b.lower()
     ).first()
 
+
+def resolve_medicine_code_mapping(medicine_code, exclude_medicine_id=None):
+    normalized_code = normalize_medicine_code(medicine_code)
+    if not normalized_code:
+        return "", "", None
+
+    query = Medicine.query.filter(Medicine.medicine_code == normalized_code)
+    if exclude_medicine_id:
+        query = query.filter(Medicine.id != exclude_medicine_id)
+
+    matches = query.order_by(db.func.lower(Medicine.name).asc(), Medicine.id.asc()).all()
+    names = {}
+    for med in matches:
+        cleaned_name = normalize_medicine_name(getattr(med, "name", ""))
+        if not cleaned_name:
+            continue
+        names[cleaned_name.casefold()] = cleaned_name
+
+    if len(names) > 1:
+        return normalized_code, "", (
+            f"Medicine code {normalized_code} is linked to multiple medicine names. "
+            "Please clean the mapping in Medicine Master first."
+        )
+
+    canonical_name = next(iter(names.values())) if names else ""
+    return normalized_code, canonical_name, None
+
+
+def find_medicine_code_template(name, pack_type="", pack_qty=None, exclude_medicine_id=None):
+    template = find_medicine_discount_template(
+        name,
+        pack_type=pack_type,
+        pack_qty=pack_qty,
+        exclude_medicine_id=exclude_medicine_id,
+    )
+    if not template:
+        return ""
+    return normalize_medicine_code(getattr(template, "medicine_code", ""))
+
+
+def propagate_medicine_code_to_matching_batches(
+    name,
+    pack_type="",
+    pack_qty=None,
+    medicine_code="",
+    exclude_medicine_id=None,
+    previous_code="",
+):
+    normalized_name = normalize_medicine_name(name)
+    normalized_code = normalize_medicine_code(medicine_code)
+    previous_code = normalize_medicine_code(previous_code)
+    if not normalized_name or not normalized_code:
+        return 0
+
+    query = Medicine.query.filter(
+        db.func.lower(db.func.trim(db.func.coalesce(Medicine.name, ""))) == normalized_name.lower()
+    )
+    if exclude_medicine_id:
+        query = query.filter(Medicine.id != exclude_medicine_id)
+
+    normalized_pack_type = (pack_type or "").strip().lower()
+    if normalized_pack_type:
+        query = query.filter(
+            db.func.lower(db.func.coalesce(Medicine.pack_type, "")) == normalized_pack_type
+        )
+    if pack_qty is not None:
+        query = query.filter(Medicine.pack_qty == pack_qty)
+
+    updated = 0
+    for med in query.all():
+        existing_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
+        if existing_code and existing_code not in {normalized_code, previous_code}:
+            continue
+        if existing_code != normalized_code:
+            med.medicine_code = normalized_code
+            updated += 1
+    return updated
+
+
 def find_medicine_discount_template(name, pack_type="", pack_qty=None, exclude_medicine_id=None):
     normalized_name = normalize_medicine_name(name)
     if not normalized_name:
@@ -2302,6 +2468,7 @@ with app.app_context():
         db.session.commit()
 
         # Medicine extra fields
+        ensure_column("medicine", "medicine_code", "TEXT")
         ensure_column("medicine", "composition", "TEXT")
         ensure_column("medicine", "company", "TEXT")
         ensure_column("medicine", "pack_type", "TEXT")
@@ -2320,6 +2487,7 @@ with app.app_context():
         ensure_column("vendor_purchase", "invoice_no", "TEXT")
         ensure_column("vendor_purchase", "bill_attachment_ref", "TEXT")
         ensure_column("vendor_purchase", "paid_amount", "REAL")
+        ensure_column("vendor_purchase", "notes", "TEXT")
 
         ensure_column("return_bill", "return_no", "TEXT")
         ensure_column("return_bill", "payment_mode", "TEXT")
@@ -2339,9 +2507,11 @@ with app.app_context():
         ensure_column("return_item", "cost_price", "REAL")
         ensure_column("return_item", "cost_amount", "REAL")
         ensure_column("vendor_purchase_item", "remaining_qty", "INTEGER")
+        ensure_column("vendor_purchase_item", "medicine_code", "TEXT")
         ensure_column("vendor_purchase_item", "pack_type", "TEXT")
         ensure_column("vendor_purchase_item", "pack_qty", "INTEGER")
         ensure_column("vendor_purchase_item", "barcode", "TEXT")
+        ensure_column("vendor_purchase_item", "notes", "TEXT")
         ensure_column("vendor_notes", "outstanding_impact", "NUMERIC(12,4)")
         ensure_column("stock_history", "ref_table", "TEXT")
         ensure_column("stock_history", "ref_id", "INTEGER")
@@ -3526,8 +3696,21 @@ def add_medicine():
         name = (request.form.get("name") or "").strip()
         batch = (request.form.get("batch") or "").strip()
         expiry = (request.form.get("expiry") or "").strip()
+        medicine_code = normalize_medicine_code(request.form.get("medicine_code"))
         if not name or not batch or not expiry:
             flash("Name, batch and expiry are required", "danger")
+            return redirect("/medicines/add")
+        code_name, canonical_code_name, code_error = resolve_medicine_code_mapping(medicine_code)
+        if code_error:
+            flash(code_error, "danger")
+            return redirect("/medicines/add")
+        normalized_name = normalize_medicine_name(name)
+        if canonical_code_name and canonical_code_name.casefold() != normalized_name.casefold():
+            flash(
+                f"Medicine code {code_name} is already linked to {canonical_code_name}. "
+                "Use the same medicine name for this code.",
+                "danger"
+            )
             return redirect("/medicines/add")
         qty = to_int(request.form.get("qty"))
         pack_type = (request.form.get("pack_type") or "").strip()
@@ -3543,6 +3726,7 @@ def add_medicine():
 
         med = Medicine(
             name=name,
+            medicine_code=medicine_code,
             batch=batch,
             mrp=to_float(request.form.get("mrp")),
             qty=qty,
@@ -3556,7 +3740,12 @@ def add_medicine():
         )
 
         db.session.add(med)
-        
+        propagate_medicine_code_to_matching_batches(
+            name=name,
+            pack_type=pack_type,
+            pack_qty=pack_qty,
+            medicine_code=medicine_code,
+        )
         db.session.commit()
 
         history = StockHistory(
@@ -3605,10 +3794,28 @@ def edit_medicine(id):
         name = (request.form.get("name") or "").strip()
         batch = (request.form.get("batch") or "").strip()
         expiry = (request.form.get("expiry") or "").strip()
+        previous_medicine_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
+        medicine_code = normalize_medicine_code(request.form.get("medicine_code"))
         if not name or not batch or not expiry:
             flash("Name, batch and expiry are required", "danger")
             return redirect(request.url)
+        code_name, canonical_code_name, code_error = resolve_medicine_code_mapping(
+            medicine_code,
+            exclude_medicine_id=med.id
+        )
+        if code_error:
+            flash(code_error, "danger")
+            return redirect(request.url)
+        normalized_name = normalize_medicine_name(name)
+        if canonical_code_name and canonical_code_name.casefold() != normalized_name.casefold():
+            flash(
+                f"Medicine code {code_name} is already linked to {canonical_code_name}. "
+                "Use the same medicine name for this code.",
+                "danger"
+            )
+            return redirect(request.url)
         med.name = name
+        med.medicine_code = medicine_code
         med.batch = batch
         med.expiry = expiry
         med.mrp = to_float(request.form.get("mrp"))
@@ -3626,6 +3833,15 @@ def edit_medicine(id):
             med.pack_type = pack_type
         if pack_qty_raw:
             med.pack_qty = pack_qty
+
+        propagate_medicine_code_to_matching_batches(
+            name=name,
+            pack_type=pack_type,
+            pack_qty=pack_qty,
+            medicine_code=medicine_code,
+            exclude_medicine_id=med.id,
+            previous_code=previous_medicine_code,
+        )
 
         change = med.qty - old_qty
 
@@ -4788,7 +5004,8 @@ def add_vendor():
             flash("Vendor name already exists", "danger")
             return redirect("/vendor/add")
 
-        last_purchase_dt = parse_date(request.form.get("last_purchase_date"))
+        last_purchase_raw = request.form.get("last_purchase_date") if "last_purchase_date" in request.form else ""
+        last_purchase_dt = parse_date(last_purchase_raw) if last_purchase_raw else None
 
         attachment_ref = request.form.get("attachment_ref", "")
         file = request.files.get("attachment_file")
@@ -4810,7 +5027,7 @@ def add_vendor():
             state=request.form.get("state", ""),
             pincode=request.form.get("pincode", ""),
             address=request.form.get("address", ""),
-            vendor_type=request.form.get("vendor_type", ""),
+            vendor_type=(request.form.get("vendor_type") or "Distributor"),
             credit_days=to_int(request.form.get("credit_days")),
             credit_limit=to_float(request.form.get("credit_limit")),
             bank_name=request.form.get("bank_name", ""),
@@ -4823,12 +5040,12 @@ def add_vendor():
             last_purchase_date=last_purchase_dt,
             total_purchases=to_float(request.form.get("total_purchases")),
             outstanding_balance=to_float(request.form.get("outstanding_balance")),
-            payment_status=request.form.get("payment_status", ""),
+            payment_status=(request.form.get("payment_status") or "Paid"),
             rate_history=request.form.get("rate_history", ""),
-            default_payment_mode=request.form.get("default_payment_mode", ""),
+            default_payment_mode=(request.form.get("default_payment_mode") or "CASH"),
             notes=request.form.get("notes", ""),
             attachment_ref=attachment_ref,
-            is_active=True if request.form.get("is_active") else False
+            is_active=(True if "is_active" not in request.form else bool(request.form.get("is_active")))
         )
 
         db.session.add(v)
@@ -4836,7 +5053,12 @@ def add_vendor():
         flash("Vendor added successfully", "success")
         return redirect("/vendor")
 
-    return render_template("vendor_form.html", vendor=None, medicine_names=[])
+    return render_template(
+        "vendor_form.html",
+        vendor=None,
+        medicine_names=[],
+        medicine_code_lookup={}
+    )
 
 @app.route("/vendor/edit/<int:id>", methods=["GET", "POST"])
 @login_required
@@ -4854,9 +5076,10 @@ def edit_vendor(id):
             flash("Vendor name already exists", "danger")
             return redirect(f"/vendor/edit/{id}")
 
-        last_purchase_dt = parse_date(request.form.get("last_purchase_date"))
+        last_purchase_raw = request.form.get("last_purchase_date") if "last_purchase_date" in request.form else None
+        last_purchase_dt = parse_date(last_purchase_raw) if last_purchase_raw else v.last_purchase_date
 
-        attachment_ref = request.form.get("attachment_ref", "")
+        attachment_ref = request.form.get("attachment_ref", v.attachment_ref or "")
         file = request.files.get("attachment_file")
         if file and file.filename and allowed_file(file.filename):
             safe_name = secure_filename(file.filename)
@@ -4871,31 +5094,32 @@ def edit_vendor(id):
         v.mobile = request.form.get("mobile", "")
         v.email = request.form.get("email", "")
         v.gst_no = request.form.get("gst_no", "")
-        v.shop_name = request.form.get("shop_name", "")
-        v.area = request.form.get("area", "")
-        v.city = request.form.get("city", "")
-        v.state = request.form.get("state", "")
-        v.pincode = request.form.get("pincode", "")
-        v.address = request.form.get("address", "")
-        v.vendor_type = request.form.get("vendor_type", "")
+        v.shop_name = request.form.get("shop_name", v.shop_name or "")
+        v.area = request.form.get("area", v.area or "")
+        v.city = request.form.get("city", v.city or "")
+        v.state = request.form.get("state", v.state or "")
+        v.pincode = request.form.get("pincode", v.pincode or "")
+        v.address = request.form.get("address", v.address or "")
+        v.vendor_type = request.form.get("vendor_type", v.vendor_type or "Distributor") or v.vendor_type or "Distributor"
         v.credit_days = to_int(request.form.get("credit_days"))
         v.credit_limit = to_float(request.form.get("credit_limit"))
-        v.bank_name = request.form.get("bank_name", "")
-        v.account_holder_name = request.form.get("account_holder_name", "")
-        v.account_no = request.form.get("account_no", "")
-        v.ifsc = request.form.get("ifsc", "")
-        v.upi = request.form.get("upi", "")
+        v.bank_name = request.form.get("bank_name", v.bank_name or "")
+        v.account_holder_name = request.form.get("account_holder_name", v.account_holder_name or "")
+        v.account_no = request.form.get("account_no", v.account_no or "")
+        v.ifsc = request.form.get("ifsc", v.ifsc or "")
+        v.upi = request.form.get("upi", v.upi or "")
         v.categories = request.form.get("categories", "")
         v.salts = request.form.get("salts", "")
         v.last_purchase_date = last_purchase_dt
         v.total_purchases = to_float(request.form.get("total_purchases"))
         v.outstanding_balance = to_float(request.form.get("outstanding_balance"))
-        v.payment_status = request.form.get("payment_status", "")
+        v.payment_status = request.form.get("payment_status", v.payment_status or "Paid") or v.payment_status or "Paid"
         v.rate_history = request.form.get("rate_history", "")
-        v.default_payment_mode = request.form.get("default_payment_mode", "")
-        v.notes = request.form.get("notes", "")
+        v.default_payment_mode = request.form.get("default_payment_mode", v.default_payment_mode or "CASH") or v.default_payment_mode or "CASH"
+        v.notes = request.form.get("notes", v.notes or "")
         v.attachment_ref = attachment_ref
-        v.is_active = True if request.form.get("is_active") else False
+        if "is_active" in request.form:
+            v.is_active = True if request.form.get("is_active") else False
 
         db.session.commit()
         flash("Vendor updated successfully", "success")
@@ -4903,6 +5127,8 @@ def edit_vendor(id):
 
     medicines = Medicine.query.order_by(Medicine.name).all()
     medicine_names = build_medicine_name_suggestions(medicines)
+    medicine_code_lookup = build_medicine_code_lookup(medicines)
+    medicine_purchase_catalog = build_medicine_purchase_catalog(medicines)
     purchase_items = VendorPurchaseItem.query.filter_by(vendor_id=v.id).order_by(VendorPurchaseItem.created_at.desc()).limit(50).all()
     today = date.today()
     for item in purchase_items:
@@ -4926,15 +5152,19 @@ def edit_vendor(id):
         VendorPurchase.purchase_date.desc(),
         VendorPurchase.id.desc()
     ).all()
+    recent_purchase_medicine_chips = build_recent_purchase_medicine_chips(purchase_items)
 
     return render_template(
         "vendor_form.html",
         vendor=v,
         medicines=medicines,
         medicine_names=medicine_names,
+        medicine_code_lookup=medicine_code_lookup,
+        medicine_purchase_catalog=medicine_purchase_catalog,
         purchase_items=purchase_items,
         last_rates=last_rates,
-        purchase_bills=purchase_bills
+        purchase_bills=purchase_bills,
+        recent_purchase_medicine_chips=recent_purchase_medicine_chips
     )
 
 @app.route("/vendor/<int:id>/purchase", methods=["POST"])
@@ -4943,43 +5173,86 @@ def edit_vendor(id):
 def add_vendor_purchase(id):
     vendor = active_vendor_query().filter(Vendor.id == id).first_or_404()
 
+    accepts_json = (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or "application/json" in (request.headers.get("Accept") or "")
+    )
+
+    def purchase_error(message, status_code=400):
+        if accepts_json:
+            return jsonify({"ok": False, "message": message}), status_code
+        flash(message, "danger")
+        return redirect(f"/vendor/edit/{vendor.id}")
+
     invoice_no = (request.form.get("invoice_no") or "").strip()
     if not invoice_no:
-        flash("Bill/Invoice number is required", "danger")
-        return redirect(f"/vendor/edit/{vendor.id}")
+        return purchase_error("Bill/Invoice number is required")
     duplicate = VendorPurchase.query.filter(
         VendorPurchase.vendor_id == vendor.id,
         db.func.lower(VendorPurchase.invoice_no) == invoice_no.lower()
     ).first()
     if duplicate:
-        flash("This bill number already exists for this vendor", "danger")
-        return redirect(f"/vendor/edit/{vendor.id}")
+        return purchase_error("This bill number already exists for this vendor")
 
     purchase_date_val = request.form.get("purchase_date")
     purchase_date = datetime.strptime(purchase_date_val, "%Y-%m-%d") if purchase_date_val else datetime.now()
     payment_mode = request.form.get("payment_mode") or vendor.default_payment_mode or "CASH"
     payment_status = request.form.get("payment_status") or vendor.payment_status or "Unpaid"
     paid_amount = to_float(request.form.get("paid_amount"))
+    purchase_notes = (request.form.get("purchase_notes") or "").strip()
     bill_attachment_file = request.files.get("bill_attachment_file")
     if bill_attachment_file and (bill_attachment_file.filename or "").strip() and not allowed_file(bill_attachment_file.filename):
-        flash("Bill photo must be PDF, JPG or PNG", "danger")
-        return redirect(f"/vendor/edit/{vendor.id}")
+        return purchase_error("Bill photo must be PDF, JPG or PNG")
 
-    names = request.form.getlist("medicine_name")
-    compositions = request.form.getlist("composition")
-    companies = request.form.getlist("company")
-    distributors = request.form.getlist("distributor_name")
-    pack_types = request.form.getlist("pack_type")
-    pack_qtys = request.form.getlist("pack_qty")
-    batches = request.form.getlist("batch")
-    barcodes = request.form.getlist("barcode")
-    expiries = request.form.getlist("expiry")
-    qtys = request.form.getlist("qty")
-    free_qtys = request.form.getlist("free_qty")
-    purchase_rates = request.form.getlist("purchase_rate")
-    mrps = request.form.getlist("mrp")
-    gst_percents = request.form.getlist("gst_percent")
-    discount_percents = request.form.getlist("discount_percent")
+    raw_items_json = (request.form.get("purchase_items_json") or "").strip()
+    raw_items = []
+    if raw_items_json:
+        try:
+            parsed_items = json.loads(raw_items_json)
+        except ValueError:
+            return purchase_error("Purchase items payload is invalid JSON")
+        if not isinstance(parsed_items, list):
+            return purchase_error("Purchase items payload must be a list")
+        raw_items = parsed_items
+    else:
+        names = request.form.getlist("medicine_name")
+        compositions = request.form.getlist("composition")
+        companies = request.form.getlist("company")
+        distributors = request.form.getlist("distributor_name")
+        medicine_codes = request.form.getlist("medicine_code")
+        pack_types = request.form.getlist("pack_type")
+        pack_qtys = request.form.getlist("pack_qty")
+        batches = request.form.getlist("batch")
+        barcodes = request.form.getlist("barcode")
+        expiries = request.form.getlist("expiry")
+        qtys = request.form.getlist("qty")
+        free_qtys = request.form.getlist("free_qty")
+        purchase_rates = request.form.getlist("purchase_rate")
+        mrps = request.form.getlist("mrp")
+        gst_percents = request.form.getlist("gst_percent")
+        discount_percents = request.form.getlist("discount_percent")
+        item_notes = request.form.getlist("item_notes")
+
+        for idx, raw_name in enumerate(names):
+            raw_items.append({
+                "medicine_name": raw_name,
+                "medicine_code": medicine_codes[idx] if idx < len(medicine_codes) else "",
+                "barcode": barcodes[idx] if idx < len(barcodes) else "",
+                "composition": compositions[idx] if idx < len(compositions) else "",
+                "company": companies[idx] if idx < len(companies) else "",
+                "distributor_name": distributors[idx] if idx < len(distributors) else "",
+                "pack_type": pack_types[idx] if idx < len(pack_types) else "",
+                "pack_qty": pack_qtys[idx] if idx < len(pack_qtys) else "",
+                "batch": batches[idx] if idx < len(batches) else "",
+                "expiry": expiries[idx] if idx < len(expiries) else "",
+                "qty": qtys[idx] if idx < len(qtys) else 0,
+                "free_qty": free_qtys[idx] if idx < len(free_qtys) else 0,
+                "purchase_rate": purchase_rates[idx] if idx < len(purchase_rates) else 0,
+                "mrp": mrps[idx] if idx < len(mrps) else 0,
+                "gst_percent": gst_percents[idx] if idx < len(gst_percents) else 0,
+                "discount_percent": discount_percents[idx] if idx < len(discount_percents) else 0,
+                "notes": item_notes[idx] if idx < len(item_notes) else "",
+            })
 
     line_items = []
     subtotal = 0
@@ -4987,38 +5260,70 @@ def add_vendor_purchase(id):
     discount_total = 0
     total_amount = 0
 
-    for idx, name in enumerate(names):
-        name = (name or "").strip()
-        batch = (batches[idx] or "").strip() if idx < len(batches) else ""
-        barcode = (barcodes[idx] or "").strip() if idx < len(barcodes) else ""
-        expiry_raw = (expiries[idx] or "").strip() if idx < len(expiries) else ""
-        expiry = normalize_expiry(expiry_raw)
-        qty = to_int(qtys[idx]) if idx < len(qtys) else 0
-        free_qty = to_int(free_qtys[idx]) if idx < len(free_qtys) else 0
-        purchase_rate = to_float(purchase_rates[idx]) if idx < len(purchase_rates) else 0
-        mrp = to_float(mrps[idx]) if idx < len(mrps) else 0
-        gst_percent = to_float(gst_percents[idx]) if idx < len(gst_percents) else 0
-        discount_percent = to_float(discount_percents[idx]) if idx < len(discount_percents) else 0
-        composition = (compositions[idx] or "").strip() if idx < len(compositions) else ""
-        company = (companies[idx] or "").strip() if idx < len(companies) else ""
-        distributor_name = (distributors[idx] or "").strip() if idx < len(distributors) else ""
-        pack_type = (pack_types[idx] or "").strip() if idx < len(pack_types) else ""
-        pack_qty_raw = (pack_qtys[idx] or "").strip() if idx < len(pack_qtys) else ""
-        pack_qty = parse_pack_qty(pack_qty_raw)
-
-        if not name:
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
             continue
+
+        entered_name = normalize_medicine_name(raw_item.get("medicine_name"))
+        medicine_code = normalize_medicine_code(raw_item.get("medicine_code"))
+        batch = (raw_item.get("batch") or "").strip()
+        barcode = (raw_item.get("barcode") or "").strip()
+        expiry_raw = (raw_item.get("expiry") or "").strip()
+        expiry = normalize_expiry(expiry_raw)
+        qty = to_int(raw_item.get("qty"))
+        free_qty = to_int(raw_item.get("free_qty"))
+        purchase_rate = to_float(raw_item.get("purchase_rate", raw_item.get("rate")))
+        mrp = to_float(raw_item.get("mrp"))
+        gst_percent = to_float(raw_item.get("gst_percent", raw_item.get("gst")))
+        discount_percent = to_float(raw_item.get("discount_percent", raw_item.get("discount")))
+        composition = (raw_item.get("composition") or "").strip()
+        company = (raw_item.get("company") or "").strip()
+        distributor_name = (raw_item.get("distributor_name") or "").strip()
+        pack_type = (raw_item.get("pack_type") or "").strip()
+        pack_qty_raw = str(raw_item.get("pack_qty") or "").strip()
+        pack_qty = parse_pack_qty(pack_qty_raw)
+        item_notes = (raw_item.get("notes") or "").strip()
+
+        row_has_data = any(
+            [
+                entered_name,
+                medicine_code,
+                batch,
+                barcode,
+                expiry_raw,
+                composition,
+                company,
+                qty > 0,
+                free_qty > 0,
+                purchase_rate > 0,
+                mrp > 0,
+                gst_percent > 0,
+                discount_percent > 0,
+                bool(pack_qty_raw),
+            ]
+        )
+        if not row_has_data:
+            continue
+        if not medicine_code:
+            return purchase_error("Medicine code is required for each purchase row")
+
+        resolved_code, canonical_code_name, code_error = resolve_medicine_code_mapping(medicine_code)
+        if code_error:
+            return purchase_error(code_error)
+        if not canonical_code_name:
+            return purchase_error(
+                f"Medicine code {resolved_code} was not found in Medicine Master. "
+                "Add this medicine there first, then use the code here."
+            )
+        name = canonical_code_name
         if not batch or not expiry:
-            flash(f"Batch and expiry required for {name}", "danger")
-            return redirect(f"/vendor/edit/{vendor.id}")
+            return purchase_error(f"Batch and expiry required for {name}")
         if qty <= 0:
             continue
         if not pack_type:
-            flash(f"Pack type is required for {name}", "danger")
-            return redirect(f"/vendor/edit/{vendor.id}")
+            return purchase_error(f"Pack type is required for {name}")
         if not pack_qty_raw or pack_qty is None or pack_qty < 1:
-            flash(f"Pack quantity must be at least 1 for {name}", "danger")
-            return redirect(f"/vendor/edit/{vendor.id}")
+            return purchase_error(f"Pack quantity must be at least 1 for {name}")
 
         base_amount = qty * purchase_rate
         discount_amt = base_amount * discount_percent / 100
@@ -5033,6 +5338,7 @@ def add_vendor_purchase(id):
 
         line_items.append({
             "name": name,
+            "medicine_code": resolved_code or find_medicine_code_template(name, pack_type, pack_qty),
             "composition": composition,
             "company": company,
             "distributor_name": distributor_name,
@@ -5047,12 +5353,12 @@ def add_vendor_purchase(id):
             "mrp": mrp,
             "gst_percent": gst_percent,
             "discount_percent": discount_percent,
+            "notes": item_notes,
             "total_value": total_value
         })
 
     if not line_items:
-        flash("Please add at least one medicine to purchase", "danger")
-        return redirect(f"/vendor/edit/{vendor.id}")
+        return purchase_error("Please add at least one medicine to purchase")
 
     purchase = VendorPurchase(
         vendor_id=vendor.id,
@@ -5061,6 +5367,7 @@ def add_vendor_purchase(id):
         payment_mode=payment_mode,
         payment_status=payment_status,
         paid_amount=paid_amount,
+        notes=purchase_notes,
         subtotal=subtotal,
         gst_total=gst_total,
         discount_total=discount_total,
@@ -5079,6 +5386,7 @@ def add_vendor_purchase(id):
 
     for item in line_items:
         med = find_medicine_by_name_batch(item["name"], item["batch"])
+        resolved_medicine_code = normalize_medicine_code(item.get("medicine_code"))
         if not med:
             discount_template = find_medicine_discount_template(
                 item["name"],
@@ -5087,6 +5395,7 @@ def add_vendor_purchase(id):
             )
             med = Medicine(
                 name=item["name"],
+                medicine_code=resolved_medicine_code,
                 composition=item["composition"],
                 company=item["company"],
                 pack_type=item["pack_type"],
@@ -5107,6 +5416,13 @@ def add_vendor_purchase(id):
             db.session.add(med)
             db.session.flush()
         else:
+            existing_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
+            if resolved_medicine_code and existing_code and existing_code != resolved_medicine_code:
+                db.session.rollback()
+                return purchase_error(
+                    f"Batch {item['batch']} already belongs to medicine code {existing_code}. "
+                    f"Use the same code for {item['name']}."
+                )
             if item["expiry"]:
                 med.expiry = item["expiry"]
             if item["mrp"]:
@@ -5119,8 +5435,21 @@ def add_vendor_purchase(id):
                 med.pack_type = item["pack_type"]
             if item.get("pack_qty") is not None:
                 med.pack_qty = item["pack_qty"]
+            if resolved_medicine_code:
+                med.medicine_code = resolved_medicine_code
         if item["barcode"]:
             med.barcode = item["barcode"]
+
+        effective_medicine_code = resolved_medicine_code or normalize_medicine_code(getattr(med, "medicine_code", ""))
+        if effective_medicine_code:
+            med.medicine_code = effective_medicine_code
+            propagate_medicine_code_to_matching_batches(
+                name=med.name,
+                pack_type=item["pack_type"],
+                pack_qty=item.get("pack_qty"),
+                medicine_code=effective_medicine_code,
+                exclude_medicine_id=med.id,
+            )
 
         effective_barcode = item["barcode"] or ((getattr(med, "barcode", "") or "").strip())
 
@@ -5145,6 +5474,7 @@ def add_vendor_purchase(id):
             vendor_id=vendor.id,
             medicine_id=med.id,
             medicine_name=item["name"],
+            medicine_code=effective_medicine_code,
             barcode=effective_barcode,
             composition=item["composition"],
             company=item["company"],
@@ -5160,6 +5490,7 @@ def add_vendor_purchase(id):
             mrp=item["mrp"],
             gst_percent=item["gst_percent"],
             discount_percent=item["discount_percent"],
+            notes=item["notes"],
             total_value=item["total_value"]
         ))
 
@@ -5173,7 +5504,23 @@ def add_vendor_purchase(id):
         vendor.outstanding_balance = (vendor.outstanding_balance or 0) + balance_add
 
     db.session.commit()
-    flash("Purchase saved. Stock updated.", "success")
+    success_message = "Purchase saved. Stock updated."
+    if accepts_json:
+        return jsonify({
+            "ok": True,
+            "message": success_message,
+            "purchase_id": purchase.id,
+            "purchase_no": purchase.purchase_no,
+            "redirect_url": f"/vendor/edit/{vendor.id}",
+            "totals": {
+                "subtotal": subtotal,
+                "gst_total": gst_total,
+                "discount_total": discount_total,
+                "total_amount": total_amount,
+                "rounded_total": round(total_amount),
+            },
+        }), 200
+    flash(success_message, "success")
     return redirect(f"/vendor/edit/{vendor.id}")
 
 @app.route("/vendor/purchase/<int:purchase_id>")
@@ -5374,6 +5721,7 @@ def edit_vendor_purchase_item(item_id):
 
     if request.method == "POST":
         name = (request.form.get("medicine_name") or "").strip()
+        medicine_code = normalize_medicine_code(request.form.get("medicine_code"))
         composition = (request.form.get("composition") or "").strip()
         company = (request.form.get("company") or "").strip()
         distributor_name = (request.form.get("distributor_name") or "").strip()
@@ -5393,6 +5741,20 @@ def edit_vendor_purchase_item(item_id):
 
         if not name:
             flash("Medicine name is required", "danger")
+            return redirect(request.url)
+        code_name, canonical_code_name, code_error = resolve_medicine_code_mapping(
+            medicine_code,
+            exclude_medicine_id=(med.id if med else None)
+        )
+        if code_error:
+            flash(code_error, "danger")
+            return redirect(request.url)
+        if canonical_code_name and normalize_medicine_name(name).casefold() != canonical_code_name.casefold():
+            flash(
+                f"Medicine code {code_name} is already linked to {canonical_code_name}. "
+                "Use the same medicine name for this code.",
+                "danger"
+            )
             return redirect(request.url)
         if not batch or not expiry:
             flash("Batch and expiry are required", "danger")
@@ -5425,11 +5787,14 @@ def edit_vendor_purchase_item(item_id):
         old_med_qty = med.qty if med else None
 
         if med:
+            previous_medicine_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
             if med.qty + diff_total_qty < 0:
                 flash("Not enough stock to reduce this purchase quantity", "danger")
                 return redirect(request.url)
             med.qty = med.qty + diff_total_qty
             med.name = name
+            if medicine_code:
+                med.medicine_code = medicine_code
             med.batch = batch
             med.expiry = expiry
             med.mrp = mrp
@@ -5440,8 +5805,18 @@ def edit_vendor_purchase_item(item_id):
                 med.pack_qty = pack_qty
             if barcode:
                 med.barcode = barcode
+            if medicine_code:
+                propagate_medicine_code_to_matching_batches(
+                    name=name,
+                    pack_type=pack_type,
+                    pack_qty=pack_qty if pack_qty_raw else item.pack_qty,
+                    medicine_code=medicine_code,
+                    exclude_medicine_id=med.id,
+                    previous_code=previous_medicine_code,
+                )
 
         item.medicine_name = name
+        item.medicine_code = medicine_code or normalize_medicine_code(getattr(med, "medicine_code", ""))
         if barcode:
             item.barcode = barcode
         item.composition = composition
@@ -5492,13 +5867,17 @@ def edit_vendor_purchase_item(item_id):
         return redirect(f"/vendor/edit/{item.vendor_id}")
 
     resolved_barcode = (getattr(item, "barcode", "") or (getattr(med, "barcode", "") if med else "") or "")
+    resolved_medicine_code = normalize_medicine_code(
+        getattr(item, "medicine_code", "") or (getattr(med, "medicine_code", "") if med else "") or ""
+    )
     return render_template(
         "edit_purchase_item.html",
         item=item,
         vendor=vendor,
         purchase=purchase,
         sold_qty=sold_qty,
-        resolved_barcode=resolved_barcode
+        resolved_barcode=resolved_barcode,
+        resolved_medicine_code=resolved_medicine_code
     )
 
 @app.route("/api/vendor-purchases/<int:purchase_id>/items", methods=["GET"])
@@ -5514,6 +5893,7 @@ def api_vendor_purchase_items(purchase_id):
             "id": it.id,
             "medicine_id": it.medicine_id,
             "medicine_name": it.medicine_name,
+            "medicine_code": normalize_medicine_code(getattr(it, "medicine_code", "")),
             "batch": it.batch,
             "barcode": getattr(it, "barcode", "") or "",
             "expiry": it.expiry,
@@ -6093,13 +6473,19 @@ def build_global_search_results(raw_query, per_group=4):
     ]
     if query:
         medicine_filters.append(Medicine.barcode.ilike(f"%{query}%"))
+        medicine_filters.append(Medicine.medicine_code.ilike(f"%{query}%"))
     medicine_rows = Medicine.query.filter(or_(*medicine_filters)).order_by(
         db.func.lower(Medicine.name).asc(),
         Medicine.id.desc()
     ).limit(expanded_limit).all()
     medicine_rows.sort(
         key=lambda row: (
-            -max(score_text(row.name), score_text(row.batch), score_text(getattr(row, "barcode", ""))),
+            -max(
+                score_text(row.name),
+                score_text(row.batch),
+                score_text(getattr(row, "barcode", "")),
+                score_text(getattr(row, "medicine_code", "")),
+            ),
             (row.name or "").lower(),
             -(row.id or 0)
         )
@@ -6168,6 +6554,7 @@ def build_global_search_results(raw_query, per_group=4):
                 search_value = " ".join(
                     part for part in (
                         (med.name or "").strip(),
+                        normalize_medicine_code(getattr(med, "medicine_code", "")),
                         (med.batch or "").strip(),
                         (getattr(med, "barcode", "") or "").strip()
                     ) if part
@@ -6178,7 +6565,13 @@ def build_global_search_results(raw_query, per_group=4):
                 href = url_for("medicines", **search_kwargs)
             medicine_items.append({
                 "title": (med.name or "Medicine").strip(),
-                "subtitle": f"Batch {(med.batch or '-').strip()} · Stock {to_int_safe(med.qty, 0)}",
+                "subtitle": " · ".join(
+                    part for part in (
+                        f"Code {normalize_medicine_code(getattr(med, 'medicine_code', ''))}" if normalize_medicine_code(getattr(med, "medicine_code", "")) else "",
+                        f"Batch {(med.batch or '-').strip()}",
+                        f"Stock {to_int_safe(med.qty, 0)}",
+                    ) if part
+                ),
                 "meta": f"MRP Rs {to_float_safe(med.mrp, 0):.2f}",
                 "href": href
             })
