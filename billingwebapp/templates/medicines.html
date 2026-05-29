@@ -181,7 +181,7 @@
 
 .list-head {
     display: grid;
-    grid-template-columns: minmax(260px, 2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(200px, 1.2fr) 120px;
+    grid-template-columns: 78px minmax(260px, 2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(200px, 1.2fr) 120px;
     gap: 12px;
     align-items: center;
     padding: 13px 18px;
@@ -225,7 +225,7 @@
 
 .group-summary {
     display: grid;
-    grid-template-columns: minmax(260px, 2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(200px, 1.2fr) 120px;
+    grid-template-columns: 78px minmax(260px, 2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(200px, 1.2fr) 120px;
     gap: 12px;
     align-items: center;
 }
@@ -445,7 +445,7 @@
 
     .list-head,
     .group-summary {
-        grid-template-columns: minmax(220px, 1.7fr) minmax(110px, 0.8fr) minmax(120px, 0.9fr) minmax(180px, 1.1fr) 110px;
+        grid-template-columns: 70px minmax(220px, 1.7fr) minmax(110px, 0.8fr) minmax(120px, 0.9fr) minmax(180px, 1.1fr) 110px;
     }
 }
 
@@ -570,6 +570,7 @@
 
     <section class="list-shell">
         <div class="list-head">
+            <div>Sr No</div>
             <div>Medicine</div>
             <div>Available Stock</div>
             <div>Next Expiry</div>
@@ -600,6 +601,9 @@
                     <details>
                         <summary>
                             <div class="group-summary">
+                                <div class="serial-cell">
+                                    <span class="serial-badge">{{ loop.index }}</span>
+                                </div>
                                 <div class="medicine-main">
                                     <span class="chevron">&#9656;</span>
                                     <div>
@@ -1010,3 +1014,21 @@ document.addEventListener("app:async-success", function (event) {
 updateMedicineMasterView();
 </script>
 {% endblock %}
+.serial-cell {
+    display: flex;
+    align-items: center;
+}
+
+.serial-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: #eef4ff;
+    border: 1px solid #d8e4f6;
+    color: #1f5fcf;
+    font-size: 14px;
+    font-weight: 800;
+}

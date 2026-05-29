@@ -188,6 +188,7 @@ class SystemSmokeTests(unittest.TestCase):
         response = self.client.get("/medicines")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Barcode Missing", response.data)
+        self.assertIn(b"Sr No", response.data)
 
 
 if __name__ == "__main__":
