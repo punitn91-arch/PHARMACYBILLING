@@ -986,6 +986,135 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertTrue(appointment.is_deleted)
             self.assertEqual(self.app_module.active_appointment_query().filter_by(id=appointment_id).count(), 0)
 
+    def test_user_edit_page_renders_and_updates_permissions(self):
+        with self.app.app_context():
+            staff_user = self.app_module.User(
+                username="counter1",
+                role="staff",
+                access_profile="custom",
+                can_view_reports=False,
+                can_manage_purchases=False,
+                can_view_profit_dashboard=False,
+                is_active=True,
+            )
+            staff_user.set_password("Password@123")
+            self.db.session.add(staff_user)
+            self.db.session.commit()
+            staff_user_id = staff_user.id
+
+        self.login()
+        get_response = self.client.get(f"/users/edit/{staff_user_id}")
+        self.assertEqual(get_response.status_code, 200)
+        self.assertIn(b"Dashboard Profit Cards", get_response.data)
+        self.assertIn(b"Access Profile", get_response.data)
+
+        response = self.client.post(
+            f"/users/edit/{staff_user_id}",
+            data={
+                "username": "counter1",
+                "role": "staff",
+                "access_profile": "custom",
+                "can_view_reports": "on",
+                "can_manage_purchases": "on",
+                "can_view_profit_dashboard": "on",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            updated_user = self.db.session.get(self.app_module.User, staff_user_id)
+            self.assertTrue(updated_user.can_view_reports)
+            self.assertTrue(updated_user.can_manage_purchases)
+            self.assertTrue(updated_user.can_view_profit_dashboard)
+            self.assertEqual(updated_user.access_profile, "custom")
+
+    def test_user_edit_and_create_survive_legacy_integer_permission_storage(self):
+        with self.app.app_context():
+            staff_user = self.app_module.User(
+                username="legacy_staff",
+                role="staff",
+                access_profile="custom",
+                can_manage_purchases=False,
+                can_view_reports=False,
+                is_active=True,
+            )
+            staff_user.set_password("Password@123")
+            self.db.session.add(staff_user)
+            self.db.session.commit()
+            staff_user_id = staff_user.id
+
+        self.login()
+        original_helper = self.app_module.user_boolean_storage_mode_map
+        legacy_map = {"is_active": "integer"}
+        legacy_map.update({field_name: "integer" for field_name in self.app_module.USER_PERMISSION_FIELDS})
+        self.app_module.user_boolean_storage_mode_map = lambda: dict(legacy_map)
+        try:
+            edit_response = self.client.post(
+                f"/users/edit/{staff_user_id}",
+                data={
+                    "username": "legacy_staff",
+                    "role": "staff",
+                    "access_profile": "custom",
+                    "can_manage_purchases": "on",
+                    "can_view_reports": "on",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(edit_response.status_code, 302)
+
+            add_response = self.client.post(
+                "/users/add",
+                data={
+                    "username": "legacy_new",
+                    "password": "Password@123",
+                    "role": "staff",
+                    "access_profile": "custom",
+                    "can_view_reports": "on",
+                    "can_manage_purchases": "on",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(add_response.status_code, 302)
+        finally:
+            self.app_module.user_boolean_storage_mode_map = original_helper
+
+        with self.app.app_context():
+            updated_user = self.db.session.get(self.app_module.User, staff_user_id)
+            created_user = self.app_module.active_user_query().filter_by(username="legacy_new").first()
+            self.assertTrue(updated_user.can_manage_purchases)
+            self.assertTrue(updated_user.can_view_reports)
+            self.assertIsNotNone(created_user)
+            self.assertTrue(created_user.can_manage_purchases)
+            self.assertTrue(created_user.can_view_reports)
+
+    def test_user_delete_survives_legacy_integer_is_active_storage(self):
+        with self.app.app_context():
+            staff_user = self.app_module.User(
+                username="archivable_staff",
+                role="staff",
+                access_profile="custom",
+                is_active=True,
+            )
+            staff_user.set_password("Password@123")
+            self.db.session.add(staff_user)
+            self.db.session.commit()
+            staff_user_id = staff_user.id
+
+        self.login()
+        original_helper = self.app_module.user_boolean_storage_mode_map
+        self.app_module.user_boolean_storage_mode_map = lambda: {"is_active": "integer"}
+        try:
+            response = self.client.get(f"/users/delete/{staff_user_id}", follow_redirects=False)
+            self.assertEqual(response.status_code, 302)
+        finally:
+            self.app_module.user_boolean_storage_mode_map = original_helper
+
+        with self.app.app_context():
+            archived_user = self.db.session.get(self.app_module.User, staff_user_id)
+            self.assertIsNotNone(archived_user.deleted_at)
+            self.assertEqual(self.app_module.active_user_query().filter_by(username="archivable_staff").count(), 0)
+
     def test_backup_snapshot_and_restore_drill(self):
         with self.app.app_context():
             upload_dirs = self.app.config["INFRA_UPLOAD_DIRECTORIES"]

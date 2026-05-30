@@ -7680,6 +7680,160 @@ def appointment_soft_delete_uses_legacy_integer():
         app.logger.exception("Unable to inspect appointment.is_deleted column type")
     return False
 
+
+USER_RUNTIME_BOOLEAN_COLUMNS = ("is_active",) + USER_PERMISSION_FIELDS
+
+
+def user_boolean_storage_mode_map():
+    storage_map = {}
+    try:
+        runtime_columns = table_runtime_columns("user")
+        for column_name in USER_RUNTIME_BOOLEAN_COLUMNS:
+            data_type = postgres_runtime_column_data_type("user", column_name)
+            if data_type in {"smallint", "integer", "bigint"}:
+                storage_map[column_name] = "integer"
+                continue
+            if data_type == "boolean":
+                storage_map[column_name] = "boolean"
+                continue
+            column_meta = runtime_columns.get(column_name)
+            if not column_meta:
+                continue
+            type_name = column_meta["type"].__class__.__name__.lower()
+            storage_map[column_name] = "boolean" if "bool" in type_name else "integer"
+    except Exception:
+        app.logger.exception("Unable to inspect user boolean storage modes")
+    return storage_map
+
+
+def bind_user_boolean_value(column_name, enabled, storage_map):
+    if storage_map.get(column_name) == "integer":
+        return 1 if bool(enabled) else 0
+    return bool(enabled)
+
+
+def persist_user_update(user, payload):
+    permission_values = {
+        field_name: bool(payload["permissions"].get(field_name))
+        for field_name in USER_PERMISSION_FIELDS
+    }
+    next_session_version = int(user.session_version or 0) + 1
+    storage_map = user_boolean_storage_mode_map()
+
+    if not any(mode == "integer" for mode in storage_map.values()):
+        user.username = payload["username"]
+        user.role = payload["role"]
+        user.access_profile = payload["access_profile"]
+        for field_name, enabled in permission_values.items():
+            setattr(user, field_name, enabled)
+        user.session_version = next_session_version
+        db.session.commit()
+        return user
+
+    update_values = {
+        "user_id": user.id,
+        "username": payload["username"],
+        "role": payload["role"],
+        "access_profile": payload["access_profile"],
+        "session_version": next_session_version,
+        "is_active": bind_user_boolean_value("is_active", getattr(user, "is_active", True), storage_map),
+    }
+    for field_name in USER_PERMISSION_FIELDS:
+        update_values[field_name] = bind_user_boolean_value(field_name, permission_values[field_name], storage_map)
+
+    set_columns = [
+        "username",
+        "role",
+        "access_profile",
+        "session_version",
+        "is_active",
+        *USER_PERMISSION_FIELDS,
+    ]
+    set_clause = ", ".join(f'"{column_name}" = :{column_name}' for column_name in set_columns)
+    db.session.execute(
+        text(f'UPDATE "user" SET {set_clause} WHERE "id" = :user_id'),
+        update_values,
+    )
+    db.session.commit()
+    refreshed_user = db.session.get(User, user.id)
+    return refreshed_user or user
+
+
+def persist_new_user(payload):
+    permission_values = {
+        field_name: bool(payload["permissions"].get(field_name))
+        for field_name in USER_PERMISSION_FIELDS
+    }
+    storage_map = user_boolean_storage_mode_map()
+    user = User(
+        username=payload["username"],
+        role=payload["role"],
+        access_profile=payload["access_profile"],
+        **permission_values,
+    )
+    user.set_password(payload["password"])
+
+    if not any(mode == "integer" for mode in storage_map.values()):
+        db.session.add(user)
+        db.session.commit()
+        return user
+
+    insert_values = {
+        "username": payload["username"],
+        "password_hash": user.password_hash,
+        "role": payload["role"],
+        "access_profile": payload["access_profile"],
+        "session_version": 0,
+        "is_active": bind_user_boolean_value("is_active", True, storage_map),
+        "created_at": sql_text_bindable_value(datetime.utcnow()),
+    }
+    for field_name in USER_PERMISSION_FIELDS:
+        insert_values[field_name] = bind_user_boolean_value(field_name, permission_values[field_name], storage_map)
+
+    insert_columns = list(insert_values.keys())
+    columns_sql = ", ".join(f'"{column_name}"' for column_name in insert_columns)
+    placeholders_sql = ", ".join(f':{column_name}' for column_name in insert_columns)
+    db.session.execute(
+        text(f'INSERT INTO "user" ({columns_sql}) VALUES ({placeholders_sql})'),
+        insert_values,
+    )
+    db.session.commit()
+    return active_user_query().filter(db.func.lower(User.username) == payload["username"].lower()).first()
+
+
+def archive_user_account(user):
+    next_session_version = int(user.session_version or 0) + 1
+    deleted_at = datetime.utcnow()
+    deleted_by = session.get("username")
+    storage_map = user_boolean_storage_mode_map()
+
+    if storage_map.get("is_active") == "integer":
+        db.session.execute(
+            text(
+                'UPDATE "user" '
+                'SET "is_active" = :is_active, '
+                '"deleted_at" = :deleted_at, '
+                '"deleted_by" = :deleted_by, '
+                '"session_version" = :session_version '
+                'WHERE "id" = :user_id'
+            ),
+            {
+                "user_id": user.id,
+                "is_active": bind_user_boolean_value("is_active", False, storage_map),
+                "deleted_at": sql_text_bindable_value(deleted_at),
+                "deleted_by": deleted_by,
+                "session_version": next_session_version,
+            },
+        )
+        db.session.commit()
+        return
+
+    user.is_active = False
+    user.deleted_at = deleted_at
+    user.deleted_by = deleted_by
+    user.session_version = next_session_version
+    db.session.commit()
+
 def build_appointment_calendar_days(appointments, calendar_view, focus_date):
     by_date = {}
     for appt in appointments:
@@ -9029,14 +9183,19 @@ def edit_user(user_id):
                 submit_label="Save Changes",
                 profile_options=ACCESS_PROFILE_PRESETS
             )
-        user.username = payload["username"]
-        user.role = payload["role"]
-        user.access_profile = payload["access_profile"]
-        for field_name, enabled in payload["permissions"].items():
-            setattr(user, field_name, bool(enabled))
-        user.session_version = int(user.session_version or 0) + 1
-
-        db.session.commit()
+        try:
+            user = persist_user_update(user, payload)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to update user %s", user_id)
+            flash("Unable to update user due to a database error. Please try again.", "danger")
+            return render_template(
+                "user_form.html",
+                user=user,
+                form_title="Edit User",
+                submit_label="Save Changes",
+                profile_options=ACCESS_PROFILE_PRESETS
+            )
         flash("User updated successfully", "success")
         return redirect("/users")
 
@@ -9074,16 +9233,19 @@ def add_user():
                 submit_label="Create User",
                 profile_options=ACCESS_PROFILE_PRESETS
             )
-        user = User(
-            username=payload["username"],
-            role=payload["role"],
-            access_profile=payload["access_profile"],
-            **payload["permissions"]
-        )
-        user.set_password(payload["password"])
-        
-        db.session.add(user)
-        db.session.commit()
+        try:
+            persist_new_user(payload)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to create user %s", payload["username"])
+            flash("Unable to create user due to a database error. Please try again.", "danger")
+            return render_template(
+                "user_form.html",
+                user=None,
+                form_title="Add User",
+                submit_label="Create User",
+                profile_options=ACCESS_PROFILE_PRESETS
+            )
         flash("User created", "success")
         return redirect("/users")
 
@@ -9130,11 +9292,13 @@ def delete_user(user_id):
         flash("Admin user cannot be deleted", "danger")
         return redirect("/users")
 
-    user.is_active = False
-    user.deleted_at = datetime.utcnow()
-    user.deleted_by = session.get("username")
-    user.session_version = int(user.session_version or 0) + 1
-    db.session.commit()
+    try:
+        archive_user_account(user)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to archive user %s", user_id)
+        flash("Unable to archive user due to a database error. Please try again.", "danger")
+        return redirect("/users")
     flash("User archived successfully", "success")
     return redirect("/users")
 
