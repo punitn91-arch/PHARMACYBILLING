@@ -518,6 +518,21 @@ def sync_medicine_codes_to_current_names():
     }
 
 
+def persist_medicine_code_sync():
+    try:
+        sync_result = sync_medicine_codes_to_current_names()
+        db.session.commit()
+        return sync_result
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to persist medicine code sync.")
+        return {
+            "medicine_updates": 0,
+            "purchase_item_updates": 0,
+            "group_count": 0,
+        }
+
+
 def build_medicine_name_suggestions(medicines):
     unique_names = {}
     for med in medicines:
@@ -3645,7 +3660,7 @@ with app.app_context():
             ))
             db.session.commit()
         ensure_runtime_indexes()
-        sync_medicine_codes_to_current_names()
+        persist_medicine_code_sync()
         repair_hold_bill_schema_compat()
         repair_pending_bill_store_compat()
         sync_pending_bill_store()
@@ -4205,6 +4220,7 @@ def medicines():
     ):
         flash("Access denied", "danger")
         return redirect("/")
+    persist_medicine_code_sync()
     show_archived = (request.args.get("show_archived") or "").strip().lower() in {"1", "true", "yes", "on"}
     initial_search = (request.args.get("search") or "").strip()
     medicine_groups, medicine_stats = build_medicine_master_groups(show_archived=show_archived)

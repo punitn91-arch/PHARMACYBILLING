@@ -634,6 +634,29 @@ class EngineeringFlowTests(unittest.TestCase):
             med = self.app_module.Medicine.query.filter_by(name="CALPOL 650", batch="CP-1").one()
             self.assertEqual(med.medicine_code, self._expected_auto_code("CALPOL 650"))
 
+    def test_medicines_route_persists_existing_manual_codes_to_name_based_codes(self):
+        with self.app.app_context():
+            med = self.app_module.Medicine(
+                name="CIPLAR 10 MG TAB 1*15",
+                medicine_code="MED0018",
+                batch="CIP-1",
+                expiry="2028-07-31",
+                mrp=45.0,
+                qty=6,
+                discount_percent=0,
+                is_active=True,
+            )
+            self.db.session.add(med)
+            self.db.session.commit()
+
+        self.login()
+        response = self.client.get("/medicines")
+        self.assertEqual(response.status_code, 200)
+
+        with self.app.app_context():
+            med = self.app_module.Medicine.query.filter_by(batch="CIP-1").one()
+            self.assertEqual(med.medicine_code, self._expected_auto_code("CIPLAR 10 MG TAB 1*15"))
+
     def test_return_flow_restores_stock_and_purchase_remaining(self):
         with self.app.app_context():
             patient = self._seed_patient()
