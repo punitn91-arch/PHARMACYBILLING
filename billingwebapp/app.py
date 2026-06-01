@@ -11,6 +11,7 @@ import secrets
 import subprocess
 import sys
 from decimal import Decimal, ROUND_HALF_UP
+from types import SimpleNamespace
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
@@ -202,6 +203,7 @@ app.config["APP_ENV"] = APP_ENV
 ASYNC_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 TMP_BASE_DIR = os.path.join("/tmp", "billingwebapp")
+HOLD_BILL_FALLBACK_FILE = os.path.join(TMP_BASE_DIR, "hold_bills_fallback.json")
 
 
 def ensure_writable_dir(preferred_path, fallback_path):
@@ -722,6 +724,16 @@ def upsert_hold_bill_compat(*, hold_bill_id=0, customer="", mobile="", doctor=""
 
         insert_columns = []
         insert_values = []
+        explicit_id = hold_bill_id if hold_bill_id > 0 else None
+        if explicit_id is None and "id" in existing_columns:
+            explicit_id = to_int_safe(
+                db.session.execute(text('SELECT COALESCE(MAX("id"), 0) + 1 FROM "hold_bill"')).scalar(),
+                1,
+            )
+        if explicit_id is not None and "id" in existing_columns:
+            params["insert_id"] = explicit_id
+            insert_columns.append('"id"')
+            insert_values.append(":insert_id")
         for column_name in ("customer", "mobile", "doctor", "gender"):
             if column_name in existing_columns:
                 insert_columns.append(f'"{column_name}"')
@@ -752,6 +764,100 @@ def upsert_hold_bill_compat(*, hold_bill_id=0, customer="", mobile="", doctor=""
         db.session.rollback()
         app.logger.exception("Fallback hold bill persistence failed.")
         return False
+
+
+def load_file_hold_bill_records():
+    try:
+        if not os.path.exists(HOLD_BILL_FALLBACK_FILE):
+            return {}
+        with open(HOLD_BILL_FALLBACK_FILE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        app.logger.exception("Unable to read hold bill fallback file.")
+    return {}
+
+
+def save_file_hold_bill_records(records):
+    os.makedirs(os.path.dirname(HOLD_BILL_FALLBACK_FILE), exist_ok=True)
+    with open(HOLD_BILL_FALLBACK_FILE, "w", encoding="utf-8") as handle:
+        json.dump(records, handle, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def next_file_hold_bill_id(records):
+    max_id = 900000
+    for key in records.keys():
+        max_id = max(max_id, to_int_safe(key, max_id))
+    return max_id + 1
+
+
+def save_file_hold_bill(*, hold_bill_id=0, customer="", mobile="", doctor="", gender="", payload=None):
+    records = load_file_hold_bill_records()
+    if hold_bill_id > 0 and str(hold_bill_id) in records:
+        record_id = hold_bill_id
+        created_at = records[str(record_id)].get("created_at") or datetime.utcnow().isoformat()
+    else:
+        record_id = next_file_hold_bill_id(records)
+        created_at = datetime.utcnow().isoformat()
+
+    records[str(record_id)] = {
+        "id": record_id,
+        "customer": (customer or "").strip(),
+        "mobile": (mobile or "").strip(),
+        "doctor": (doctor or "").strip(),
+        "gender": (gender or "").strip(),
+        "data": sanitize_json_payload(payload or {}),
+        "created_at": created_at,
+        "is_deleted": False,
+        "deleted_at": None,
+        "deleted_by": None,
+        "source": "file_fallback",
+    }
+    save_file_hold_bill_records(records)
+    return record_id
+
+
+def get_file_hold_bill(hold_bill_id):
+    records = load_file_hold_bill_records()
+    record = records.get(str(hold_bill_id))
+    if not isinstance(record, dict):
+        return None
+    return record
+
+
+def delete_file_hold_bill(hold_bill_id):
+    records = load_file_hold_bill_records()
+    if str(hold_bill_id) not in records:
+        return False
+    records.pop(str(hold_bill_id), None)
+    save_file_hold_bill_records(records)
+    return True
+
+
+def list_file_hold_bills():
+    rows = []
+    for record in load_file_hold_bill_records().values():
+        if not isinstance(record, dict):
+            continue
+        created_at_raw = (record.get("created_at") or "").strip()
+        try:
+            created_at = datetime.fromisoformat(created_at_raw) if created_at_raw else datetime.utcnow()
+        except Exception:
+            created_at = datetime.utcnow()
+        rows.append({
+            "id": to_int_safe(record.get("id"), 0),
+            "customer": (record.get("customer") or "").strip(),
+            "mobile": (record.get("mobile") or "").strip(),
+            "doctor": (record.get("doctor") or "").strip(),
+            "gender": (record.get("gender") or "").strip(),
+            "data": record.get("data") or {},
+            "created_at": created_at,
+            "is_deleted": False,
+            "source": "file_fallback",
+        })
+    rows.sort(key=lambda row: (row.get("created_at") or datetime.utcnow(), row.get("id") or 0), reverse=True)
+    return rows
 
 
 def get_release_identifier():
@@ -1941,6 +2047,25 @@ def build_hold_totals_from_form(form, items):
 
 def normalize_hold_bill_data(hold_bill):
     payload = load_hold_bill_payload(hold_bill.data)
+    created_at = getattr(hold_bill, "created_at", None)
+    hold_bill_id = getattr(hold_bill, "id", None)
+    customer = getattr(hold_bill, "customer", "")
+    mobile = getattr(hold_bill, "mobile", "")
+    doctor = getattr(hold_bill, "doctor", "")
+    gender = getattr(hold_bill, "gender", "")
+    return normalize_hold_bill_payload(
+        hold_bill_id=hold_bill_id,
+        customer=customer,
+        mobile=mobile,
+        doctor=doctor,
+        gender=gender,
+        payload=payload,
+        created_at=created_at,
+    )
+
+
+def normalize_hold_bill_payload(*, hold_bill_id=None, customer="", mobile="", doctor="", gender="", payload=None, created_at=None):
+    payload = load_hold_bill_payload(payload)
     raw_items = []
     raw_draft_items = []
     totals = {}
@@ -2022,12 +2147,12 @@ def normalize_hold_bill_data(hold_bill):
     rounded_amount = to_float_safe(totals.get("rounded_amount"), round(net_total, 2))
 
     return {
-        "hold_bill_id": hold_bill.id,
+        "hold_bill_id": hold_bill_id,
         "header": {
-            "customer": (header.get("customer") or hold_bill.customer or "").strip(),
-            "mobile": (header.get("mobile") or hold_bill.mobile or "").strip(),
-            "doctor": (header.get("doctor") or hold_bill.doctor or "").strip(),
-            "gender": (header.get("gender") or hold_bill.gender or "").strip(),
+            "customer": (header.get("customer") or customer or "").strip(),
+            "mobile": (header.get("mobile") or mobile or "").strip(),
+            "doctor": (header.get("doctor") or doctor or "").strip(),
+            "gender": (header.get("gender") or gender or "").strip(),
             "sale_type": (header.get("sale_type") or "sale").strip().lower() or "sale",
             "payment_mode": (header.get("payment_mode") or "CASH").strip().upper() or "CASH"
         },
@@ -2039,7 +2164,8 @@ def normalize_hold_bill_data(hold_bill):
             "sgst": round(sgst, 2),
             "net_total": round(net_total, 2),
             "rounded_amount": round(rounded_amount, 2)
-        }
+        },
+        "created_at": created_at,
     }
 
 LOW_STOCK_LIMIT = 5
@@ -4426,6 +4552,8 @@ def billing():
                 held_bill.is_deleted = True
                 held_bill.deleted_at = datetime.utcnow()
                 held_bill.deleted_by = session.get("username")
+            else:
+                delete_file_hold_bill(posted_hold_bill_id)
 
         db.session.commit()
         record_audit_event(
@@ -4462,11 +4590,28 @@ def billing():
     restored_hold_bill = None
     restore_hold_bill_id = to_int_safe(request.args.get("hold_bill_id"), 0)
     if restore_hold_bill_id > 0:
-        hold_bill = active_hold_bill_query().filter(HoldBill.id == restore_hold_bill_id).first()
-        if not hold_bill:
-            flash("Held bill not found. It may have been deleted.", "warning")
-        else:
+        hold_bill = None
+        try:
+            hold_bill = active_hold_bill_query().filter(HoldBill.id == restore_hold_bill_id).first()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to read hold bill from database during restore.")
+        if hold_bill:
             restored_hold_bill = normalize_hold_bill_data(hold_bill)
+        else:
+            fallback_hold_bill = get_file_hold_bill(restore_hold_bill_id)
+            if fallback_hold_bill:
+                restored_hold_bill = normalize_hold_bill_payload(
+                    hold_bill_id=to_int_safe(fallback_hold_bill.get("id"), restore_hold_bill_id),
+                    customer=fallback_hold_bill.get("customer"),
+                    mobile=fallback_hold_bill.get("mobile"),
+                    doctor=fallback_hold_bill.get("doctor"),
+                    gender=fallback_hold_bill.get("gender"),
+                    payload=fallback_hold_bill.get("data"),
+                    created_at=fallback_hold_bill.get("created_at"),
+                )
+            else:
+                flash("Held bill not found. It may have been deleted.", "warning")
 
     return render_template(
         "billing.html",
@@ -4902,10 +5047,23 @@ def hold_bill():
             payload=payload,
         )
         if not saved:
-            flash("Pending bill save failed. Please retry once.", "danger")
-            if hold_bill_id > 0:
-                return redirect(url_for("billing", hold_bill_id=hold_bill_id))
-            return redirect("/billing")
+            try:
+                fallback_hold_bill_id = save_file_hold_bill(
+                    hold_bill_id=hold_bill_id,
+                    customer=customer,
+                    mobile=mobile,
+                    doctor=doctor,
+                    gender=gender,
+                    payload=payload,
+                )
+                flash_msg = "Pending bill updated" if hold_bill_id > 0 or fallback_hold_bill_id == hold_bill_id else "Bill saved to Pending Bills"
+                flash("Pending bill was saved using emergency fallback storage.", "warning")
+            except Exception:
+                app.logger.exception("File fallback hold bill persistence failed.")
+                flash("Pending bill save failed. Please retry once.", "danger")
+                if hold_bill_id > 0:
+                    return redirect(url_for("billing", hold_bill_id=hold_bill_id))
+                return redirect("/billing")
 
     flash(flash_msg, "info")
     return redirect("/pending-bills")
@@ -4915,14 +5073,28 @@ def hold_bill():
 @login_required
 @invoice_access_required
 def pending_bills():
-    bills = active_hold_bill_query().order_by(HoldBill.id.desc()).all()
+    bills = []
+    try:
+        bills.extend(active_hold_bill_query().order_by(HoldBill.id.desc()).all())
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to read pending bills from database.")
+    bills.extend([SimpleNamespace(**row) for row in list_file_hold_bills()])
+    bills.sort(key=lambda row: (getattr(row, "created_at", None) or datetime.utcnow(), getattr(row, "id", 0)), reverse=True)
     return render_template("pending_bills.html", bills=bills)
 
 @app.route("/restore-bill/<int:id>")
 @login_required
 @invoice_access_required
 def restore_bill(id):
-    hb = active_hold_bill_query().filter(HoldBill.id == id).first()
+    hb = None
+    try:
+        hb = active_hold_bill_query().filter(HoldBill.id == id).first()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to read hold bill from database for restore.")
+    if not hb and get_file_hold_bill(id):
+        return redirect(url_for("billing", hold_bill_id=id))
     if not hb:
         flash("Held bill not found.", "warning")
         return redirect("/pending-bills")
@@ -4932,13 +5104,23 @@ def restore_bill(id):
 @login_required
 @invoice_access_required
 def delete_hold(id):
-    hold_bill = active_hold_bill_query().filter(HoldBill.id == id).first_or_404()
-    hold_bill.is_deleted = True
-    hold_bill.deleted_at = datetime.utcnow()
-    hold_bill.deleted_by = session.get("username")
-    db.session.commit()
-    flash("Pending bill removed from the active hold list.", "success")
-    return redirect("/pending-bills")
+    hold_bill = None
+    try:
+        hold_bill = active_hold_bill_query().filter(HoldBill.id == id).first()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to read hold bill from database for delete.")
+    if hold_bill:
+        hold_bill.is_deleted = True
+        hold_bill.deleted_at = datetime.utcnow()
+        hold_bill.deleted_by = session.get("username")
+        db.session.commit()
+        flash("Pending bill removed from the active hold list.", "success")
+        return redirect("/pending-bills")
+    if delete_file_hold_bill(id):
+        flash("Pending bill removed from the active hold list.", "success")
+        return redirect("/pending-bills")
+    abort(404)
 
 # ---------------- CANCEL RETURN BILL ----------------
 @app.route("/return-bill/delete/<int:id>", methods=["POST"])

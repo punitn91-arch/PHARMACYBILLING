@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from datetime import date, datetime, time, timedelta
+from unittest import mock
 
 
 class EngineeringFlowTests(unittest.TestCase):
@@ -41,6 +42,9 @@ class EngineeringFlowTests(unittest.TestCase):
             self.db.drop_all()
             self.db.create_all()
             self._seed_admin()
+        fallback_file = getattr(self.app_module, "HOLD_BILL_FALLBACK_FILE", "")
+        if fallback_file and os.path.exists(fallback_file):
+            os.remove(fallback_file)
 
     def _seed_admin(self):
         admin = self.app_module.User(
@@ -1054,6 +1058,44 @@ class EngineeringFlowTests(unittest.TestCase):
                 self.app_module.text('SELECT customer FROM "hold_bill" ORDER BY id DESC LIMIT 1')
             ).fetchall()
         self.assertEqual(rows[0][0], "Recovered Patient")
+
+    def test_hold_bill_post_uses_file_fallback_when_sql_fallback_fails(self):
+        with self.app.app_context():
+            self.db.session.execute(self.app_module.text('DROP TABLE IF EXISTS "hold_bill"'))
+            self.db.session.commit()
+
+        self.login()
+        with mock.patch.object(self.app_module, "upsert_hold_bill_compat", return_value=False):
+            response = self.client.post(
+                "/billing/hold",
+                data={
+                    "customer": "File Patient",
+                    "mobile": "9222222222",
+                    "doctor": "Dr. File",
+                    "gender": "Male",
+                    "payment_mode": "CASH",
+                    "medicine_name": [""],
+                    "qty": [""],
+                    "batch_override[]": [""],
+                },
+                follow_redirects=False,
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/pending-bills", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            file_rows = self.app_module.list_file_hold_bills()
+            restored = self.app_module.normalize_hold_bill_payload(
+                hold_bill_id=file_rows[0]["id"],
+                customer=file_rows[0]["customer"],
+                mobile=file_rows[0]["mobile"],
+                doctor=file_rows[0]["doctor"],
+                gender=file_rows[0]["gender"],
+                payload=file_rows[0]["data"],
+                created_at=file_rows[0]["created_at"],
+            )
+        self.assertEqual(file_rows[0]["customer"], "File Patient")
+        self.assertEqual(restored["header"]["doctor"], "Dr. File")
 
     def test_appointment_delete_soft_archives_record(self):
         with self.app.app_context():
