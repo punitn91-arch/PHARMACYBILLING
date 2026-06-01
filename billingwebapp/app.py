@@ -11,7 +11,6 @@ import secrets
 import subprocess
 import sys
 from decimal import Decimal, ROUND_HALF_UP
-from types import SimpleNamespace
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
@@ -35,6 +34,7 @@ try:
         Return,
         ReturnItem,
         HoldBill,
+        PendingBillStore,
         Patient,
         Appointment,
         Vendor,
@@ -84,6 +84,7 @@ except ImportError:  # pragma: no cover - script/local fallback
         Return,
         ReturnItem,
         HoldBill,
+        PendingBillStore,
         Patient,
         Appointment,
         Vendor,
@@ -612,6 +613,110 @@ def create_hold_bill_table_compat():
     db.session.commit()
 
 
+def create_pending_bill_store_table_compat():
+    dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    if dialect_name == "postgresql":
+        db.session.execute(text(
+            'CREATE TABLE IF NOT EXISTS "pending_bill_store" ('
+            'id SERIAL PRIMARY KEY, '
+            'legacy_hold_bill_id INTEGER UNIQUE, '
+            'customer TEXT, '
+            'mobile TEXT, '
+            'doctor TEXT, '
+            'gender TEXT, '
+            'data_text TEXT, '
+            'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, '
+            'is_deleted BOOLEAN DEFAULT FALSE, '
+            'deleted_at TIMESTAMP, '
+            'deleted_by TEXT'
+            ')'
+        ))
+    else:
+        db.session.execute(text(
+            'CREATE TABLE IF NOT EXISTS "pending_bill_store" ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            'legacy_hold_bill_id INTEGER UNIQUE, '
+            'customer TEXT, '
+            'mobile TEXT, '
+            'doctor TEXT, '
+            'gender TEXT, '
+            'data_text TEXT, '
+            'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, '
+            'is_deleted BOOLEAN DEFAULT FALSE, '
+            'deleted_at TIMESTAMP, '
+            'deleted_by TEXT'
+            ')'
+        ))
+    db.session.commit()
+
+
+def sync_table_identity_compat(table_name, column_name="id"):
+    dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    if dialect_name != "postgresql":
+        return
+    try:
+        db.session.execute(text(
+            "SELECT setval("
+            f"pg_get_serial_sequence('{table_name}', '{column_name}'), "
+            f'COALESCE((SELECT MAX("{column_name}") FROM "{table_name}"), 1), '
+            "TRUE)"
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to sync %s.%s identity sequence.", table_name, column_name)
+
+
+def repair_pending_bill_store_compat():
+    existing_columns = get_existing_table_columns("pending_bill_store")
+    if not existing_columns:
+        try:
+            create_pending_bill_store_table_compat()
+            existing_columns = get_existing_table_columns("pending_bill_store")
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to create pending_bill_store table.")
+            return False
+    if not existing_columns:
+        return False
+
+    changed = False
+    for column_name, column_def in (
+        ("legacy_hold_bill_id", "INTEGER"),
+        ("customer", "TEXT"),
+        ("mobile", "TEXT"),
+        ("doctor", "TEXT"),
+        ("gender", "TEXT"),
+        ("data_text", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+        ("is_deleted", "BOOLEAN DEFAULT FALSE"),
+        ("deleted_at", "TIMESTAMP"),
+        ("deleted_by", "TEXT"),
+    ):
+        try:
+            changed = ensure_table_column_compat("pending_bill_store", column_name, column_def) or changed
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to add pending_bill_store.%s compatibility column", column_name)
+
+    try:
+        db.session.execute(text(
+            'CREATE UNIQUE INDEX IF NOT EXISTS "ix_pending_bill_store_legacy_hold_bill_id" '
+            'ON "pending_bill_store" ("legacy_hold_bill_id")'
+        ))
+        db.session.execute(text(
+            'UPDATE "pending_bill_store" SET "created_at" = CURRENT_TIMESTAMP WHERE "created_at" IS NULL'
+        ))
+        db.session.execute(text(
+            'UPDATE "pending_bill_store" SET "is_deleted" = FALSE WHERE "is_deleted" IS NULL'
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to backfill pending_bill_store defaults.")
+    return changed
+
+
 def repair_hold_bill_schema_compat():
     existing_columns = get_existing_table_columns("hold_bill")
     if not existing_columns:
@@ -766,6 +871,86 @@ def upsert_hold_bill_compat(*, hold_bill_id=0, customer="", mobile="", doctor=""
         return False
 
 
+def upsert_pending_bill_store_compat(*, pending_bill_id=0, customer="", mobile="", doctor="", gender="", payload=None):
+    repair_pending_bill_store_compat()
+    existing_columns = get_existing_table_columns("pending_bill_store")
+    if not existing_columns:
+        return False
+
+    sync_table_identity_compat("pending_bill_store")
+    params = {
+        "pending_bill_id": pending_bill_id,
+        "customer": (customer or "").strip() or None,
+        "mobile": (mobile or "").strip() or None,
+        "doctor": (doctor or "").strip() or None,
+        "gender": (gender or "").strip() or None,
+        "payload_text": serialize_json_text(payload) or None,
+    }
+
+    try:
+        if pending_bill_id > 0:
+            assignments = []
+            for column_name in ("customer", "mobile", "doctor", "gender"):
+                if column_name in existing_columns:
+                    assignments.append(f'"{column_name}" = :{column_name}')
+            if "data_text" in existing_columns:
+                assignments.append('"data_text" = :payload_text')
+            if "is_deleted" in existing_columns:
+                assignments.append('"is_deleted" = FALSE')
+            if "deleted_at" in existing_columns:
+                assignments.append('"deleted_at" = NULL')
+            if "deleted_by" in existing_columns:
+                assignments.append('"deleted_by" = NULL')
+
+            if assignments:
+                result = db.session.execute(
+                    text(f'UPDATE "pending_bill_store" SET {", ".join(assignments)} WHERE "id" = :pending_bill_id'),
+                    params,
+                )
+                db.session.commit()
+                if (result.rowcount or 0) > 0:
+                    sync_table_identity_compat("pending_bill_store")
+                    return True
+
+        insert_columns = []
+        insert_values = []
+        if pending_bill_id > 0 and "id" in existing_columns:
+            params["insert_id"] = pending_bill_id
+            insert_columns.append('"id"')
+            insert_values.append(":insert_id")
+        for column_name in ("customer", "mobile", "doctor", "gender"):
+            if column_name in existing_columns:
+                insert_columns.append(f'"{column_name}"')
+                insert_values.append(f':{column_name}')
+        if "data_text" in existing_columns:
+            insert_columns.append('"data_text"')
+            insert_values.append(":payload_text")
+        if "created_at" in existing_columns:
+            insert_columns.append('"created_at"')
+            insert_values.append("CURRENT_TIMESTAMP")
+        if "is_deleted" in existing_columns:
+            insert_columns.append('"is_deleted"')
+            insert_values.append("FALSE")
+
+        if not insert_columns:
+            return False
+
+        db.session.execute(
+            text(
+                f'INSERT INTO "pending_bill_store" ({", ".join(insert_columns)}) '
+                f'VALUES ({", ".join(insert_values)})'
+            ),
+            params,
+        )
+        db.session.commit()
+        sync_table_identity_compat("pending_bill_store")
+        return True
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Pending bill store compatibility persistence failed.")
+        return False
+
+
 def load_file_hold_bill_records():
     try:
         if not os.path.exists(HOLD_BILL_FALLBACK_FILE):
@@ -858,6 +1043,166 @@ def list_file_hold_bills():
         })
     rows.sort(key=lambda row: (row.get("created_at") or datetime.utcnow(), row.get("id") or 0), reverse=True)
     return rows
+
+
+def extract_hold_bill_payload_source(hold_bill):
+    if hold_bill is None:
+        return {}
+    if hasattr(hold_bill, "data_text"):
+        return getattr(hold_bill, "data_text", "")
+    return getattr(hold_bill, "data", {})
+
+
+def create_pending_bill_store_record(
+    *,
+    record_id=None,
+    legacy_hold_bill_id=None,
+    customer="",
+    mobile="",
+    doctor="",
+    gender="",
+    payload=None,
+    created_at=None,
+    is_deleted=False,
+    deleted_at=None,
+    deleted_by=None,
+):
+    record = PendingBillStore(
+        legacy_hold_bill_id=legacy_hold_bill_id,
+        customer=(customer or "").strip(),
+        mobile=(mobile or "").strip(),
+        doctor=(doctor or "").strip(),
+        gender=(gender or "").strip(),
+        data_text=serialize_json_text(payload),
+        created_at=created_at or datetime.utcnow(),
+        is_deleted=bool(is_deleted),
+        deleted_at=deleted_at,
+        deleted_by=deleted_by,
+    )
+    if record_id is not None:
+        record.id = record_id
+    return record
+
+
+def sync_pending_bill_store():
+    repair_pending_bill_store_compat()
+    if not get_existing_table_columns("pending_bill_store"):
+        return False
+
+    migrated = False
+
+    try:
+        db.session.flush()
+    except Exception:
+        db.session.rollback()
+
+    existing_by_legacy = {
+        row.legacy_hold_bill_id: row
+        for row in PendingBillStore.query.filter(PendingBillStore.legacy_hold_bill_id.isnot(None)).all()
+    }
+    existing_ids = {row[0] for row in db.session.query(PendingBillStore.id).all()}
+
+    try:
+        legacy_rows = active_legacy_hold_bill_query().order_by(HoldBill.id.asc()).all()
+    except Exception:
+        db.session.rollback()
+        legacy_rows = []
+
+    for legacy in legacy_rows:
+        if legacy.id in existing_by_legacy:
+            continue
+        payload = load_hold_bill_payload(extract_hold_bill_payload_source(legacy))
+        record_id = legacy.id if legacy.id not in existing_ids else None
+        db.session.add(
+            create_pending_bill_store_record(
+                record_id=record_id,
+                legacy_hold_bill_id=legacy.id,
+                customer=getattr(legacy, "customer", ""),
+                mobile=getattr(legacy, "mobile", ""),
+                doctor=getattr(legacy, "doctor", ""),
+                gender=getattr(legacy, "gender", ""),
+                payload=payload,
+                created_at=getattr(legacy, "created_at", None),
+                is_deleted=getattr(legacy, "is_deleted", False),
+                deleted_at=getattr(legacy, "deleted_at", None),
+                deleted_by=getattr(legacy, "deleted_by", None),
+            )
+        )
+        migrated = True
+        if record_id:
+            existing_ids.add(record_id)
+
+    file_rows = list_file_hold_bills()
+    if file_rows:
+        existing_store_ids = {row[0] for row in db.session.query(PendingBillStore.id).all()}
+        for row in file_rows:
+            record_id = row["id"] if row["id"] not in existing_store_ids else None
+            db.session.add(
+                create_pending_bill_store_record(
+                    record_id=record_id,
+                    legacy_hold_bill_id=None,
+                    customer=row.get("customer"),
+                    mobile=row.get("mobile"),
+                    doctor=row.get("doctor"),
+                    gender=row.get("gender"),
+                    payload=row.get("data"),
+                    created_at=row.get("created_at"),
+                    is_deleted=row.get("is_deleted", False),
+                    deleted_at=row.get("deleted_at"),
+                    deleted_by=row.get("deleted_by"),
+                )
+            )
+            migrated = True
+            if record_id is not None:
+                existing_store_ids.add(record_id)
+        if migrated:
+            try:
+                save_file_hold_bill_records({})
+            except Exception:
+                app.logger.exception("Unable to clear file fallback hold bill records after migration.")
+
+    if migrated:
+        try:
+            db.session.commit()
+            sync_table_identity_compat("pending_bill_store")
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to migrate pending bill records into stable store.")
+            return False
+    return True
+
+
+def find_pending_bill_record(pending_bill_id, *, include_deleted=False, sync_if_missing=False):
+    pending_bill_id = to_int_safe(pending_bill_id, 0)
+    if pending_bill_id <= 0:
+        return None
+
+    def query_record():
+        base_query = PendingBillStore.query if include_deleted else active_hold_bill_query()
+        return base_query.filter(
+            or_(
+                PendingBillStore.id == pending_bill_id,
+                PendingBillStore.legacy_hold_bill_id == pending_bill_id,
+            )
+        ).order_by(PendingBillStore.id.desc()).first()
+
+    try:
+        record = query_record()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to read pending bill record %s.", pending_bill_id)
+        record = None
+
+    if record is None and sync_if_missing:
+        repair_pending_bill_store_compat()
+        sync_pending_bill_store()
+        try:
+            record = query_record()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to re-read pending bill record %s after sync.", pending_bill_id)
+            record = None
+    return record
 
 
 def get_release_identifier():
@@ -965,8 +1310,16 @@ def active_vendor_query():
     return Vendor.query.filter(Vendor.deleted_at.is_(None))
 
 
-def active_hold_bill_query():
+def active_legacy_hold_bill_query():
     return HoldBill.query.filter(falsey_or_null_column_expr(HoldBill.is_deleted))
+
+
+def active_hold_bill_query():
+    return PendingBillStore.query.filter(falsey_or_null_column_expr(PendingBillStore.is_deleted))
+
+
+def active_pending_bill_query():
+    return active_hold_bill_query()
 
 
 def active_appointment_query():
@@ -2046,7 +2399,7 @@ def build_hold_totals_from_form(form, items):
     }
 
 def normalize_hold_bill_data(hold_bill):
-    payload = load_hold_bill_payload(hold_bill.data)
+    payload = load_hold_bill_payload(extract_hold_bill_payload_source(hold_bill))
     created_at = getattr(hold_bill, "created_at", None)
     hold_bill_id = getattr(hold_bill, "id", None)
     customer = getattr(hold_bill, "customer", "")
@@ -2997,6 +3350,16 @@ with app.app_context():
         ensure_column("hold_bill", "is_deleted", "BOOLEAN DEFAULT FALSE")
         ensure_column("hold_bill", "deleted_at", "TIMESTAMP")
         ensure_column("hold_bill", "deleted_by", "TEXT")
+        ensure_column("pending_bill_store", "legacy_hold_bill_id", "INTEGER")
+        ensure_column("pending_bill_store", "customer", "TEXT")
+        ensure_column("pending_bill_store", "mobile", "TEXT")
+        ensure_column("pending_bill_store", "doctor", "TEXT")
+        ensure_column("pending_bill_store", "gender", "TEXT")
+        ensure_column("pending_bill_store", "data_text", "TEXT")
+        ensure_column("pending_bill_store", "created_at", "TIMESTAMP")
+        ensure_column("pending_bill_store", "is_deleted", "BOOLEAN DEFAULT FALSE")
+        ensure_column("pending_bill_store", "deleted_at", "TIMESTAMP")
+        ensure_column("pending_bill_store", "deleted_by", "TEXT")
         ensure_column("vendor", "is_active", "BOOLEAN DEFAULT TRUE")
         ensure_column("vendor", "deleted_at", "TIMESTAMP")
         ensure_column("vendor", "deleted_by", "TEXT")
@@ -3023,6 +3386,7 @@ with app.app_context():
                 "return_bill": {"is_cancelled": False},
                 "appointment": {"is_deleted": False},
                 "hold_bill": {"is_deleted": False},
+                "pending_bill_store": {"is_deleted": False},
                 "login_security_event": {"is_suspicious": False},
             }
             pg_inspector = inspect(db.engine)
@@ -3091,6 +3455,11 @@ with app.app_context():
             ))
             db.session.execute(text(
                 'UPDATE "hold_bill" '
+                'SET "is_deleted" = 0 '
+                'WHERE "is_deleted" IS NULL'
+            ))
+            db.session.execute(text(
+                'UPDATE "pending_bill_store" '
                 'SET "is_deleted" = 0 '
                 'WHERE "is_deleted" IS NULL'
             ))
@@ -3169,6 +3538,8 @@ with app.app_context():
             db.session.commit()
         ensure_runtime_indexes()
         repair_hold_bill_schema_compat()
+        repair_pending_bill_store_compat()
+        sync_pending_bill_store()
     except Exception:
         # If schema upgrade fails, app should still run
         db.session.rollback()
@@ -4547,13 +4918,11 @@ def billing():
                 ))
 
         if posted_hold_bill_id > 0:
-            held_bill = active_hold_bill_query().filter(HoldBill.id == posted_hold_bill_id).first()
+            held_bill = find_pending_bill_record(posted_hold_bill_id)
             if held_bill:
                 held_bill.is_deleted = True
                 held_bill.deleted_at = datetime.utcnow()
                 held_bill.deleted_by = session.get("username")
-            else:
-                delete_file_hold_bill(posted_hold_bill_id)
 
         db.session.commit()
         record_audit_event(
@@ -4590,28 +4959,11 @@ def billing():
     restored_hold_bill = None
     restore_hold_bill_id = to_int_safe(request.args.get("hold_bill_id"), 0)
     if restore_hold_bill_id > 0:
-        hold_bill = None
-        try:
-            hold_bill = active_hold_bill_query().filter(HoldBill.id == restore_hold_bill_id).first()
-        except Exception:
-            db.session.rollback()
-            app.logger.exception("Unable to read hold bill from database during restore.")
+        hold_bill = find_pending_bill_record(restore_hold_bill_id, sync_if_missing=True)
         if hold_bill:
             restored_hold_bill = normalize_hold_bill_data(hold_bill)
         else:
-            fallback_hold_bill = get_file_hold_bill(restore_hold_bill_id)
-            if fallback_hold_bill:
-                restored_hold_bill = normalize_hold_bill_payload(
-                    hold_bill_id=to_int_safe(fallback_hold_bill.get("id"), restore_hold_bill_id),
-                    customer=fallback_hold_bill.get("customer"),
-                    mobile=fallback_hold_bill.get("mobile"),
-                    doctor=fallback_hold_bill.get("doctor"),
-                    gender=fallback_hold_bill.get("gender"),
-                    payload=fallback_hold_bill.get("data"),
-                    created_at=fallback_hold_bill.get("created_at"),
-                )
-            else:
-                flash("Held bill not found. It may have been deleted.", "warning")
+            flash("Held bill not found. It may have been deleted.", "warning")
 
     return render_template(
         "billing.html",
@@ -5017,29 +5369,33 @@ def hold_bill():
     }
 
     flash_msg = "Pending bill updated" if hold_bill_id > 0 else "Bill saved to Pending Bills"
+    repair_pending_bill_store_compat()
     try:
-        hold_bill = active_hold_bill_query().filter(HoldBill.id == hold_bill_id).first() if hold_bill_id > 0 else None
-        if hold_bill:
-            hold_bill.customer = customer
-            hold_bill.mobile = mobile
-            hold_bill.doctor = doctor
-            hold_bill.gender = gender
-            hold_bill.data = payload
+        pending_bill = find_pending_bill_record(hold_bill_id, sync_if_missing=True) if hold_bill_id > 0 else None
+        if pending_bill:
+            pending_bill.customer = customer
+            pending_bill.mobile = mobile
+            pending_bill.doctor = doctor
+            pending_bill.gender = gender
+            pending_bill.data_text = serialize_json_text(payload)
+            pending_bill.is_deleted = False
+            pending_bill.deleted_at = None
+            pending_bill.deleted_by = None
         else:
-            hold_bill = HoldBill(
+            pending_bill = create_pending_bill_store_record(
                 customer=customer,
                 mobile=mobile,
                 doctor=doctor,
                 gender=gender,
-                data=payload
+                payload=payload,
             )
-            db.session.add(hold_bill)
+            db.session.add(pending_bill)
         db.session.commit()
     except Exception:
         db.session.rollback()
-        app.logger.exception("Primary hold bill persistence failed; attempting compatibility fallback.")
-        saved = upsert_hold_bill_compat(
-            hold_bill_id=hold_bill_id,
+        app.logger.exception("Primary pending bill persistence failed; attempting compatibility fallback.")
+        saved = upsert_pending_bill_store_compat(
+            pending_bill_id=hold_bill_id,
             customer=customer,
             mobile=mobile,
             doctor=doctor,
@@ -5047,23 +5403,10 @@ def hold_bill():
             payload=payload,
         )
         if not saved:
-            try:
-                fallback_hold_bill_id = save_file_hold_bill(
-                    hold_bill_id=hold_bill_id,
-                    customer=customer,
-                    mobile=mobile,
-                    doctor=doctor,
-                    gender=gender,
-                    payload=payload,
-                )
-                flash_msg = "Pending bill updated" if hold_bill_id > 0 or fallback_hold_bill_id == hold_bill_id else "Bill saved to Pending Bills"
-                flash("Pending bill was saved using emergency fallback storage.", "warning")
-            except Exception:
-                app.logger.exception("File fallback hold bill persistence failed.")
-                flash("Pending bill save failed. Please retry once.", "danger")
-                if hold_bill_id > 0:
-                    return redirect(url_for("billing", hold_bill_id=hold_bill_id))
-                return redirect("/billing")
+            flash("Pending bill save failed. Please retry once.", "danger")
+            if hold_bill_id > 0:
+                return redirect(url_for("billing", hold_bill_id=hold_bill_id))
+            return redirect("/billing")
 
     flash(flash_msg, "info")
     return redirect("/pending-bills")
@@ -5074,27 +5417,19 @@ def hold_bill():
 @invoice_access_required
 def pending_bills():
     bills = []
+    sync_pending_bill_store()
     try:
-        bills.extend(active_hold_bill_query().order_by(HoldBill.id.desc()).all())
+        bills = active_hold_bill_query().order_by(PendingBillStore.created_at.desc(), PendingBillStore.id.desc()).all()
     except Exception:
         db.session.rollback()
         app.logger.exception("Unable to read pending bills from database.")
-    bills.extend([SimpleNamespace(**row) for row in list_file_hold_bills()])
-    bills.sort(key=lambda row: (getattr(row, "created_at", None) or datetime.utcnow(), getattr(row, "id", 0)), reverse=True)
     return render_template("pending_bills.html", bills=bills)
 
 @app.route("/restore-bill/<int:id>")
 @login_required
 @invoice_access_required
 def restore_bill(id):
-    hb = None
-    try:
-        hb = active_hold_bill_query().filter(HoldBill.id == id).first()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Unable to read hold bill from database for restore.")
-    if not hb and get_file_hold_bill(id):
-        return redirect(url_for("billing", hold_bill_id=id))
+    hb = find_pending_bill_record(id, sync_if_missing=True)
     if not hb:
         flash("Held bill not found.", "warning")
         return redirect("/pending-bills")
@@ -5104,20 +5439,12 @@ def restore_bill(id):
 @login_required
 @invoice_access_required
 def delete_hold(id):
-    hold_bill = None
-    try:
-        hold_bill = active_hold_bill_query().filter(HoldBill.id == id).first()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Unable to read hold bill from database for delete.")
+    hold_bill = find_pending_bill_record(id, sync_if_missing=True)
     if hold_bill:
         hold_bill.is_deleted = True
         hold_bill.deleted_at = datetime.utcnow()
         hold_bill.deleted_by = session.get("username")
         db.session.commit()
-        flash("Pending bill removed from the active hold list.", "success")
-        return redirect("/pending-bills")
-    if delete_file_hold_bill(id):
         flash("Pending bill removed from the active hold list.", "success")
         return redirect("/pending-bills")
     abort(404)

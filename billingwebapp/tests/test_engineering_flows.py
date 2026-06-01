@@ -4,7 +4,6 @@ import sys
 import tempfile
 import unittest
 from datetime import date, datetime, time, timedelta
-from unittest import mock
 
 
 class EngineeringFlowTests(unittest.TestCase):
@@ -896,12 +895,12 @@ class EngineeringFlowTests(unittest.TestCase):
 
     def test_hold_bill_delete_soft_archives_record(self):
         with self.app.app_context():
-            hold_bill = self.app_module.HoldBill(
+            hold_bill = self.app_module.PendingBillStore(
                 customer="Saved Patient",
                 mobile="9000000000",
                 doctor="Dr. Save",
                 gender="MALE",
-                data={"items": []},
+                data_text=self.app_module.serialize_json_text({"items": []}),
             )
             self.db.session.add(hold_bill)
             self.db.session.commit()
@@ -912,7 +911,7 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
 
         with self.app.app_context():
-            hold_bill = self.app_module.HoldBill.query.get(hold_bill_id)
+            hold_bill = self.app_module.PendingBillStore.query.get(hold_bill_id)
             self.assertTrue(hold_bill.is_deleted)
             self.assertIsNotNone(hold_bill.deleted_at)
             self.assertEqual(self.app_module.active_hold_bill_query().filter_by(id=hold_bill_id).count(), 0)
@@ -936,8 +935,12 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/pending-bills", response.headers.get("Location", ""))
 
+        with self.client.session_transaction() as session_data:
+            flashes = session_data.get("_flashes", [])
+        self.assertFalse(any("emergency fallback storage" in message.lower() for _, message in flashes))
+
         with self.app.app_context():
-            hold_bill = self.app_module.HoldBill.query.one()
+            hold_bill = self.app_module.PendingBillStore.query.one()
             normalized = self.app_module.normalize_hold_bill_data(hold_bill)
             self.assertEqual(hold_bill.customer, "Saved Patient")
             self.assertEqual(normalized["header"]["doctor"], "Dr. Save")
@@ -973,18 +976,18 @@ class EngineeringFlowTests(unittest.TestCase):
         }
 
         with self.app.app_context():
-            hold_bill = self.app_module.HoldBill(
+            hold_bill = self.app_module.PendingBillStore(
                 customer="Legacy Patient",
                 mobile="9000000000",
                 doctor="Dr. Legacy",
                 gender="FEMALE",
-                data=self.app_module.serialize_json_text(payload),
+                data_text=self.app_module.serialize_json_text(payload),
             )
             self.db.session.add(hold_bill)
             self.db.session.commit()
             hold_bill_id = hold_bill.id
 
-            saved_hold_bill = self.app_module.HoldBill.query.get(hold_bill_id)
+            saved_hold_bill = self.app_module.PendingBillStore.query.get(hold_bill_id)
             normalized = self.app_module.normalize_hold_bill_data(saved_hold_bill)
 
         self.assertEqual(normalized["header"]["customer"], "Legacy Patient")
@@ -1022,7 +1025,7 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn("/pending-bills", response.headers.get("Location", ""))
 
         with self.app.app_context():
-            hold_bill = self.app_module.HoldBill.query.order_by(self.app_module.HoldBill.id.desc()).first()
+            hold_bill = self.app_module.PendingBillStore.query.order_by(self.app_module.PendingBillStore.id.desc()).first()
             normalized = self.app_module.normalize_hold_bill_data(hold_bill)
 
         self.assertEqual(normalized["totals"]["subtotal"], 0.0)
@@ -1032,7 +1035,7 @@ class EngineeringFlowTests(unittest.TestCase):
 
     def test_hold_bill_post_recovers_when_table_is_missing(self):
         with self.app.app_context():
-            self.db.session.execute(self.app_module.text('DROP TABLE IF EXISTS "hold_bill"'))
+            self.db.session.execute(self.app_module.text('DROP TABLE IF EXISTS "pending_bill_store"'))
             self.db.session.commit()
 
         self.login()
@@ -1055,46 +1058,28 @@ class EngineeringFlowTests(unittest.TestCase):
 
         with self.app.app_context():
             rows = self.db.session.execute(
-                self.app_module.text('SELECT customer FROM "hold_bill" ORDER BY id DESC LIMIT 1')
+                self.app_module.text('SELECT customer FROM "pending_bill_store" ORDER BY id DESC LIMIT 1')
             ).fetchall()
         self.assertEqual(rows[0][0], "Recovered Patient")
 
-    def test_hold_bill_post_uses_file_fallback_when_sql_fallback_fails(self):
+    def test_pending_bills_route_migrates_file_fallback_records_into_store(self):
         with self.app.app_context():
-            self.db.session.execute(self.app_module.text('DROP TABLE IF EXISTS "hold_bill"'))
-            self.db.session.commit()
-
+            self.app_module.save_file_hold_bill(
+                customer="File Patient",
+                mobile="9222222222",
+                doctor="Dr. File",
+                gender="Male",
+                payload={"items": [], "header": {"doctor": "Dr. File"}},
+            )
         self.login()
-        with mock.patch.object(self.app_module, "upsert_hold_bill_compat", return_value=False):
-            response = self.client.post(
-                "/billing/hold",
-                data={
-                    "customer": "File Patient",
-                    "mobile": "9222222222",
-                    "doctor": "Dr. File",
-                    "gender": "Male",
-                    "payment_mode": "CASH",
-                    "medicine_name": [""],
-                    "qty": [""],
-                    "batch_override[]": [""],
-                },
-                follow_redirects=False,
-            )
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/pending-bills", response.headers.get("Location", ""))
+        response = self.client.get("/pending-bills", follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
 
         with self.app.app_context():
-            file_rows = self.app_module.list_file_hold_bills()
-            restored = self.app_module.normalize_hold_bill_payload(
-                hold_bill_id=file_rows[0]["id"],
-                customer=file_rows[0]["customer"],
-                mobile=file_rows[0]["mobile"],
-                doctor=file_rows[0]["doctor"],
-                gender=file_rows[0]["gender"],
-                payload=file_rows[0]["data"],
-                created_at=file_rows[0]["created_at"],
-            )
-        self.assertEqual(file_rows[0]["customer"], "File Patient")
+            self.assertEqual(self.app_module.list_file_hold_bills(), [])
+            hold_bill = self.app_module.PendingBillStore.query.filter_by(customer="File Patient").one()
+            restored = self.app_module.normalize_hold_bill_data(hold_bill)
+        self.assertEqual(hold_bill.customer, "File Patient")
         self.assertEqual(restored["header"]["doctor"], "Dr. File")
 
     def test_appointment_delete_soft_archives_record(self):

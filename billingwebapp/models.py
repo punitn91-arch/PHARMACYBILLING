@@ -182,6 +182,22 @@ class HoldBill(db.Model):
     deleted_by = db.Column(db.String(50))
 
 
+class PendingBillStore(db.Model):
+    __tablename__ = "pending_bill_store"
+
+    id = db.Column(db.Integer, primary_key=True)
+    legacy_hold_bill_id = db.Column(db.Integer, unique=True, index=True)
+    customer = db.Column(db.String(100))
+    mobile = db.Column(db.String(20))
+    doctor = db.Column(db.String(100))
+    gender = db.Column(db.String(10))
+    data_text = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    is_deleted = db.Column(db.Boolean, default=False, index=True)
+    deleted_at = db.Column(db.DateTime, index=True)
+    deleted_by = db.Column(db.String(50))
+
+
 class Patient(db.Model):
     __tablename__ = "patient"
 
