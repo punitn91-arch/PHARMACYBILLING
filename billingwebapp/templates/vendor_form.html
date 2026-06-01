@@ -1261,6 +1261,30 @@ function normalizeToken(value) {
     return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function buildMedicineCodePrefix(name) {
+    const normalized = String(name || "").trim().toUpperCase();
+    if (!normalized) return "MED";
+    const letters = Array.from(normalized).filter(char => /[A-Z]/.test(char));
+    const prefixChars = letters.slice(0, 3);
+    if (prefixChars.length < 3) {
+        const digits = Array.from(normalized).filter(char => /[0-9]/.test(char));
+        while (prefixChars.length < 3 && digits.length) {
+            prefixChars.push(digits.shift());
+        }
+    }
+    while (prefixChars.length < 3) {
+        prefixChars.push("X");
+    }
+    return prefixChars.slice(0, 3).join("");
+}
+
+function parseMedicineCodeParts(code) {
+    const normalizedCode = normalizeMedicineCode(code);
+    const match = normalizedCode.match(/^([A-Z0-9]{3})(\d{3,})$/);
+    if (!match) return { prefix: "", serial: 0 };
+    return { prefix: match[1], serial: parseInt(match[2], 10) || 0 };
+}
+
 function parseNum(value) {
     if (value === null || value === undefined || value === "" || value === ".") return 0;
     const num = Number(value);
@@ -1301,6 +1325,80 @@ function updatePackQtyLabel() {
     const label = document.getElementById("modalPackQtyLabel");
     if (!label) return;
     label.textContent = getPackQtyLabel(modalFields.pack_type.value);
+}
+
+function getExistingCodeForMedicineName(name, { excludeIndex = null } = {}) {
+    const normalizedName = normalizeToken(name);
+    if (!normalizedName) return "";
+
+    const catalogMatch = medicineCatalog.find(entry =>
+        normalizeToken(entry.medicine_name) === normalizedName && normalizeMedicineCode(entry.medicine_code)
+    );
+    if (catalogMatch) {
+        return normalizeMedicineCode(catalogMatch.medicine_code);
+    }
+
+    for (let index = 0; index < purchaseItems.length; index += 1) {
+        if (excludeIndex !== null && index === excludeIndex) continue;
+        const item = purchaseItems[index];
+        if (!item) continue;
+        if (normalizeToken(item.medicine_name) !== normalizedName) continue;
+        const existingCode = normalizeMedicineCode(item.medicine_code);
+        if (existingCode) return existingCode;
+    }
+    return "";
+}
+
+function buildAutoMedicineCodeForName(name, { excludeIndex = null } = {}) {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) return "";
+
+    const existingCode = getExistingCodeForMedicineName(normalizedName, { excludeIndex });
+    if (existingCode) return existingCode;
+
+    const prefix = buildMedicineCodePrefix(normalizedName);
+    let maxSerial = 0;
+
+    medicineCatalog.forEach(entry => {
+        const parsed = parseMedicineCodeParts(entry.medicine_code);
+        if (parsed.prefix === prefix && parsed.serial > maxSerial) {
+            maxSerial = parsed.serial;
+        }
+    });
+
+    purchaseItems.forEach((item, index) => {
+        if (excludeIndex !== null && index === excludeIndex) return;
+        const parsed = parseMedicineCodeParts(item && item.medicine_code);
+        if (parsed.prefix === prefix && parsed.serial > maxSerial) {
+            maxSerial = parsed.serial;
+        }
+    });
+
+    return `${prefix}${String(maxSerial + 1).padStart(3, "0")}`;
+}
+
+function refreshModalMedicineCodePreview() {
+    const medicineName = String(modalFields.medicine_name.value || "").trim();
+    if (!medicineName) {
+        modalFields.medicine_code.value = "";
+        return;
+    }
+    const excludeIndex = Number.isInteger(editingPurchaseIndex) ? editingPurchaseIndex : null;
+    modalFields.medicine_code.value = buildAutoMedicineCodeForName(medicineName, { excludeIndex });
+}
+
+function syncDraftMedicineCodes() {
+    purchaseItems = purchaseItems.map((item, index) => {
+        if (!item) return item;
+        const medicineName = String(item.medicine_name || "").trim();
+        if (!medicineName) return item;
+        const existingCode = normalizeMedicineCode(item.medicine_code);
+        const nextCode = existingCode || buildAutoMedicineCodeForName(medicineName, { excludeIndex: index });
+        return {
+            ...item,
+            medicine_code: nextCode,
+        };
+    });
 }
 
 function computeItemMetrics(item) {
@@ -1382,6 +1480,7 @@ function buildMedicineCell(item) {
 
 function renderGrid() {
     if (!purchaseGridBody) return;
+    syncDraftMedicineCodes();
     if (!purchaseItems.length) {
         purchaseGridBody.innerHTML = `
             <tr class="purchase-empty-row">
@@ -1459,6 +1558,7 @@ function resetModalFields() {
     modalFields.notes.value = "";
     updatePackQtyLabel();
     updateModalMeta();
+    refreshModalMedicineCodePreview();
     clearSearchResults();
 }
 
@@ -1485,6 +1585,7 @@ function fillModalFromItem(item, title) {
     modalFields.notes.value = item.notes || "";
     updatePackQtyLabel();
     updateModalMeta();
+    refreshModalMedicineCodePreview();
 }
 
 function openPurchaseModal(prefillItem, index) {
@@ -1584,6 +1685,7 @@ function selectCatalogEntry(entry) {
     updatePackQtyLabel();
     updateModalMeta();
     modalMedicineSearch.value = entry.medicine_code || entry.medicine_name;
+    refreshModalMedicineCodePreview();
     clearSearchResults();
     modalFields.batch.focus();
 }
@@ -1660,6 +1762,7 @@ function validateModalItem() {
 }
 
 function collectModalItem() {
+    refreshModalMedicineCodePreview();
     return {
         medicine_code: normalizeMedicineCode(modalFields.medicine_code.value),
         medicine_name: String(modalFields.medicine_name.value || "").trim(),
@@ -1868,10 +1971,17 @@ modalFields.pack_type.addEventListener("change", updatePackQtyLabel);
 
 modalMedicineSearch.addEventListener("input", () => {
     const matches = getSearchMatches(modalMedicineSearch.value);
-    if (!normalizeMedicineCode(modalFields.medicine_code.value) && !modalFields.medicine_name.value.trim()) {
-        modalFields.medicine_name.value = String(modalMedicineSearch.value || "").trim();
+    const typedValue = String(modalMedicineSearch.value || "").trim();
+    const exactEntry = findCatalogByCodeOrName(typedValue, typedValue);
+    if (!exactEntry) {
+        modalFields.medicine_name.value = typedValue;
     }
+    refreshModalMedicineCodePreview();
     renderSearchResults(matches);
+});
+
+modalFields.medicine_name.addEventListener("input", () => {
+    refreshModalMedicineCodePreview();
 });
 
 modalMedicineSearch.addEventListener("keydown", event => {
@@ -1917,8 +2027,8 @@ purchaseRecentChips.addEventListener("click", event => {
     if (entry) {
         selectCatalogEntry(entry);
     } else {
-        modalFields.medicine_code.value = code;
         modalFields.medicine_name.value = name;
+        refreshModalMedicineCodePreview();
     }
 });
 
@@ -2002,6 +2112,7 @@ window.addEventListener("beforeunload", event => {
 setTodayIfEmpty();
 renderGrid();
 loadDraft();
+syncDraftMedicineCodes();
 updatePackQtyLabel();
 updateModalMeta();
 </script>
