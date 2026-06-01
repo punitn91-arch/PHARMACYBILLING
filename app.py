@@ -21,3 +21,13 @@ module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 app = module.app
+
+
+if __name__ == "__main__":
+    try:
+        port = int((os.environ.get("PORT") or "5000").strip())
+    except (TypeError, ValueError):
+        port = 5000
+    debug_flag = (os.environ.get("FLASK_DEBUG") or os.environ.get("DEBUG") or "1").strip().lower()
+    debug = debug_flag not in {"0", "false", "no", "off"}
+    app.run(host="0.0.0.0", port=port, debug=debug)

@@ -913,6 +913,81 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertIsNotNone(hold_bill.deleted_at)
             self.assertEqual(self.app_module.active_hold_bill_query().filter_by(id=hold_bill_id).count(), 0)
 
+    def test_hold_bill_post_saves_and_redirects(self):
+        self.login()
+        response = self.client.post(
+            "/billing/hold",
+            data={
+                "customer": "Saved Patient",
+                "mobile": "9000000000",
+                "doctor": "Dr. Save",
+                "gender": "MALE",
+                "payment_mode": "CASH",
+                "medicine_name": [""],
+                "qty": [""],
+                "batch_override[]": [""],
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/pending-bills", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            hold_bill = self.app_module.HoldBill.query.one()
+            normalized = self.app_module.normalize_hold_bill_data(hold_bill)
+            self.assertEqual(hold_bill.customer, "Saved Patient")
+            self.assertEqual(normalized["header"]["doctor"], "Dr. Save")
+            self.assertEqual(normalized["header"]["payment_mode"], "CASH")
+
+    def test_normalize_hold_bill_data_accepts_string_payload(self):
+        payload = {
+            "header": {
+                "customer": "Legacy Patient",
+                "mobile": "9000000000",
+                "doctor": "Dr. Legacy",
+                "gender": "FEMALE",
+                "sale_type": "sale",
+                "payment_mode": "UPI",
+            },
+            "items": [
+                {
+                    "name": "DOLO 650",
+                    "qty": 2,
+                    "mrp": 30,
+                    "discount_percent": 0,
+                    "net_amount": 60,
+                }
+            ],
+            "totals": {
+                "subtotal": 60,
+                "discount": 0,
+                "cgst": 1.5,
+                "sgst": 1.5,
+                "net_total": 60,
+                "rounded_amount": 60,
+            },
+        }
+
+        with self.app.app_context():
+            hold_bill = self.app_module.HoldBill(
+                customer="Legacy Patient",
+                mobile="9000000000",
+                doctor="Dr. Legacy",
+                gender="FEMALE",
+                data=self.app_module.serialize_json_text(payload),
+            )
+            self.db.session.add(hold_bill)
+            self.db.session.commit()
+            hold_bill_id = hold_bill.id
+
+            saved_hold_bill = self.app_module.HoldBill.query.get(hold_bill_id)
+            normalized = self.app_module.normalize_hold_bill_data(saved_hold_bill)
+
+        self.assertEqual(normalized["header"]["customer"], "Legacy Patient")
+        self.assertEqual(normalized["header"]["payment_mode"], "UPI")
+        self.assertEqual(len(normalized["items"]), 1)
+        self.assertEqual(normalized["items"][0]["name"], "DOLO 650")
+
     def test_appointment_delete_soft_archives_record(self):
         with self.app.app_context():
             patient = self._seed_patient(name="Delete Appt", mobile="9888877777")

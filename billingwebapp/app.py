@@ -7,6 +7,8 @@ import webbrowser
 import threading
 import os
 import secrets
+import subprocess
+import sys
 from decimal import Decimal, ROUND_HALF_UP
 try:
     from zoneinfo import ZoneInfo
@@ -120,10 +122,21 @@ except ImportError:  # pragma: no cover - script/local fallback
     )
 
 def open_browser():
+    launch_url = os.environ.get("APP_LAUNCH_URL", "http://127.0.0.1:5000").strip() or "http://127.0.0.1:5000"
     try:
-        webbrowser.open("http://127.0.0.1:5000")
+        if sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", launch_url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        webbrowser.open_new(launch_url)
     except Exception:
-        pass
+        try:
+            webbrowser.open_new(launch_url)
+        except Exception:
+            pass
 
 IS_PROD = bool(
     os.environ.get("RAILWAY_ENVIRONMENT")
@@ -485,6 +498,196 @@ def parse_json_text(payload):
         return json.loads(raw)
     except Exception:
         return {"raw": raw}
+
+
+def get_existing_table_columns(table_name):
+    try:
+        inspector = inspect(db.engine)
+        if not inspector.has_table(table_name):
+            return {}
+        return {column["name"]: column for column in inspector.get_columns(table_name)}
+    except Exception:
+        try:
+            pragma_rows = db.session.execute(text(f'PRAGMA table_info("{table_name}")')).fetchall()
+        except Exception:
+            return {}
+        return {
+            row[1]: {"name": row[1], "type": row[2]}
+            for row in pragma_rows
+        }
+
+
+def ensure_table_column_compat(table_name, column_name, column_def):
+    existing_columns = get_existing_table_columns(table_name)
+    if not existing_columns or column_name in existing_columns:
+        return False
+    db.session.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_def}'))
+    db.session.commit()
+    return True
+
+
+def get_column_type_name(column_meta):
+    if not isinstance(column_meta, dict):
+        return ""
+    column_type = column_meta.get("type")
+    if column_type is None:
+        return ""
+    return f"{column_type} {column_type.__class__.__name__}".strip().lower()
+
+
+def load_hold_bill_payload(raw_payload):
+    if isinstance(raw_payload, (dict, list)):
+        return raw_payload
+    if isinstance(raw_payload, str):
+        parsed = parse_json_text(raw_payload)
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return {}
+
+
+def hold_bill_payload_sql_expression(dialect_name, column_type_name):
+    if dialect_name == "postgresql":
+        if "jsonb" in column_type_name:
+            return 'CAST(:payload_text AS JSONB)'
+        if "json" in column_type_name:
+            return 'CAST(:payload_text AS JSON)'
+    return ':payload_text'
+
+
+def repair_hold_bill_schema_compat():
+    existing_columns = get_existing_table_columns("hold_bill")
+    if not existing_columns:
+        return False
+
+    changed = False
+    for column_name, column_def in (
+        ("customer", "TEXT"),
+        ("mobile", "TEXT"),
+        ("doctor", "TEXT"),
+        ("gender", "TEXT"),
+        ("data", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+        ("is_deleted", "BOOLEAN DEFAULT FALSE"),
+        ("deleted_at", "TIMESTAMP"),
+        ("deleted_by", "TEXT"),
+    ):
+        try:
+            changed = ensure_table_column_compat("hold_bill", column_name, column_def) or changed
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to add hold_bill.%s compatibility column", column_name)
+
+    existing_columns = get_existing_table_columns("hold_bill")
+    dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    data_column_type = get_column_type_name(existing_columns.get("data"))
+
+    if dialect_name == "postgresql" and data_column_type and "json" not in data_column_type:
+        try:
+            db.session.execute(text(
+                'ALTER TABLE "hold_bill" ALTER COLUMN "data" TYPE JSONB USING '
+                'CASE '
+                'WHEN "data" IS NULL OR BTRIM(CAST("data" AS TEXT)) = \'\' THEN NULL '
+                'ELSE CAST("data" AS JSONB) '
+                'END'
+            ))
+            db.session.commit()
+            changed = True
+            existing_columns = get_existing_table_columns("hold_bill")
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to convert hold_bill.data to JSONB; legacy fallback will be used.")
+
+    try:
+        if "created_at" in existing_columns:
+            db.session.execute(text(
+                'UPDATE "hold_bill" SET "created_at" = CURRENT_TIMESTAMP WHERE "created_at" IS NULL'
+            ))
+        if "is_deleted" in existing_columns:
+            db.session.execute(text(
+                'UPDATE "hold_bill" SET "is_deleted" = FALSE WHERE "is_deleted" IS NULL'
+            ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to backfill hold_bill compatibility defaults.")
+
+    return changed
+
+
+def upsert_hold_bill_compat(*, hold_bill_id=0, customer="", mobile="", doctor="", gender="", payload=None):
+    repair_hold_bill_schema_compat()
+    existing_columns = get_existing_table_columns("hold_bill")
+    if not existing_columns:
+        return False
+
+    dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    data_column_type = get_column_type_name(existing_columns.get("data"))
+    payload_expression = hold_bill_payload_sql_expression(dialect_name, data_column_type)
+    params = {
+        "hold_bill_id": hold_bill_id,
+        "customer": (customer or "").strip() or None,
+        "mobile": (mobile or "").strip() or None,
+        "doctor": (doctor or "").strip() or None,
+        "gender": (gender or "").strip() or None,
+        "payload_text": serialize_json_text(payload) or None,
+    }
+
+    try:
+        if hold_bill_id > 0:
+            assignments = []
+            for column_name in ("customer", "mobile", "doctor", "gender"):
+                if column_name in existing_columns:
+                    assignments.append(f'"{column_name}" = :{column_name}')
+            if "data" in existing_columns:
+                assignments.append(f'"data" = {payload_expression}')
+            if "is_deleted" in existing_columns:
+                assignments.append('"is_deleted" = FALSE')
+            if "deleted_at" in existing_columns:
+                assignments.append('"deleted_at" = NULL')
+            if "deleted_by" in existing_columns:
+                assignments.append('"deleted_by" = NULL')
+
+            if assignments:
+                result = db.session.execute(
+                    text(f'UPDATE "hold_bill" SET {", ".join(assignments)} WHERE "id" = :hold_bill_id'),
+                    params,
+                )
+                db.session.commit()
+                if (result.rowcount or 0) > 0:
+                    return True
+
+        insert_columns = []
+        insert_values = []
+        for column_name in ("customer", "mobile", "doctor", "gender"):
+            if column_name in existing_columns:
+                insert_columns.append(f'"{column_name}"')
+                insert_values.append(f':{column_name}')
+        if "data" in existing_columns:
+            insert_columns.append('"data"')
+            insert_values.append(payload_expression)
+        if "created_at" in existing_columns:
+            insert_columns.append('"created_at"')
+            insert_values.append("CURRENT_TIMESTAMP")
+        if "is_deleted" in existing_columns:
+            insert_columns.append('"is_deleted"')
+            insert_values.append("FALSE")
+
+        if not insert_columns:
+            return False
+
+        db.session.execute(
+            text(
+                f'INSERT INTO "hold_bill" ({", ".join(insert_columns)}) '
+                f'VALUES ({", ".join(insert_values)})'
+            ),
+            params,
+        )
+        db.session.commit()
+        return True
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Fallback hold bill persistence failed.")
+        return False
 
 
 def get_release_identifier():
@@ -1615,7 +1818,7 @@ def build_hold_totals_from_form(form, items):
     }
 
 def normalize_hold_bill_data(hold_bill):
-    payload = hold_bill.data if isinstance(hold_bill.data, (dict, list)) else {}
+    payload = load_hold_bill_payload(hold_bill.data)
     raw_items = []
     raw_draft_items = []
     totals = {}
@@ -2537,6 +2740,12 @@ with app.app_context():
         ensure_column("appointment", "is_deleted", "BOOLEAN DEFAULT FALSE")
         ensure_column("appointment", "deleted_at", "TIMESTAMP")
         ensure_column("appointment", "deleted_by", "TEXT")
+        ensure_column("hold_bill", "customer", "TEXT")
+        ensure_column("hold_bill", "mobile", "TEXT")
+        ensure_column("hold_bill", "doctor", "TEXT")
+        ensure_column("hold_bill", "gender", "TEXT")
+        ensure_column("hold_bill", "data", "TEXT")
+        ensure_column("hold_bill", "created_at", "TIMESTAMP")
         ensure_column("hold_bill", "is_deleted", "BOOLEAN DEFAULT FALSE")
         ensure_column("hold_bill", "deleted_at", "TIMESTAMP")
         ensure_column("hold_bill", "deleted_by", "TEXT")
@@ -2711,6 +2920,7 @@ with app.app_context():
             ))
             db.session.commit()
         ensure_runtime_indexes()
+        repair_hold_bill_schema_compat()
     except Exception:
         # If schema upgrade fails, app should still run
         db.session.rollback()
@@ -4533,26 +4743,38 @@ def hold_bill():
         "totals": build_hold_totals_from_form(request.form, items)
     }
 
-    hold_bill = active_hold_bill_query().filter(HoldBill.id == hold_bill_id).first() if hold_bill_id > 0 else None
-    if hold_bill:
-        hold_bill.customer = customer
-        hold_bill.mobile = mobile
-        hold_bill.doctor = doctor
-        hold_bill.gender = gender
-        hold_bill.data = payload
-        flash_msg = "Pending bill updated"
-    else:
-        hold_bill = HoldBill(
+    flash_msg = "Pending bill updated" if hold_bill_id > 0 else "Bill saved to Pending Bills"
+    try:
+        hold_bill = active_hold_bill_query().filter(HoldBill.id == hold_bill_id).first() if hold_bill_id > 0 else None
+        if hold_bill:
+            hold_bill.customer = customer
+            hold_bill.mobile = mobile
+            hold_bill.doctor = doctor
+            hold_bill.gender = gender
+            hold_bill.data = payload
+        else:
+            hold_bill = HoldBill(
+                customer=customer,
+                mobile=mobile,
+                doctor=doctor,
+                gender=gender,
+                data=payload
+            )
+            db.session.add(hold_bill)
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Primary hold bill persistence failed; attempting compatibility fallback.")
+        saved = upsert_hold_bill_compat(
+            hold_bill_id=hold_bill_id,
             customer=customer,
             mobile=mobile,
             doctor=doctor,
             gender=gender,
-            data=payload
+            payload=payload,
         )
-        db.session.add(hold_bill)
-        flash_msg = "Bill saved to Pending Bills"
-
-    db.session.commit()
+        if not saved:
+            raise
 
     flash(flash_msg, "info")
     return redirect("/pending-bills")
