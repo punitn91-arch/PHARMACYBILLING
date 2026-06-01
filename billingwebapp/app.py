@@ -575,8 +575,51 @@ def hold_bill_payload_sql_expression(dialect_name, column_type_name):
     return ':payload_text'
 
 
+def create_hold_bill_table_compat():
+    dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    if dialect_name == "postgresql":
+        db.session.execute(text(
+            'CREATE TABLE IF NOT EXISTS "hold_bill" ('
+            'id SERIAL PRIMARY KEY, '
+            'customer TEXT, '
+            'mobile TEXT, '
+            'doctor TEXT, '
+            'gender TEXT, '
+            'data JSONB, '
+            'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, '
+            'is_deleted BOOLEAN DEFAULT FALSE, '
+            'deleted_at TIMESTAMP, '
+            'deleted_by TEXT'
+            ')'
+        ))
+    else:
+        db.session.execute(text(
+            'CREATE TABLE IF NOT EXISTS "hold_bill" ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            'customer TEXT, '
+            'mobile TEXT, '
+            'doctor TEXT, '
+            'gender TEXT, '
+            'data TEXT, '
+            'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, '
+            'is_deleted BOOLEAN DEFAULT FALSE, '
+            'deleted_at TIMESTAMP, '
+            'deleted_by TEXT'
+            ')'
+        ))
+    db.session.commit()
+
+
 def repair_hold_bill_schema_compat():
     existing_columns = get_existing_table_columns("hold_bill")
+    if not existing_columns:
+        try:
+            create_hold_bill_table_compat()
+            existing_columns = get_existing_table_columns("hold_bill")
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to create missing hold_bill table.")
+            return False
     if not existing_columns:
         return False
 
@@ -1813,6 +1856,64 @@ def build_hold_rows_from_form(form, include_partial=False):
 
 def build_hold_items_from_form(form):
     return build_hold_rows_from_form(form, include_partial=False)
+
+
+def build_basic_hold_rows_from_form(form, include_partial=False):
+    rows = []
+    meds_list = form.getlist("medicine_name")
+    qty_list = form.getlist("qty[]") or form.getlist("qty")
+    batch_overrides = form.getlist("batch_override[]") or form.getlist("batch_override")
+    expiry_list = form.getlist("line_expiry[]")
+    qoh_list = form.getlist("line_qoh[]")
+    mrp_list = form.getlist("line_mrp[]")
+    discount_list = form.getlist("line_discount_percent[]")
+    net_list = form.getlist("line_net[]")
+
+    row_count = max(
+        len(meds_list),
+        len(qty_list),
+        len(batch_overrides),
+        len(expiry_list),
+        len(qoh_list),
+        len(mrp_list),
+        len(discount_list),
+        len(net_list),
+    )
+
+    for idx in range(row_count):
+        name = (meds_list[idx] if idx < len(meds_list) else "").strip().upper()
+        if not name:
+            continue
+        qty_val = to_int_safe(qty_list[idx] if idx < len(qty_list) else 0, 0)
+        if qty_val <= 0 and not include_partial:
+            continue
+        batch = (batch_overrides[idx] if idx < len(batch_overrides) else "").strip()
+        expiry = (expiry_list[idx] if idx < len(expiry_list) else "").strip()
+        qoh = to_float_safe(qoh_list[idx] if idx < len(qoh_list) else 0, 0)
+        mrp = to_float_safe(mrp_list[idx] if idx < len(mrp_list) else 0, 0)
+        discount_percent = to_float_safe(discount_list[idx] if idx < len(discount_list) else 0, 0)
+        net_amount = to_float_safe(net_list[idx] if idx < len(net_list) else 0, 0)
+        amount = qty_val * mrp
+        if net_amount <= 0:
+            net_amount = amount - (amount * discount_percent / 100)
+        discount_amount = amount - net_amount
+        if discount_amount < 0:
+            discount_amount = 0
+
+        rows.append({
+            "name": name,
+            "batch_mode": "MANUAL" if batch else "AUTO",
+            "batch": batch,
+            "expiry": expiry,
+            "qoh": round(qoh, 2),
+            "qty": qty_val,
+            "mrp": round(mrp, 2),
+            "discount_percent": round(discount_percent, 2),
+            "discount_amount": round(discount_amount, 2),
+            "net_amount": round(net_amount, 2),
+            "amount": round(amount, 2),
+        })
+    return rows
 
 def build_hold_totals_from_form(form, items):
     subtotal_raw = form.get("subtotal")
@@ -4733,8 +4834,6 @@ def return_invoice(id):
 @login_required
 @invoice_access_required
 def hold_bill():
-    items = build_hold_items_from_form(request.form)
-    draft_items = build_hold_rows_from_form(request.form, include_partial=True)
     hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0)
 
     customer = (request.form.get("customer") or "").strip()
@@ -4749,6 +4848,14 @@ def hold_bill():
         if hold_bill_id > 0:
             return redirect(url_for("billing", hold_bill_id=hold_bill_id))
         return redirect("/billing")
+
+    try:
+        items = build_hold_items_from_form(request.form)
+        draft_items = build_hold_rows_from_form(request.form, include_partial=True)
+    except Exception:
+        app.logger.exception("Primary hold bill payload build failed; using basic fallback rows.")
+        items = build_basic_hold_rows_from_form(request.form, include_partial=False)
+        draft_items = build_basic_hold_rows_from_form(request.form, include_partial=True)
 
     payload = {
         "header": {
@@ -4783,7 +4890,7 @@ def hold_bill():
             )
             db.session.add(hold_bill)
         db.session.commit()
-    except SQLAlchemyError:
+    except Exception:
         db.session.rollback()
         app.logger.exception("Primary hold bill persistence failed; attempting compatibility fallback.")
         saved = upsert_hold_bill_compat(
@@ -4795,7 +4902,10 @@ def hold_bill():
             payload=payload,
         )
         if not saved:
-            raise
+            flash("Pending bill save failed. Please retry once.", "danger")
+            if hold_bill_id > 0:
+                return redirect(url_for("billing", hold_bill_id=hold_bill_id))
+            return redirect("/billing")
 
     flash(flash_msg, "info")
     return redirect("/pending-bills")

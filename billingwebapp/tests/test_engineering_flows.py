@@ -1026,6 +1026,35 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(normalized["items"][0]["mrp"], 0.0)
         self.assertEqual(normalized["items"][0]["net_amount"], 0.0)
 
+    def test_hold_bill_post_recovers_when_table_is_missing(self):
+        with self.app.app_context():
+            self.db.session.execute(self.app_module.text('DROP TABLE IF EXISTS "hold_bill"'))
+            self.db.session.commit()
+
+        self.login()
+        response = self.client.post(
+            "/billing/hold",
+            data={
+                "customer": "Recovered Patient",
+                "mobile": "9111111111",
+                "doctor": "Dr. Recovery",
+                "gender": "Male",
+                "payment_mode": "CASH",
+                "medicine_name": [""],
+                "qty": [""],
+                "batch_override[]": [""],
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/pending-bills", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            rows = self.db.session.execute(
+                self.app_module.text('SELECT customer FROM "hold_bill" ORDER BY id DESC LIMIT 1')
+            ).fetchall()
+        self.assertEqual(rows[0][0], "Recovered Patient")
+
     def test_appointment_delete_soft_archives_record(self):
         with self.app.app_context():
             patient = self._seed_patient(name="Delete Appt", mobile="9888877777")
