@@ -988,6 +988,44 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(len(normalized["items"]), 1)
         self.assertEqual(normalized["items"][0]["name"], "DOLO 650")
 
+    def test_hold_bill_post_sanitizes_nan_numeric_values(self):
+        self.login()
+        response = self.client.post(
+            "/billing/hold",
+            data={
+                "customer": "Nan Patient",
+                "mobile": "9000000000",
+                "doctor": "Dr. Nan",
+                "gender": "MALE",
+                "payment_mode": "CASH",
+                "medicine_name": ["DOLO 650"],
+                "qty": ["1"],
+                "batch_override[]": [""],
+                "line_qoh[]": ["NaN"],
+                "line_mrp[]": ["NaN"],
+                "line_discount_percent[]": ["NaN"],
+                "line_net[]": ["NaN"],
+                "subtotal": "NaN",
+                "discount": "NaN",
+                "cgst": "NaN",
+                "sgst": "NaN",
+                "net_total": "NaN",
+                "rounded_amount": "NaN",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/pending-bills", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            hold_bill = self.app_module.HoldBill.query.order_by(self.app_module.HoldBill.id.desc()).first()
+            normalized = self.app_module.normalize_hold_bill_data(hold_bill)
+
+        self.assertEqual(normalized["totals"]["subtotal"], 0.0)
+        self.assertEqual(normalized["totals"]["net_total"], 0.0)
+        self.assertEqual(normalized["items"][0]["mrp"], 0.0)
+        self.assertEqual(normalized["items"][0]["net_amount"], 0.0)
+
     def test_appointment_delete_soft_archives_record(self):
         with self.app.app_context():
             patient = self._seed_patient(name="Delete Appt", mobile="9888877777")

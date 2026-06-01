@@ -3,6 +3,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
 import json
+import math
 import webbrowser
 import threading
 import os
@@ -478,17 +479,37 @@ def to_int_safe(val, default=0):
 
 def to_float_safe(val, default=0.0):
     try:
-        return float(str(val).strip())
+        parsed = float(str(val).strip())
+        if not math.isfinite(parsed):
+            return default
+        return parsed
     except (TypeError, ValueError):
         return default
+
+
+def sanitize_json_payload(payload):
+    if isinstance(payload, float):
+        return payload if math.isfinite(payload) else 0.0
+    if isinstance(payload, Decimal):
+        as_float = float(payload)
+        return as_float if math.isfinite(as_float) else 0.0
+    if isinstance(payload, dict):
+        return {
+            str(key): sanitize_json_payload(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, (list, tuple, set)):
+        return [sanitize_json_payload(item) for item in payload]
+    return payload
 
 def serialize_json_text(payload):
     if payload in (None, "", [], {}):
         return ""
+    cleaned_payload = sanitize_json_payload(payload)
     try:
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        return json.dumps(cleaned_payload, ensure_ascii=False, sort_keys=True, default=str, allow_nan=False)
     except Exception:
-        return json.dumps({"value": str(payload)}, ensure_ascii=False, sort_keys=True)
+        return json.dumps({"value": str(cleaned_payload)}, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 def parse_json_text(payload):
     raw = (payload or "").strip()
