@@ -518,6 +518,94 @@ def sync_medicine_codes_to_current_names():
     }
 
 
+def build_scoped_medicine_code_sync(names):
+    try:
+        db.session.flush()
+    except Exception:
+        db.session.rollback()
+        raise
+
+    normalized_names = []
+    seen_names = set()
+    for name in names or []:
+        normalized_name = normalize_medicine_name(name)
+        if not normalized_name:
+            continue
+        name_key = normalized_name.casefold()
+        if name_key in seen_names:
+            continue
+        seen_names.add(name_key)
+        normalized_names.append(normalized_name)
+
+    if not normalized_names:
+        return {"medicine_updates": 0, "purchase_item_updates": 0, "group_count": 0}
+
+    all_codes = []
+    for code_value in db.session.query(Medicine.medicine_code).all():
+        normalized_code = normalize_medicine_code(code_value[0])
+        if normalized_code:
+            all_codes.append(normalized_code)
+    for code_value in db.session.query(VendorPurchaseItem.medicine_code).all():
+        normalized_code = normalize_medicine_code(code_value[0])
+        if normalized_code:
+            all_codes.append(normalized_code)
+
+    max_serial_by_prefix = {}
+    for code in all_codes:
+        prefix, serial = parse_auto_medicine_code(code)
+        if prefix and serial > max_serial_by_prefix.get(prefix, 0):
+            max_serial_by_prefix[prefix] = serial
+
+    medicine_updates = 0
+    purchase_item_updates = 0
+
+    for normalized_name in normalized_names:
+        name_key = normalized_name.casefold()
+        prefix = build_medicine_code_prefix(normalized_name)
+        target_code = ""
+
+        medicine_rows = Medicine.query.filter(
+            db.func.lower(db.func.trim(db.func.coalesce(Medicine.name, ""))) == name_key
+        ).order_by(Medicine.id.asc()).all()
+        purchase_rows = VendorPurchaseItem.query.filter(
+            db.func.lower(db.func.trim(db.func.coalesce(VendorPurchaseItem.medicine_name, ""))) == name_key
+        ).order_by(VendorPurchaseItem.id.asc()).all()
+
+        existing_codes = []
+        for row in medicine_rows:
+            existing_codes.append(normalize_medicine_code(getattr(row, "medicine_code", "")))
+        for row in purchase_rows:
+            existing_codes.append(normalize_medicine_code(getattr(row, "medicine_code", "")))
+
+        auto_candidates = []
+        for code in existing_codes:
+            code_prefix, serial = parse_auto_medicine_code(code)
+            if code_prefix == prefix and serial > 0:
+                auto_candidates.append((serial, code))
+        auto_candidates.sort()
+        if auto_candidates:
+            target_code = auto_candidates[0][1]
+        else:
+            next_serial = max_serial_by_prefix.get(prefix, 0) + 1
+            target_code = f"{prefix}{next_serial:03d}"
+            max_serial_by_prefix[prefix] = next_serial
+
+        for row in medicine_rows:
+            if normalize_medicine_code(getattr(row, "medicine_code", "")) != target_code:
+                row.medicine_code = target_code
+                medicine_updates += 1
+        for row in purchase_rows:
+            if normalize_medicine_code(getattr(row, "medicine_code", "")) != target_code:
+                row.medicine_code = target_code
+                purchase_item_updates += 1
+
+    return {
+        "medicine_updates": medicine_updates,
+        "purchase_item_updates": purchase_item_updates,
+        "group_count": len(normalized_names),
+    }
+
+
 def persist_medicine_code_sync():
     try:
         sync_result = sync_medicine_codes_to_current_names()
@@ -526,6 +614,21 @@ def persist_medicine_code_sync():
     except Exception:
         db.session.rollback()
         app.logger.exception("Unable to persist medicine code sync.")
+        return {
+            "medicine_updates": 0,
+            "purchase_item_updates": 0,
+            "group_count": 0,
+        }
+
+
+def persist_medicine_code_sync_for_names(names):
+    try:
+        sync_result = build_scoped_medicine_code_sync(names)
+        db.session.commit()
+        return sync_result
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to persist scoped medicine code sync.")
         return {
             "medicine_updates": 0,
             "purchase_item_updates": 0,
@@ -4682,8 +4785,7 @@ def add_medicine():
 
         db.session.add(med)
         db.session.flush()
-        sync_medicine_codes_to_current_names()
-        db.session.commit()
+        persist_medicine_code_sync_for_names([name])
 
         history = StockHistory(
             medicine_id=med.id,
@@ -4753,7 +4855,7 @@ def edit_medicine(id):
         if pack_qty_raw:
             med.pack_qty = pack_qty
         db.session.flush()
-        sync_medicine_codes_to_current_names()
+        persist_medicine_code_sync_for_names([name])
 
         change = med.qty - old_qty
 
@@ -6424,8 +6526,8 @@ def add_vendor_purchase(id):
             balance_add = 0
         vendor.outstanding_balance = (vendor.outstanding_balance or 0) + balance_add
 
-    sync_medicine_codes_to_current_names()
-    db.session.commit()
+    touched_names = [item["name"] for item in line_items]
+    persist_medicine_code_sync_for_names(touched_names)
     success_message = "Purchase saved. Stock updated."
     if accepts_json:
         return jsonify({
@@ -6757,8 +6859,7 @@ def edit_vendor_purchase_item(item_id):
             )
             db.session.add(history)
 
-        sync_medicine_codes_to_current_names()
-        db.session.commit()
+        persist_medicine_code_sync_for_names([name])
         flash("Purchase item updated successfully", "success")
         return redirect(f"/vendor/edit/{item.vendor_id}")
 
