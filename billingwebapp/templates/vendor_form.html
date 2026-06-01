@@ -1046,7 +1046,7 @@ td {
         <div class="purchase-modal-header">
             <div>
                 <h4 id="purchaseModalTitle">Add Medicine</h4>
-                <p>Code, barcode and master data auto-fill instantly. Batch, expiry and rates stay operator-controlled.</p>
+                <p>Search existing medicines if available, or type a fresh medicine name. Code auto-generates from the current medicine name and syncs across all batches.</p>
             </div>
             <button type="button" class="purchase-modal-close" id="closePurchaseModal" aria-label="Close">&times;</button>
         </div>
@@ -1080,11 +1080,11 @@ td {
             <div class="purchase-modal-grid">
                 <div>
                     <label for="modalMedicineCode">Medicine Code</label>
-                    <input type="text" id="modalMedicineCode" placeholder="e.g. MED001">
+                    <input type="text" id="modalMedicineCode" placeholder="Auto-generated on save" readonly>
                 </div>
                 <div>
                     <label for="modalMedicineName">Medicine Name</label>
-                    <input type="text" id="modalMedicineName" placeholder="Auto-filled from code" readonly>
+                    <input type="text" id="modalMedicineName" placeholder="Type or confirm medicine name" autocomplete="off">
                 </div>
                 <div>
                     <label for="modalBarcode">Barcode</label>
@@ -1229,7 +1229,7 @@ const summaryEls = {
 const draftStorageKey = `vendor-purchase-draft-${vendorId}`;
 const modalFocusOrder = [
     modalMedicineSearch,
-    modalFields.medicine_code,
+    modalFields.medicine_name,
     modalFields.batch,
     modalFields.expiry,
     modalFields.pack_type,
@@ -1643,7 +1643,6 @@ function updateModalMeta() {
 }
 
 function validateModalItem() {
-    const medicineCode = normalizeMedicineCode(modalFields.medicine_code.value);
     const medicineName = String(modalFields.medicine_name.value || "").trim();
     const batch = String(modalFields.batch.value || "").trim();
     const expiry = String(modalFields.expiry.value || "").trim();
@@ -1651,8 +1650,7 @@ function validateModalItem() {
     const packQty = String(modalFields.pack_qty.value || "").trim();
     const qty = parseNum(modalFields.qty.value);
 
-    if (!medicineCode) return "Medicine code is required.";
-    if (!medicineName) return "Medicine name must be auto-filled from a valid code.";
+    if (!medicineName) return "Medicine name is required.";
     if (!batch) return "Batch is required.";
     if (!expiry) return "Expiry date is required.";
     if (!packType) return "Pack type is required.";
@@ -1870,6 +1868,9 @@ modalFields.pack_type.addEventListener("change", updatePackQtyLabel);
 
 modalMedicineSearch.addEventListener("input", () => {
     const matches = getSearchMatches(modalMedicineSearch.value);
+    if (!normalizeMedicineCode(modalFields.medicine_code.value) && !modalFields.medicine_name.value.trim()) {
+        modalFields.medicine_name.value = String(modalMedicineSearch.value || "").trim();
+    }
     renderSearchResults(matches);
 });
 

@@ -142,6 +142,9 @@ class EngineeringFlowTests(unittest.TestCase):
         self.db.session.commit()
         return vendor, purchase, medicine
 
+    def _expected_auto_code(self, name, serial=1):
+        return f"{self.app_module.build_medicine_code_prefix(name)}{serial:03d}"
+
     def test_billing_flow_creates_invoice_and_updates_stock(self):
         with self.app.app_context():
             self._seed_patient()
@@ -229,11 +232,12 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
 
         with self.app.app_context():
+            expected_code = self._expected_auto_code("CALCITAB")
             medicine = self.app_module.Medicine.query.filter_by(name="CALCITAB", batch="C100").one()
             purchase_item = self.app_module.VendorPurchaseItem.query.one()
-            self.assertEqual(medicine.medicine_code, "MED-CALCI")
+            self.assertEqual(medicine.medicine_code, expected_code)
             self.assertEqual(medicine.barcode, "BARCODE-12345")
-            self.assertEqual(purchase_item.medicine_code, "MED-CALCI")
+            self.assertEqual(purchase_item.medicine_code, expected_code)
             self.assertEqual(purchase_item.barcode, "BARCODE-12345")
 
     def test_vendor_purchase_resolves_existing_medicine_name_from_code(self):
@@ -287,14 +291,15 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
 
         with self.app.app_context():
+            expected_code = self._expected_auto_code("CALCITAB D3 LIQUID 5 ML 1X1")
             new_batch = self.app_module.Medicine.query.filter_by(batch="NEW200").one()
             purchase_item = self.app_module.VendorPurchaseItem.query.order_by(
                 self.app_module.VendorPurchaseItem.id.desc()
             ).first()
             self.assertEqual(new_batch.name, "CALCITAB D3 LIQUID 5 ML 1X1")
-            self.assertEqual(new_batch.medicine_code, "MED-D3LQ")
+            self.assertEqual(new_batch.medicine_code, expected_code)
             self.assertEqual(purchase_item.medicine_name, "CALCITAB D3 LIQUID 5 ML 1X1")
-            self.assertEqual(purchase_item.medicine_code, "MED-D3LQ")
+            self.assertEqual(purchase_item.medicine_code, expected_code)
 
     def test_vendor_purchase_accepts_ajax_json_purchase_grid_payload(self):
         with self.app.app_context():
@@ -368,12 +373,14 @@ class EngineeringFlowTests(unittest.TestCase):
             purchase = self.app_module.VendorPurchase.query.one()
             purchase_item = self.app_module.VendorPurchaseItem.query.one()
             saved_medicine = self.app_module.Medicine.query.filter_by(batch="NEW-1").one()
+            expected_code = self._expected_auto_code("DOLO 650")
             self.assertEqual(purchase.notes, "Main purchase note")
             self.assertEqual(purchase_item.notes, "Fast lane item")
-            self.assertEqual(saved_medicine.medicine_code, "MED-DOLO650")
+            self.assertEqual(saved_medicine.medicine_code, expected_code)
+            self.assertEqual(purchase_item.medicine_code, expected_code)
             self.assertEqual(saved_medicine.qty, 22)
 
-    def test_vendor_form_renders_medicine_name_as_readonly_auto_fill(self):
+    def test_vendor_form_renders_auto_code_purchase_builder_for_manual_medicine_entry(self):
         with self.app.app_context():
             vendor = self.app_module.Vendor(name="Readonly Vendor", is_active=True)
             self.db.session.add(vendor)
@@ -387,7 +394,8 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn(b'Add Medicine', response.data)
         self.assertIn(b'Live Purchase Grid', response.data)
         self.assertIn(b'id="purchaseModal"', response.data)
-        self.assertIn(b'Auto-filled from code', response.data)
+        self.assertIn(b'Auto-generated on save', response.data)
+        self.assertIn(b'Type or confirm medicine name', response.data)
         self.assertIn(b"purchase_items_json", response.data)
 
     def test_vendor_form_hides_address_bank_and_payment_sections_but_preserves_existing_values(self):
@@ -469,7 +477,7 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(vendor.notes, "Old vendor note")
             self.assertTrue(vendor.is_active)
 
-    def test_vendor_purchase_blocks_manual_name_when_code_missing_or_unknown(self):
+    def test_vendor_purchase_auto_generates_code_for_manual_or_unknown_entries(self):
         with self.app.app_context():
             vendor = self.app_module.Vendor(name="Strict Code Vendor", is_active=True)
             self.db.session.add(vendor)
@@ -502,10 +510,9 @@ class EngineeringFlowTests(unittest.TestCase):
                 "gst_percent": ["0"],
                 "discount_percent": ["0"],
             },
-            follow_redirects=True,
+            follow_redirects=False,
         )
-        self.assertEqual(missing_code_response.status_code, 200)
-        self.assertIn(b"Medicine code is required for each purchase row", missing_code_response.data)
+        self.assertEqual(missing_code_response.status_code, 302)
 
         unknown_code_response = self.client.post(
             f"/vendor/{vendor_id}/purchase",
@@ -515,7 +522,7 @@ class EngineeringFlowTests(unittest.TestCase):
                 "payment_mode": "CASH",
                 "payment_status": "Paid",
                 "paid_amount": "0",
-                "medicine_name": [""],
+                "medicine_name": ["MYSTERY MED"],
                 "medicine_code": ["MED-UNKNOWN"],
                 "barcode": [""],
                 "composition": [""],
@@ -532,15 +539,100 @@ class EngineeringFlowTests(unittest.TestCase):
                 "gst_percent": ["0"],
                 "discount_percent": ["0"],
             },
-            follow_redirects=True,
+            follow_redirects=False,
         )
-        self.assertEqual(unknown_code_response.status_code, 200)
-        self.assertIn(b"was not found in Medicine Master", unknown_code_response.data)
+        self.assertEqual(unknown_code_response.status_code, 302)
 
         with self.app.app_context():
-            self.assertEqual(self.app_module.VendorPurchase.query.count(), 0)
-            self.assertEqual(self.app_module.VendorPurchaseItem.query.count(), 0)
-            self.assertEqual(self.app_module.Medicine.query.count(), 0)
+            self.assertEqual(self.app_module.VendorPurchase.query.count(), 2)
+            generated_names = {
+                med.name: med.medicine_code
+                for med in self.app_module.Medicine.query.order_by(self.app_module.Medicine.name.asc()).all()
+            }
+            self.assertEqual(generated_names["MANUAL MED"], self._expected_auto_code("MANUAL MED"))
+            self.assertEqual(generated_names["MYSTERY MED"], self._expected_auto_code("MYSTERY MED"))
+
+    def test_sync_medicine_codes_to_current_names_replaces_manual_codes_across_batches(self):
+        with self.app.app_context():
+            med_one = self.app_module.Medicine(
+                name="DOLO 650",
+                medicine_code="MED0001",
+                batch="D-1",
+                expiry="2027-12-31",
+                mrp=35.0,
+                qty=5,
+                discount_percent=5,
+                is_active=True,
+            )
+            med_two = self.app_module.Medicine(
+                name="DOLO 650",
+                medicine_code="MED0099",
+                batch="D-2",
+                expiry="2027-12-31",
+                mrp=35.0,
+                qty=8,
+                discount_percent=5,
+                is_active=True,
+            )
+            self.db.session.add_all([med_one, med_two])
+            self.db.session.flush()
+            purchase_item = self.app_module.VendorPurchaseItem(
+                purchase_id=1,
+                vendor_id=1,
+                medicine_id=med_one.id,
+                medicine_name="DOLO 650",
+                medicine_code="MED0001",
+                batch="D-1",
+                expiry="12/2027",
+                qty=2,
+                free_qty=0,
+                remaining_qty=2,
+                purchase_rate=20,
+                mrp=35,
+                gst_percent=0,
+                discount_percent=0,
+                total_value=40,
+            )
+            self.db.session.add(purchase_item)
+            self.db.session.commit()
+
+            sync_result = self.app_module.sync_medicine_codes_to_current_names()
+            self.db.session.commit()
+
+            refreshed_one = self.app_module.Medicine.query.filter_by(batch="D-1").one()
+            refreshed_two = self.app_module.Medicine.query.filter_by(batch="D-2").one()
+            refreshed_item = self.app_module.VendorPurchaseItem.query.one()
+            expected_code = self._expected_auto_code("DOLO 650")
+
+        self.assertGreaterEqual(sync_result["medicine_updates"], 2)
+        self.assertEqual(refreshed_one.medicine_code, expected_code)
+        self.assertEqual(refreshed_two.medicine_code, expected_code)
+        self.assertEqual(refreshed_item.medicine_code, expected_code)
+
+    def test_add_medicine_auto_generates_code_from_current_name(self):
+        self.login()
+        response = self.client.post(
+            "/medicines/add",
+            data={
+                "name": "CALPOL 650",
+                "medicine_code": "MED9999",
+                "batch": "CP-1",
+                "barcode": "",
+                "expiry": "2027-12-31",
+                "pack_type": "Strip",
+                "pack_qty": "15",
+                "mrp": "32",
+                "discount_percent": "0",
+                "reorder_level": "10",
+                "qty": "6",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            med = self.app_module.Medicine.query.filter_by(name="CALPOL 650", batch="CP-1").one()
+            self.assertEqual(med.medicine_code, self._expected_auto_code("CALPOL 650"))
 
     def test_return_flow_restores_stock_and_purchase_remaining(self):
         with self.app.app_context():

@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
 import json
 import math
+import re
 import webbrowser
 import threading
 import os
@@ -390,6 +391,131 @@ def normalize_medicine_name(value):
 
 def normalize_medicine_code(value):
     return "".join(str(value or "").strip().upper().split())
+
+
+AUTO_MEDICINE_CODE_RE = re.compile(r"^([A-Z0-9]{3})(\d{3,})$")
+
+
+def build_medicine_code_prefix(name):
+    normalized_name = normalize_medicine_name(name).upper()
+    if not normalized_name:
+        return "MED"
+
+    letters = [char for char in normalized_name if char.isalpha()]
+    prefix_chars = letters[:3]
+    if len(prefix_chars) < 3:
+        digits = [char for char in normalized_name if char.isdigit()]
+        prefix_chars.extend(digits[: max(0, 3 - len(prefix_chars))])
+    while len(prefix_chars) < 3:
+        prefix_chars.append("X")
+    return "".join(prefix_chars[:3])
+
+
+def parse_auto_medicine_code(code):
+    normalized_code = normalize_medicine_code(code)
+    if not normalized_code:
+        return "", 0
+    match = AUTO_MEDICINE_CODE_RE.fullmatch(normalized_code)
+    if not match:
+        return "", 0
+    return match.group(1), to_int_safe(match.group(2), 0)
+
+
+def normalize_medicine_name_key(name):
+    normalized_name = normalize_medicine_name(name)
+    return normalized_name.casefold()
+
+
+def sync_medicine_codes_to_current_names():
+    try:
+        db.session.flush()
+    except Exception:
+        db.session.rollback()
+        raise
+
+    medicines = Medicine.query.order_by(Medicine.id.asc()).all()
+    if not medicines:
+        return {"medicine_updates": 0, "purchase_item_updates": 0, "group_count": 0}
+
+    groups = {}
+    for med in medicines:
+        normalized_name = normalize_medicine_name(getattr(med, "name", ""))
+        if not normalized_name:
+            continue
+        group_key = normalize_medicine_name_key(normalized_name)
+        group = groups.setdefault(group_key, {
+            "name": normalized_name,
+            "prefix": build_medicine_code_prefix(normalized_name),
+            "medicines": [],
+            "earliest_id": getattr(med, "id", 0) or 0,
+        })
+        group["medicines"].append(med)
+        med_id = getattr(med, "id", 0) or 0
+        if not group["earliest_id"] or (med_id and med_id < group["earliest_id"]):
+            group["earliest_id"] = med_id
+
+    sorted_groups = sorted(
+        groups.values(),
+        key=lambda group: (group.get("earliest_id", 0), group.get("name", "").lower())
+    )
+
+    used_codes = set()
+    used_serials_by_prefix = {}
+    code_map = {}
+
+    for group in sorted_groups:
+        prefix = group["prefix"]
+        candidates = []
+        for med in group["medicines"]:
+            code_prefix, serial = parse_auto_medicine_code(getattr(med, "medicine_code", ""))
+            if code_prefix == prefix and serial > 0:
+                candidates.append((serial, f"{code_prefix}{serial:03d}"))
+        candidates.sort()
+        for serial, candidate_code in candidates:
+            used_serials = used_serials_by_prefix.setdefault(prefix, set())
+            if candidate_code in used_codes or serial in used_serials:
+                continue
+            group["target_code"] = candidate_code
+            used_codes.add(candidate_code)
+            used_serials.add(serial)
+            break
+
+    for group in sorted_groups:
+        if group.get("target_code"):
+            continue
+        prefix = group["prefix"]
+        used_serials = used_serials_by_prefix.setdefault(prefix, set())
+        next_serial = 1
+        while next_serial in used_serials:
+            next_serial += 1
+        target_code = f"{prefix}{next_serial:03d}"
+        group["target_code"] = target_code
+        used_codes.add(target_code)
+        used_serials.add(next_serial)
+
+    medicine_updates = 0
+    for group in sorted_groups:
+        code_map[normalize_medicine_name_key(group["name"])] = group["target_code"]
+        for med in group["medicines"]:
+            if normalize_medicine_code(getattr(med, "medicine_code", "")) != group["target_code"]:
+                med.medicine_code = group["target_code"]
+                medicine_updates += 1
+
+    purchase_item_updates = 0
+    for item in VendorPurchaseItem.query.order_by(VendorPurchaseItem.id.asc()).all():
+        name_key = normalize_medicine_name_key(getattr(item, "medicine_name", ""))
+        target_code = code_map.get(name_key)
+        if not target_code:
+            continue
+        if normalize_medicine_code(getattr(item, "medicine_code", "")) != target_code:
+            item.medicine_code = target_code
+            purchase_item_updates += 1
+
+    return {
+        "medicine_updates": medicine_updates,
+        "purchase_item_updates": purchase_item_updates,
+        "group_count": len(sorted_groups),
+    }
 
 
 def build_medicine_name_suggestions(medicines):
@@ -2992,15 +3118,22 @@ def resolve_medicine_code_mapping(medicine_code, exclude_medicine_id=None):
 
 
 def find_medicine_code_template(name, pack_type="", pack_qty=None, exclude_medicine_id=None):
-    template = find_medicine_discount_template(
-        name,
-        pack_type=pack_type,
-        pack_qty=pack_qty,
-        exclude_medicine_id=exclude_medicine_id,
-    )
-    if not template:
+    normalized_name = normalize_medicine_name(name)
+    if not normalized_name:
         return ""
-    return normalize_medicine_code(getattr(template, "medicine_code", ""))
+
+    query = Medicine.query.filter(
+        db.func.lower(db.func.trim(db.func.coalesce(Medicine.name, ""))) == normalized_name.lower()
+    )
+    if exclude_medicine_id:
+        query = query.filter(Medicine.id != exclude_medicine_id)
+
+    template = query.order_by(Medicine.id.asc()).first()
+    if template:
+        existing_code = normalize_medicine_code(getattr(template, "medicine_code", ""))
+        if existing_code:
+            return existing_code
+    return f"{build_medicine_code_prefix(normalized_name)}001"
 
 
 def propagate_medicine_code_to_matching_batches(
@@ -3011,35 +3144,10 @@ def propagate_medicine_code_to_matching_batches(
     exclude_medicine_id=None,
     previous_code="",
 ):
-    normalized_name = normalize_medicine_name(name)
-    normalized_code = normalize_medicine_code(medicine_code)
-    previous_code = normalize_medicine_code(previous_code)
-    if not normalized_name or not normalized_code:
+    if not normalize_medicine_name(name):
         return 0
-
-    query = Medicine.query.filter(
-        db.func.lower(db.func.trim(db.func.coalesce(Medicine.name, ""))) == normalized_name.lower()
-    )
-    if exclude_medicine_id:
-        query = query.filter(Medicine.id != exclude_medicine_id)
-
-    normalized_pack_type = (pack_type or "").strip().lower()
-    if normalized_pack_type:
-        query = query.filter(
-            db.func.lower(db.func.coalesce(Medicine.pack_type, "")) == normalized_pack_type
-        )
-    if pack_qty is not None:
-        query = query.filter(Medicine.pack_qty == pack_qty)
-
-    updated = 0
-    for med in query.all():
-        existing_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
-        if existing_code and existing_code not in {normalized_code, previous_code}:
-            continue
-        if existing_code != normalized_code:
-            med.medicine_code = normalized_code
-            updated += 1
-    return updated
+    sync_result = sync_medicine_codes_to_current_names()
+    return to_int_safe(sync_result.get("medicine_updates"), 0)
 
 
 def find_medicine_discount_template(name, pack_type="", pack_qty=None, exclude_medicine_id=None):
@@ -3537,6 +3645,7 @@ with app.app_context():
             ))
             db.session.commit()
         ensure_runtime_indexes()
+        sync_medicine_codes_to_current_names()
         repair_hold_bill_schema_compat()
         repair_pending_bill_store_compat()
         sync_pending_bill_store()
@@ -4525,21 +4634,8 @@ def add_medicine():
         name = (request.form.get("name") or "").strip()
         batch = (request.form.get("batch") or "").strip()
         expiry = (request.form.get("expiry") or "").strip()
-        medicine_code = normalize_medicine_code(request.form.get("medicine_code"))
         if not name or not batch or not expiry:
             flash("Name, batch and expiry are required", "danger")
-            return redirect("/medicines/add")
-        code_name, canonical_code_name, code_error = resolve_medicine_code_mapping(medicine_code)
-        if code_error:
-            flash(code_error, "danger")
-            return redirect("/medicines/add")
-        normalized_name = normalize_medicine_name(name)
-        if canonical_code_name and canonical_code_name.casefold() != normalized_name.casefold():
-            flash(
-                f"Medicine code {code_name} is already linked to {canonical_code_name}. "
-                "Use the same medicine name for this code.",
-                "danger"
-            )
             return redirect("/medicines/add")
         qty = to_int(request.form.get("qty"))
         pack_type = (request.form.get("pack_type") or "").strip()
@@ -4555,7 +4651,7 @@ def add_medicine():
 
         med = Medicine(
             name=name,
-            medicine_code=medicine_code,
+            medicine_code="",
             batch=batch,
             mrp=to_float(request.form.get("mrp")),
             qty=qty,
@@ -4569,12 +4665,8 @@ def add_medicine():
         )
 
         db.session.add(med)
-        propagate_medicine_code_to_matching_batches(
-            name=name,
-            pack_type=pack_type,
-            pack_qty=pack_qty,
-            medicine_code=medicine_code,
-        )
+        db.session.flush()
+        sync_medicine_codes_to_current_names()
         db.session.commit()
 
         history = StockHistory(
@@ -4623,28 +4715,10 @@ def edit_medicine(id):
         name = (request.form.get("name") or "").strip()
         batch = (request.form.get("batch") or "").strip()
         expiry = (request.form.get("expiry") or "").strip()
-        previous_medicine_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
-        medicine_code = normalize_medicine_code(request.form.get("medicine_code"))
         if not name or not batch or not expiry:
             flash("Name, batch and expiry are required", "danger")
             return redirect(request.url)
-        code_name, canonical_code_name, code_error = resolve_medicine_code_mapping(
-            medicine_code,
-            exclude_medicine_id=med.id
-        )
-        if code_error:
-            flash(code_error, "danger")
-            return redirect(request.url)
-        normalized_name = normalize_medicine_name(name)
-        if canonical_code_name and canonical_code_name.casefold() != normalized_name.casefold():
-            flash(
-                f"Medicine code {code_name} is already linked to {canonical_code_name}. "
-                "Use the same medicine name for this code.",
-                "danger"
-            )
-            return redirect(request.url)
         med.name = name
-        med.medicine_code = medicine_code
         med.batch = batch
         med.expiry = expiry
         med.mrp = to_float(request.form.get("mrp"))
@@ -4662,15 +4736,8 @@ def edit_medicine(id):
             med.pack_type = pack_type
         if pack_qty_raw:
             med.pack_qty = pack_qty
-
-        propagate_medicine_code_to_matching_batches(
-            name=name,
-            pack_type=pack_type,
-            pack_qty=pack_qty,
-            medicine_code=medicine_code,
-            exclude_medicine_id=med.id,
-            previous_code=previous_medicine_code,
-        )
+        db.session.flush()
+        sync_medicine_codes_to_current_names()
 
         change = med.qty - old_qty
 
@@ -6166,18 +6233,15 @@ def add_vendor_purchase(id):
         )
         if not row_has_data:
             continue
-        if not medicine_code:
-            return purchase_error("Medicine code is required for each purchase row")
-
-        resolved_code, canonical_code_name, code_error = resolve_medicine_code_mapping(medicine_code)
-        if code_error:
-            return purchase_error(code_error)
-        if not canonical_code_name:
-            return purchase_error(
-                f"Medicine code {resolved_code} was not found in Medicine Master. "
-                "Add this medicine there first, then use the code here."
-            )
-        name = canonical_code_name
+        resolved_code = medicine_code
+        canonical_code_name = ""
+        if medicine_code and not entered_name:
+            resolved_code, canonical_code_name, code_error = resolve_medicine_code_mapping(medicine_code)
+            if code_error:
+                return purchase_error(code_error)
+        name = entered_name or canonical_code_name
+        if not name:
+            return purchase_error("Medicine name is required for each purchase row")
         if not batch or not expiry:
             return purchase_error(f"Batch and expiry required for {name}")
         if qty <= 0:
@@ -6200,7 +6264,7 @@ def add_vendor_purchase(id):
 
         line_items.append({
             "name": name,
-            "medicine_code": resolved_code or find_medicine_code_template(name, pack_type, pack_qty),
+            "medicine_code": resolved_code,
             "composition": composition,
             "company": company,
             "distributor_name": distributor_name,
@@ -6248,7 +6312,6 @@ def add_vendor_purchase(id):
 
     for item in line_items:
         med = find_medicine_by_name_batch(item["name"], item["batch"])
-        resolved_medicine_code = normalize_medicine_code(item.get("medicine_code"))
         if not med:
             discount_template = find_medicine_discount_template(
                 item["name"],
@@ -6257,7 +6320,7 @@ def add_vendor_purchase(id):
             )
             med = Medicine(
                 name=item["name"],
-                medicine_code=resolved_medicine_code,
+                medicine_code="",
                 composition=item["composition"],
                 company=item["company"],
                 pack_type=item["pack_type"],
@@ -6278,13 +6341,6 @@ def add_vendor_purchase(id):
             db.session.add(med)
             db.session.flush()
         else:
-            existing_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
-            if resolved_medicine_code and existing_code and existing_code != resolved_medicine_code:
-                db.session.rollback()
-                return purchase_error(
-                    f"Batch {item['batch']} already belongs to medicine code {existing_code}. "
-                    f"Use the same code for {item['name']}."
-                )
             if item["expiry"]:
                 med.expiry = item["expiry"]
             if item["mrp"]:
@@ -6297,21 +6353,8 @@ def add_vendor_purchase(id):
                 med.pack_type = item["pack_type"]
             if item.get("pack_qty") is not None:
                 med.pack_qty = item["pack_qty"]
-            if resolved_medicine_code:
-                med.medicine_code = resolved_medicine_code
         if item["barcode"]:
             med.barcode = item["barcode"]
-
-        effective_medicine_code = resolved_medicine_code or normalize_medicine_code(getattr(med, "medicine_code", ""))
-        if effective_medicine_code:
-            med.medicine_code = effective_medicine_code
-            propagate_medicine_code_to_matching_batches(
-                name=med.name,
-                pack_type=item["pack_type"],
-                pack_qty=item.get("pack_qty"),
-                medicine_code=effective_medicine_code,
-                exclude_medicine_id=med.id,
-            )
 
         effective_barcode = item["barcode"] or ((getattr(med, "barcode", "") or "").strip())
 
@@ -6336,7 +6379,7 @@ def add_vendor_purchase(id):
             vendor_id=vendor.id,
             medicine_id=med.id,
             medicine_name=item["name"],
-            medicine_code=effective_medicine_code,
+            medicine_code="",
             barcode=effective_barcode,
             composition=item["composition"],
             company=item["company"],
@@ -6365,6 +6408,7 @@ def add_vendor_purchase(id):
             balance_add = 0
         vendor.outstanding_balance = (vendor.outstanding_balance or 0) + balance_add
 
+    sync_medicine_codes_to_current_names()
     db.session.commit()
     success_message = "Purchase saved. Stock updated."
     if accepts_json:
@@ -6583,7 +6627,6 @@ def edit_vendor_purchase_item(item_id):
 
     if request.method == "POST":
         name = (request.form.get("medicine_name") or "").strip()
-        medicine_code = normalize_medicine_code(request.form.get("medicine_code"))
         composition = (request.form.get("composition") or "").strip()
         company = (request.form.get("company") or "").strip()
         distributor_name = (request.form.get("distributor_name") or "").strip()
@@ -6603,20 +6646,6 @@ def edit_vendor_purchase_item(item_id):
 
         if not name:
             flash("Medicine name is required", "danger")
-            return redirect(request.url)
-        code_name, canonical_code_name, code_error = resolve_medicine_code_mapping(
-            medicine_code,
-            exclude_medicine_id=(med.id if med else None)
-        )
-        if code_error:
-            flash(code_error, "danger")
-            return redirect(request.url)
-        if canonical_code_name and normalize_medicine_name(name).casefold() != canonical_code_name.casefold():
-            flash(
-                f"Medicine code {code_name} is already linked to {canonical_code_name}. "
-                "Use the same medicine name for this code.",
-                "danger"
-            )
             return redirect(request.url)
         if not batch or not expiry:
             flash("Batch and expiry are required", "danger")
@@ -6649,14 +6678,11 @@ def edit_vendor_purchase_item(item_id):
         old_med_qty = med.qty if med else None
 
         if med:
-            previous_medicine_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
             if med.qty + diff_total_qty < 0:
                 flash("Not enough stock to reduce this purchase quantity", "danger")
                 return redirect(request.url)
             med.qty = med.qty + diff_total_qty
             med.name = name
-            if medicine_code:
-                med.medicine_code = medicine_code
             med.batch = batch
             med.expiry = expiry
             med.mrp = mrp
@@ -6667,18 +6693,9 @@ def edit_vendor_purchase_item(item_id):
                 med.pack_qty = pack_qty
             if barcode:
                 med.barcode = barcode
-            if medicine_code:
-                propagate_medicine_code_to_matching_batches(
-                    name=name,
-                    pack_type=pack_type,
-                    pack_qty=pack_qty if pack_qty_raw else item.pack_qty,
-                    medicine_code=medicine_code,
-                    exclude_medicine_id=med.id,
-                    previous_code=previous_medicine_code,
-                )
 
         item.medicine_name = name
-        item.medicine_code = medicine_code or normalize_medicine_code(getattr(med, "medicine_code", ""))
+        item.medicine_code = normalize_medicine_code(getattr(med, "medicine_code", ""))
         if barcode:
             item.barcode = barcode
         item.composition = composition
@@ -6724,6 +6741,7 @@ def edit_vendor_purchase_item(item_id):
             )
             db.session.add(history)
 
+        sync_medicine_codes_to_current_names()
         db.session.commit()
         flash("Purchase item updated successfully", "success")
         return redirect(f"/vendor/edit/{item.vendor_id}")
