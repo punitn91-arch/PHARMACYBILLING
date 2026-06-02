@@ -4835,8 +4835,7 @@ def add_medicine():
             is_active=True
         )
 
-        db.session.add(med)
-        db.session.flush()
+        med = persist_new_medicine_record(med)
         build_scoped_medicine_code_sync([name])
 
         history = StockHistory(
@@ -5427,8 +5426,7 @@ def return_medicine():
                     qty=0,
                     discount_percent=int(it.discount_percent or 0)
                 )
-                db.session.add(med)
-                db.session.flush()
+                med = persist_new_medicine_record(med)
 
             old_stock = med.qty
             med.qty += req_qty
@@ -6542,8 +6540,7 @@ def add_vendor_purchase(id):
                         ) or 0
                     )
                 )
-                db.session.add(med)
-                db.session.flush()
+                med = persist_new_medicine_record(med)
             else:
                 if item["expiry"]:
                     med.expiry = item["expiry"]
@@ -8875,6 +8872,94 @@ def bind_user_boolean_value(column_name, enabled, storage_map):
     if storage_map.get(column_name) == "integer":
         return 1 if bool(enabled) else 0
     return bool(enabled)
+
+
+def runtime_boolean_storage_mode(table_name, column_name):
+    try:
+        data_type = postgres_runtime_column_data_type(table_name, column_name)
+        if data_type in {"smallint", "integer", "bigint"}:
+            return "integer"
+        if data_type == "boolean":
+            return "boolean"
+        column_meta = table_runtime_columns(table_name).get(column_name)
+        if not column_meta:
+            return "boolean"
+        type_name = column_meta["type"].__class__.__name__.lower()
+        return "boolean" if "bool" in type_name else "integer"
+    except Exception:
+        app.logger.exception("Unable to inspect boolean storage mode for %s.%s", table_name, column_name)
+    return "boolean"
+
+
+def bind_runtime_boolean_value(enabled, storage_mode):
+    if storage_mode == "integer":
+        return 1 if bool(enabled) else 0
+    return bool(enabled)
+
+
+def persist_new_medicine_record(med):
+    storage_mode = runtime_boolean_storage_mode("medicine", "is_active")
+    if storage_mode != "integer":
+        db.session.add(med)
+        db.session.flush()
+        return med
+
+    runtime_columns = table_runtime_columns("medicine")
+    insert_values = {
+        "name": getattr(med, "name", ""),
+        "medicine_code": getattr(med, "medicine_code", ""),
+        "composition": getattr(med, "composition", ""),
+        "company": getattr(med, "company", ""),
+        "pack_type": getattr(med, "pack_type", ""),
+        "pack_qty": getattr(med, "pack_qty", None),
+        "batch": getattr(med, "batch", ""),
+        "expiry": getattr(med, "expiry", ""),
+        "mrp": getattr(med, "mrp", 0),
+        "qty": getattr(med, "qty", 0),
+        "discount_percent": getattr(med, "discount_percent", 0),
+        "barcode": getattr(med, "barcode", ""),
+        "reorder_level": getattr(med, "reorder_level", 10),
+        "is_active": bind_runtime_boolean_value(getattr(med, "is_active", True), storage_mode),
+        "created_at": sql_text_bindable_value(getattr(med, "created_at", None) or datetime.utcnow()),
+    }
+    filtered_values = {
+        key: sql_text_bindable_value(value)
+        for key, value in insert_values.items()
+        if not runtime_columns or key in runtime_columns
+    }
+    column_names = list(filtered_values.keys())
+    quoted_columns = ", ".join(f'"{column_name}"' for column_name in column_names)
+    placeholders = ", ".join(f":{column_name}" for column_name in column_names)
+    dialect = (db.session.bind.dialect.name if db.session.bind else "").lower()
+    if dialect == "postgresql":
+        result = db.session.execute(
+            text(
+                'INSERT INTO "medicine" '
+                f'({quoted_columns}) VALUES ({placeholders}) '
+                'RETURNING "id"'
+            ),
+            filtered_values,
+        )
+        row = result.fetchone()
+        medicine_id = row[0] if row else None
+    else:
+        result = db.session.execute(
+            text(
+                'INSERT INTO "medicine" '
+                f'({quoted_columns}) VALUES ({placeholders})'
+            ),
+            filtered_values,
+        )
+        medicine_id = getattr(result, "lastrowid", None)
+
+    if medicine_id:
+        persisted = db.session.get(Medicine, medicine_id)
+        if persisted:
+            return persisted
+    return Medicine.query.filter_by(
+        name=getattr(med, "name", ""),
+        batch=getattr(med, "batch", ""),
+    ).order_by(Medicine.id.desc()).first() or med
 
 
 def persist_user_update(user, payload):

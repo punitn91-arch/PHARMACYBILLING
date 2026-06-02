@@ -552,6 +552,62 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(generated_names["MANUAL MED"], self._expected_auto_code("MANUAL MED"))
             self.assertEqual(generated_names["MYSTERY MED"], self._expected_auto_code("MYSTERY MED"))
 
+    def test_vendor_purchase_succeeds_with_legacy_integer_medicine_is_active_storage(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(name="Legacy Storage Vendor", is_active=True)
+            self.db.session.add(vendor)
+            self.db.session.commit()
+            vendor_id = vendor.id
+
+        self.login()
+        original_runtime_boolean_storage_mode = self.app_module.runtime_boolean_storage_mode
+
+        def fake_runtime_boolean_storage_mode(table_name, column_name):
+            if table_name == "medicine" and column_name == "is_active":
+                return "integer"
+            return original_runtime_boolean_storage_mode(table_name, column_name)
+
+        self.app_module.runtime_boolean_storage_mode = fake_runtime_boolean_storage_mode
+        try:
+            response = self.client.post(
+                f"/vendor/{vendor_id}/purchase",
+                data={
+                    "invoice_no": "LEGACY-INT-001",
+                    "purchase_date": date.today().isoformat(),
+                    "payment_mode": "CASH",
+                    "payment_status": "Paid",
+                    "paid_amount": "0",
+                    "medicine_name": ["SUNDAE 2 MG/1.5 ML KWIK PEN"],
+                    "medicine_code": [""],
+                    "barcode": [""],
+                    "composition": [""],
+                    "company": ["Legacy Pharma"],
+                    "distributor_name": ["Legacy Storage Vendor"],
+                    "pack_type": ["Pen"],
+                    "pack_qty": ["1"],
+                    "batch": ["7000631B"],
+                    "expiry": ["02/2028"],
+                    "qty": ["2"],
+                    "free_qty": ["0"],
+                    "purchase_rate": ["2216.46"],
+                    "mrp": ["3200"],
+                    "gst_percent": ["5"],
+                    "discount_percent": ["5"],
+                },
+                follow_redirects=False,
+            )
+        finally:
+            self.app_module.runtime_boolean_storage_mode = original_runtime_boolean_storage_mode
+
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            med = self.app_module.Medicine.query.filter_by(batch="7000631B").one()
+            purchase_item = self.app_module.VendorPurchaseItem.query.one()
+            self.assertEqual(med.medicine_code, self._expected_auto_code("SUNDAE 2 MG/1.5 ML KWIK PEN"))
+            self.assertEqual(med.qty, 2)
+            self.assertEqual(purchase_item.medicine_code, med.medicine_code)
+
     def test_sync_medicine_codes_to_current_names_replaces_manual_codes_across_batches(self):
         with self.app.app_context():
             med_one = self.app_module.Medicine(
