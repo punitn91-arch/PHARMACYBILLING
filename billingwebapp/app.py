@@ -426,6 +426,94 @@ def normalize_medicine_name_key(name):
     return normalized_name.casefold()
 
 
+def build_exact_medicine_name_match_expr(column, normalized_name):
+    return db.func.lower(db.func.trim(db.func.coalesce(column, ""))) == normalized_name.casefold()
+
+
+def load_medicines_for_exact_name(normalized_name):
+    if not normalized_name:
+        return []
+    return Medicine.query.filter(
+        build_exact_medicine_name_match_expr(Medicine.name, normalized_name)
+    ).order_by(Medicine.id.asc()).all()
+
+
+def load_purchase_items_for_exact_name(normalized_name):
+    if not normalized_name:
+        return []
+    return VendorPurchaseItem.query.filter(
+        build_exact_medicine_name_match_expr(VendorPurchaseItem.medicine_name, normalized_name)
+    ).order_by(VendorPurchaseItem.id.asc()).all()
+
+
+def find_next_medicine_code_for_prefix(prefix):
+    normalized_prefix = normalize_medicine_code(prefix)[:3]
+    if not normalized_prefix:
+        normalized_prefix = "MED"
+
+    max_serial = 0
+    medicine_prefix_expr = db.func.upper(db.func.coalesce(Medicine.medicine_code, "")).like(f"{normalized_prefix}%")
+    purchase_prefix_expr = db.func.upper(db.func.coalesce(VendorPurchaseItem.medicine_code, "")).like(f"{normalized_prefix}%")
+
+    for code_value in db.session.query(Medicine.medicine_code).filter(medicine_prefix_expr).all():
+        code_prefix, serial = parse_auto_medicine_code(code_value[0])
+        if code_prefix == normalized_prefix and serial > max_serial:
+            max_serial = serial
+    for code_value in db.session.query(VendorPurchaseItem.medicine_code).filter(purchase_prefix_expr).all():
+        code_prefix, serial = parse_auto_medicine_code(code_value[0])
+        if code_prefix == normalized_prefix and serial > max_serial:
+            max_serial = serial
+    return f"{normalized_prefix}{max_serial + 1:03d}"
+
+
+def resolve_target_medicine_code_for_name(name):
+    normalized_name = normalize_medicine_name(name)
+    if not normalized_name:
+        return ""
+
+    prefix = build_medicine_code_prefix(normalized_name)
+    medicine_rows = load_medicines_for_exact_name(normalized_name)
+    purchase_rows = load_purchase_items_for_exact_name(normalized_name)
+
+    auto_candidates = []
+    for row in medicine_rows + purchase_rows:
+        normalized_code = normalize_medicine_code(getattr(row, "medicine_code", ""))
+        code_prefix, serial = parse_auto_medicine_code(normalized_code)
+        if code_prefix == prefix and serial > 0:
+            auto_candidates.append((serial, normalized_code))
+
+    auto_candidates.sort()
+    if auto_candidates:
+        return auto_candidates[0][1]
+    return find_next_medicine_code_for_prefix(prefix)
+
+
+def sync_medicine_code_for_name(name, target_code=""):
+    normalized_name = normalize_medicine_name(name)
+    if not normalized_name:
+        return {"medicine_updates": 0, "purchase_item_updates": 0, "group_count": 0, "target_code": ""}
+
+    resolved_target_code = normalize_medicine_code(target_code) or resolve_target_medicine_code_for_name(normalized_name)
+    medicine_updates = 0
+    purchase_item_updates = 0
+
+    for med in load_medicines_for_exact_name(normalized_name):
+        if normalize_medicine_code(getattr(med, "medicine_code", "")) != resolved_target_code:
+            med.medicine_code = resolved_target_code
+            medicine_updates += 1
+    for item in load_purchase_items_for_exact_name(normalized_name):
+        if normalize_medicine_code(getattr(item, "medicine_code", "")) != resolved_target_code:
+            item.medicine_code = resolved_target_code
+            purchase_item_updates += 1
+
+    return {
+        "medicine_updates": medicine_updates,
+        "purchase_item_updates": purchase_item_updates,
+        "group_count": 1,
+        "target_code": resolved_target_code,
+    }
+
+
 def sync_medicine_codes_to_current_names():
     try:
         db.session.flush()
@@ -540,78 +628,13 @@ def build_scoped_medicine_code_sync(names):
     if not normalized_names:
         return {"medicine_updates": 0, "purchase_item_updates": 0, "group_count": 0}
 
-    prefixes = sorted({build_medicine_code_prefix(name) for name in normalized_names if name})
-    max_serial_by_prefix = {}
-    for prefix in prefixes:
-        max_serial_by_prefix[prefix] = 0
-
-    if prefixes:
-        medicine_prefix_filters = [
-            db.func.upper(db.func.coalesce(Medicine.medicine_code, "")).like(f"{prefix}%")
-            for prefix in prefixes
-        ]
-        purchase_item_prefix_filters = [
-            db.func.upper(db.func.coalesce(VendorPurchaseItem.medicine_code, "")).like(f"{prefix}%")
-            for prefix in prefixes
-        ]
-
-        relevant_codes = []
-        for code_value in db.session.query(Medicine.medicine_code).filter(or_(*medicine_prefix_filters)).all():
-            normalized_code = normalize_medicine_code(code_value[0])
-            if normalized_code:
-                relevant_codes.append(normalized_code)
-        for code_value in db.session.query(VendorPurchaseItem.medicine_code).filter(or_(*purchase_item_prefix_filters)).all():
-            normalized_code = normalize_medicine_code(code_value[0])
-            if normalized_code:
-                relevant_codes.append(normalized_code)
-
-        for code in relevant_codes:
-            prefix, serial = parse_auto_medicine_code(code)
-            if prefix and serial > max_serial_by_prefix.get(prefix, 0):
-                max_serial_by_prefix[prefix] = serial
-
     medicine_updates = 0
     purchase_item_updates = 0
 
     for normalized_name in normalized_names:
-        name_key = normalized_name.casefold()
-        prefix = build_medicine_code_prefix(normalized_name)
-        target_code = ""
-
-        medicine_rows = Medicine.query.filter(
-            db.func.lower(db.func.trim(db.func.coalesce(Medicine.name, ""))) == name_key
-        ).order_by(Medicine.id.asc()).all()
-        purchase_rows = VendorPurchaseItem.query.filter(
-            db.func.lower(db.func.trim(db.func.coalesce(VendorPurchaseItem.medicine_name, ""))) == name_key
-        ).order_by(VendorPurchaseItem.id.asc()).all()
-
-        existing_codes = []
-        for row in medicine_rows:
-            existing_codes.append(normalize_medicine_code(getattr(row, "medicine_code", "")))
-        for row in purchase_rows:
-            existing_codes.append(normalize_medicine_code(getattr(row, "medicine_code", "")))
-
-        auto_candidates = []
-        for code in existing_codes:
-            code_prefix, serial = parse_auto_medicine_code(code)
-            if code_prefix == prefix and serial > 0:
-                auto_candidates.append((serial, code))
-        auto_candidates.sort()
-        if auto_candidates:
-            target_code = auto_candidates[0][1]
-        else:
-            next_serial = max_serial_by_prefix.get(prefix, 0) + 1
-            target_code = f"{prefix}{next_serial:03d}"
-            max_serial_by_prefix[prefix] = next_serial
-
-        for row in medicine_rows:
-            if normalize_medicine_code(getattr(row, "medicine_code", "")) != target_code:
-                row.medicine_code = target_code
-                medicine_updates += 1
-        for row in purchase_rows:
-            if normalize_medicine_code(getattr(row, "medicine_code", "")) != target_code:
-                row.medicine_code = target_code
-                purchase_item_updates += 1
+        sync_result = sync_medicine_code_for_name(normalized_name)
+        medicine_updates += sync_result["medicine_updates"]
+        purchase_item_updates += sync_result["purchase_item_updates"]
 
     return {
         "medicine_updates": medicine_updates,
@@ -648,6 +671,15 @@ def persist_medicine_code_sync_for_names(names):
             "purchase_item_updates": 0,
             "group_count": 0,
         }
+
+
+def summarize_exception_message(exc, limit=180):
+    raw_text = str(getattr(exc, "orig", exc) or exc).strip()
+    if not raw_text:
+        return exc.__class__.__name__
+    first_line = " ".join(raw_text.splitlines()[:1]).strip()
+    compact = " ".join(first_line.split())
+    return compact[:limit]
 
 
 def build_medicine_name_suggestions(medicines):
@@ -6451,7 +6483,14 @@ def add_vendor_purchase(id):
             )
             purchase.bill_attachment_ref = saved_bill_attachment_ref
 
+        target_codes_by_name = {}
         for item in line_items:
+            item_name = normalize_medicine_name(item["name"])
+            if item_name and item_name not in target_codes_by_name:
+                target_codes_by_name[item_name] = resolve_target_medicine_code_for_name(item_name)
+
+        for item in line_items:
+            target_code = target_codes_by_name.get(normalize_medicine_name(item["name"]), "")
             med = find_medicine_by_name_batch(item["name"], item["batch"])
             if not med:
                 discount_template = find_medicine_discount_template(
@@ -6494,6 +6533,8 @@ def add_vendor_purchase(id):
                     med.pack_type = item["pack_type"]
                 if item.get("pack_qty") is not None:
                     med.pack_qty = item["pack_qty"]
+            if target_code:
+                med.medicine_code = target_code
             if item["barcode"]:
                 med.barcode = item["barcode"]
 
@@ -6520,7 +6561,7 @@ def add_vendor_purchase(id):
                 vendor_id=vendor.id,
                 medicine_id=med.id,
                 medicine_name=item["name"],
-                medicine_code="",
+                medicine_code=target_code,
                 barcode=effective_barcode,
                 composition=item["composition"],
                 company=item["company"],
@@ -6566,8 +6607,11 @@ def add_vendor_purchase(id):
             return purchase_error("This bill number already exists. Please use a different bill number.")
         if "purchase_no" in error_text and ("duplicate" in error_text or "unique" in error_text):
             return purchase_error("Purchase number collision detected. Please retry once.", 500)
-        return purchase_error("Unable to save purchase right now. Please retry once.", 500)
-    except SQLAlchemyError:
+        return purchase_error(
+            f"Unable to save purchase right now. {summarize_exception_message(exc)}",
+            500,
+        )
+    except SQLAlchemyError as exc:
         db.session.rollback()
         if saved_bill_attachment_ref:
             delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, saved_bill_attachment_ref)
@@ -6576,8 +6620,11 @@ def add_vendor_purchase(id):
             vendor.id,
             invoice_no,
         )
-        return purchase_error("Unable to save purchase right now. Please retry once.", 500)
-    except Exception:
+        return purchase_error(
+            f"Unable to save purchase right now. {summarize_exception_message(exc)}",
+            500,
+        )
+    except Exception as exc:
         db.session.rollback()
         if saved_bill_attachment_ref:
             delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, saved_bill_attachment_ref)
@@ -6586,7 +6633,10 @@ def add_vendor_purchase(id):
             vendor.id,
             invoice_no,
         )
-        return purchase_error("Unable to save purchase right now. Please retry once.", 500)
+        return purchase_error(
+            f"Unable to save purchase right now. {summarize_exception_message(exc)}",
+            500,
+        )
 
     success_message = "Purchase saved. Stock updated."
     if accepts_json:
