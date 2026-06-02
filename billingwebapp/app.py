@@ -4796,6 +4796,12 @@ def add_medicine():
         flash("Access denied", "danger")
         return redirect("/medicines")
     if request.method == "POST":
+        schema_ok, schema_err = ensure_inventory_runtime_schema()
+        if not schema_ok:
+            flash("Unable to save medicine because inventory schema update failed.", "danger")
+            if schema_err:
+                app.logger.error("Inventory schema check failed before add medicine: %s", schema_err)
+            return redirect("/medicines/add")
         name = (request.form.get("name") or "").strip()
         batch = (request.form.get("batch") or "").strip()
         expiry = (request.form.get("expiry") or "").strip()
@@ -6088,6 +6094,12 @@ def vendor_medicine_history():
 @inventory_access_required
 def add_vendor():
     if request.method == "POST":
+        schema_ok, schema_err = ensure_inventory_runtime_schema()
+        if not schema_ok:
+            flash("Unable to save vendor because inventory schema update failed.", "danger")
+            if schema_err:
+                app.logger.error("Inventory schema check failed before add vendor: %s", schema_err)
+            return redirect("/vendor/add")
         name = (request.form.get("name") or "").strip()
         if not name:
             flash("Vendor name is required", "danger")
@@ -6160,6 +6172,12 @@ def edit_vendor(id):
     v = active_vendor_query().filter(Vendor.id == id).first_or_404()
 
     if request.method == "POST":
+        schema_ok, schema_err = ensure_inventory_runtime_schema()
+        if not schema_ok:
+            flash("Unable to update vendor because inventory schema update failed.", "danger")
+            if schema_err:
+                app.logger.error("Inventory schema check failed before edit vendor: %s", schema_err)
+            return redirect(f"/vendor/edit/{id}")
         name = (request.form.get("name") or "").strip()
         if not name:
             flash("Vendor name is required", "danger")
@@ -6264,6 +6282,7 @@ def edit_vendor(id):
 @login_required
 @inventory_access_required
 def add_vendor_purchase(id):
+    schema_ok, schema_err = ensure_inventory_runtime_schema()
     vendor = active_vendor_query().filter(Vendor.id == id).first_or_404()
 
     accepts_json = (
@@ -6276,6 +6295,11 @@ def add_vendor_purchase(id):
             return jsonify({"ok": False, "message": message}), status_code
         flash(message, "danger")
         return redirect(f"/vendor/edit/{vendor.id}")
+
+    if not schema_ok:
+        if schema_err:
+            app.logger.error("Inventory schema check failed before vendor purchase save: %s", schema_err)
+        return purchase_error("Unable to save purchase because inventory schema update failed.", 500)
 
     invoice_no = (request.form.get("invoice_no") or "").strip()
     if not invoice_no:
@@ -7485,6 +7509,12 @@ def api_delete_vendor_note(note_id):
 @login_required
 @inventory_access_required
 def delete_vendor(id):
+    schema_ok, schema_err = ensure_inventory_runtime_schema()
+    if not schema_ok:
+        flash("Unable to archive vendor because inventory schema update failed.", "danger")
+        if schema_err:
+            app.logger.error("Inventory schema check failed before delete vendor: %s", schema_err)
+        return redirect("/vendor")
     v = active_vendor_query().filter(Vendor.id == id).first_or_404()
     has_purchases = VendorPurchase.query.filter_by(vendor_id=v.id).first()
     if has_purchases:
@@ -8560,6 +8590,22 @@ def ensure_appointment_runtime_schema():
             ("updated_at", "TIMESTAMP")
         ]
     }
+    return ensure_runtime_schema_requirements(
+        required,
+        postgres_boolean_columns={
+            "appointment": {"is_deleted": False},
+            "hold_bill": {"is_deleted": False},
+            "return_bill": {"is_cancelled": False},
+            "user": {"is_active": True},
+            "medicine": {"is_active": True},
+            "vendor": {"is_active": True},
+            "login_security_event": {"is_suspicious": False},
+        },
+        log_label="appointment",
+    )
+
+
+def ensure_runtime_schema_requirements(required, *, postgres_boolean_columns=None, log_label="runtime"):
     dialect = (db.session.bind.dialect.name if db.session.bind else "").lower()
     errors = []
     try:
@@ -8588,16 +8634,7 @@ def ensure_appointment_runtime_schema():
                     if "duplicate column" in low or "already exists" in low:
                         continue
                     errors.append(f"{table_name}.{col_name}: {err_text}")
-        if dialect == "postgresql":
-            postgres_boolean_columns = {
-                "appointment": {"is_deleted": False},
-                "hold_bill": {"is_deleted": False},
-                "return_bill": {"is_cancelled": False},
-                "user": {"is_active": True},
-                "medicine": {"is_active": True},
-                "vendor": {"is_active": True},
-                "login_security_event": {"is_suspicious": False},
-            }
+        if dialect == "postgresql" and postgres_boolean_columns:
             pg_insp = inspect(db.engine)
             for table_name, columns in postgres_boolean_columns.items():
                 if not pg_insp.has_table(table_name):
@@ -8624,12 +8661,32 @@ def ensure_appointment_runtime_schema():
             db.session.commit()
     except Exception:
         db.session.rollback()
-        app.logger.exception("Runtime appointment schema check failed")
+        app.logger.exception("Runtime %s schema check failed", log_label)
         return False, "Schema check failed"
     if errors:
-        app.logger.error("Runtime appointment schema errors: %s", " | ".join(errors))
+        app.logger.error("Runtime %s schema errors: %s", log_label, " | ".join(errors))
         return False, errors[0]
     return True, ""
+
+
+def ensure_inventory_runtime_schema():
+    return ensure_runtime_schema_requirements(
+        {
+            "medicine": [
+                ("is_active", "BOOLEAN DEFAULT TRUE"),
+            ],
+            "vendor": [
+                ("is_active", "BOOLEAN DEFAULT TRUE"),
+                ("deleted_at", "TIMESTAMP"),
+                ("deleted_by", "TEXT"),
+            ],
+        },
+        postgres_boolean_columns={
+            "medicine": {"is_active": True},
+            "vendor": {"is_active": True},
+        },
+        log_label="inventory",
+    )
 
 
 def create_appointment_record(*, appointment_no, patient, mobile, validated, form_data):
