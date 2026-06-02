@@ -540,21 +540,35 @@ def build_scoped_medicine_code_sync(names):
     if not normalized_names:
         return {"medicine_updates": 0, "purchase_item_updates": 0, "group_count": 0}
 
-    all_codes = []
-    for code_value in db.session.query(Medicine.medicine_code).all():
-        normalized_code = normalize_medicine_code(code_value[0])
-        if normalized_code:
-            all_codes.append(normalized_code)
-    for code_value in db.session.query(VendorPurchaseItem.medicine_code).all():
-        normalized_code = normalize_medicine_code(code_value[0])
-        if normalized_code:
-            all_codes.append(normalized_code)
-
+    prefixes = sorted({build_medicine_code_prefix(name) for name in normalized_names if name})
     max_serial_by_prefix = {}
-    for code in all_codes:
-        prefix, serial = parse_auto_medicine_code(code)
-        if prefix and serial > max_serial_by_prefix.get(prefix, 0):
-            max_serial_by_prefix[prefix] = serial
+    for prefix in prefixes:
+        max_serial_by_prefix[prefix] = 0
+
+    if prefixes:
+        medicine_prefix_filters = [
+            db.func.upper(db.func.coalesce(Medicine.medicine_code, "")).like(f"{prefix}%")
+            for prefix in prefixes
+        ]
+        purchase_item_prefix_filters = [
+            db.func.upper(db.func.coalesce(VendorPurchaseItem.medicine_code, "")).like(f"{prefix}%")
+            for prefix in prefixes
+        ]
+
+        relevant_codes = []
+        for code_value in db.session.query(Medicine.medicine_code).filter(or_(*medicine_prefix_filters)).all():
+            normalized_code = normalize_medicine_code(code_value[0])
+            if normalized_code:
+                relevant_codes.append(normalized_code)
+        for code_value in db.session.query(VendorPurchaseItem.medicine_code).filter(or_(*purchase_item_prefix_filters)).all():
+            normalized_code = normalize_medicine_code(code_value[0])
+            if normalized_code:
+                relevant_codes.append(normalized_code)
+
+        for code in relevant_codes:
+            prefix, serial = parse_auto_medicine_code(code)
+            if prefix and serial > max_serial_by_prefix.get(prefix, 0):
+                max_serial_by_prefix[prefix] = serial
 
     medicine_updates = 0
     purchase_item_updates = 0
@@ -4785,7 +4799,7 @@ def add_medicine():
 
         db.session.add(med)
         db.session.flush()
-        persist_medicine_code_sync_for_names([name])
+        build_scoped_medicine_code_sync([name])
 
         history = StockHistory(
             medicine_id=med.id,
@@ -4855,7 +4869,7 @@ def edit_medicine(id):
         if pack_qty_raw:
             med.pack_qty = pack_qty
         db.session.flush()
-        persist_medicine_code_sync_for_names([name])
+        build_scoped_medicine_code_sync([name])
 
         change = med.qty - old_qty
 
@@ -6241,8 +6255,14 @@ def add_vendor_purchase(id):
     if duplicate:
         return purchase_error("This bill number already exists for this vendor")
 
-    purchase_date_val = request.form.get("purchase_date")
-    purchase_date = datetime.strptime(purchase_date_val, "%Y-%m-%d") if purchase_date_val else datetime.now()
+    purchase_date_val = (request.form.get("purchase_date") or "").strip()
+    if purchase_date_val:
+        parsed_purchase_date = parse_date(purchase_date_val)
+        if not parsed_purchase_date:
+            return purchase_error("Purchase date is invalid")
+        purchase_date = datetime.combine(parsed_purchase_date, datetime.min.time())
+    else:
+        purchase_date = datetime.now()
     payment_mode = request.form.get("payment_mode") or vendor.default_payment_mode or "CASH"
     payment_status = request.form.get("payment_status") or vendor.payment_status or "Unpaid"
     paid_amount = to_float(request.form.get("paid_amount"))
@@ -6404,130 +6424,170 @@ def add_vendor_purchase(id):
     if not line_items:
         return purchase_error("Please add at least one medicine to purchase")
 
-    purchase = VendorPurchase(
-        vendor_id=vendor.id,
-        purchase_date=purchase_date,
-        invoice_no=invoice_no,
-        payment_mode=payment_mode,
-        payment_status=payment_status,
-        paid_amount=paid_amount,
-        notes=purchase_notes,
-        subtotal=subtotal,
-        gst_total=gst_total,
-        discount_total=discount_total,
-        total_amount=total_amount,
-        created_by=session.get("username")
-    )
-    db.session.add(purchase)
-    db.session.flush()
-    purchase.purchase_no = f"PB-{purchase.id:06d}"
-    if bill_attachment_file and (bill_attachment_file.filename or "").strip():
-        purchase.bill_attachment_ref = save_uploaded_file(
-            bill_attachment_file,
-            VENDOR_BILL_UPLOAD_FOLDER,
-            f"vendorbill_{vendor.id}_{purchase.id}"
+    saved_bill_attachment_ref = ""
+    try:
+        purchase = VendorPurchase(
+            vendor_id=vendor.id,
+            purchase_date=purchase_date,
+            invoice_no=invoice_no,
+            payment_mode=payment_mode,
+            payment_status=payment_status,
+            paid_amount=paid_amount,
+            notes=purchase_notes,
+            subtotal=subtotal,
+            gst_total=gst_total,
+            discount_total=discount_total,
+            total_amount=total_amount,
+            created_by=session.get("username")
         )
-
-    for item in line_items:
-        med = find_medicine_by_name_batch(item["name"], item["batch"])
-        if not med:
-            discount_template = find_medicine_discount_template(
-                item["name"],
-                item["pack_type"],
-                item.get("pack_qty")
+        db.session.add(purchase)
+        db.session.flush()
+        purchase.purchase_no = f"PB-{purchase.id:06d}"
+        if bill_attachment_file and (bill_attachment_file.filename or "").strip():
+            saved_bill_attachment_ref = save_uploaded_file(
+                bill_attachment_file,
+                VENDOR_BILL_UPLOAD_FOLDER,
+                f"vendorbill_{vendor.id}_{purchase.id}"
             )
-            med = Medicine(
-                name=item["name"],
+            purchase.bill_attachment_ref = saved_bill_attachment_ref
+
+        for item in line_items:
+            med = find_medicine_by_name_batch(item["name"], item["batch"])
+            if not med:
+                discount_template = find_medicine_discount_template(
+                    item["name"],
+                    item["pack_type"],
+                    item.get("pack_qty")
+                )
+                med = Medicine(
+                    name=item["name"],
+                    medicine_code="",
+                    composition=item["composition"],
+                    company=item["company"],
+                    pack_type=item["pack_type"],
+                    pack_qty=item["pack_qty"],
+                    batch=item["batch"],
+                    barcode=item["barcode"] or "",
+                    expiry=item["expiry"],
+                    mrp=item["mrp"] or 0,
+                    qty=0,
+                    # Keep selling discount in sync across new batches of the same medicine.
+                    discount_percent=int(
+                        to_float_safe(
+                            getattr(discount_template, "discount_percent", item["discount_percent"]),
+                            item["discount_percent"]
+                        ) or 0
+                    )
+                )
+                db.session.add(med)
+                db.session.flush()
+            else:
+                if item["expiry"]:
+                    med.expiry = item["expiry"]
+                if item["mrp"]:
+                    med.mrp = item["mrp"]
+                if item["composition"]:
+                    med.composition = item["composition"]
+                if item["company"]:
+                    med.company = item["company"]
+                if item["pack_type"]:
+                    med.pack_type = item["pack_type"]
+                if item.get("pack_qty") is not None:
+                    med.pack_qty = item["pack_qty"]
+            if item["barcode"]:
+                med.barcode = item["barcode"]
+
+            effective_barcode = item["barcode"] or ((getattr(med, "barcode", "") or "").strip())
+
+            old_stock = med.qty
+            med.qty += item["qty"] + item["free_qty"]
+
+            history = StockHistory(
+                medicine_id=med.id,
+                medicine_name=med.name,
+                batch=med.batch,
+                action="PURCHASE",
+                stock_before=old_stock,
+                qty_change=item["qty"] + item["free_qty"],
+                stock_after=med.qty,
+                user=session.get("username"),
+                remark=f"Purchase {purchase.purchase_no} from {vendor.name}"
+            )
+            db.session.add(history)
+
+            db.session.add(VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=med.id,
+                medicine_name=item["name"],
                 medicine_code="",
+                barcode=effective_barcode,
                 composition=item["composition"],
                 company=item["company"],
+                distributor_name=item["distributor_name"],
                 pack_type=item["pack_type"],
                 pack_qty=item["pack_qty"],
                 batch=item["batch"],
-                barcode=item["barcode"] or "",
                 expiry=item["expiry"],
-                mrp=item["mrp"] or 0,
-                qty=0,
-                # Keep selling discount in sync across new batches of the same medicine.
-                discount_percent=int(
-                    to_float_safe(
-                        getattr(discount_template, "discount_percent", item["discount_percent"]),
-                        item["discount_percent"]
-                    ) or 0
-                )
-            )
-            db.session.add(med)
-            db.session.flush()
-        else:
-            if item["expiry"]:
-                med.expiry = item["expiry"]
-            if item["mrp"]:
-                med.mrp = item["mrp"]
-            if item["composition"]:
-                med.composition = item["composition"]
-            if item["company"]:
-                med.company = item["company"]
-            if item["pack_type"]:
-                med.pack_type = item["pack_type"]
-            if item.get("pack_qty") is not None:
-                med.pack_qty = item["pack_qty"]
-        if item["barcode"]:
-            med.barcode = item["barcode"]
+                qty=item["qty"],
+                free_qty=item["free_qty"],
+                remaining_qty=item["qty"] + item["free_qty"],
+                purchase_rate=item["purchase_rate"],
+                mrp=item["mrp"],
+                gst_percent=item["gst_percent"],
+                discount_percent=item["discount_percent"],
+                notes=item["notes"],
+                total_value=item["total_value"]
+            ))
 
-        effective_barcode = item["barcode"] or ((getattr(med, "barcode", "") or "").strip())
+        vendor.last_purchase_date = purchase_date.date() if purchase_date else vendor.last_purchase_date
+        vendor.total_purchases = (vendor.total_purchases or 0) + total_amount
+        vendor.payment_status = payment_status
+        if payment_status.lower() in ("unpaid", "partial"):
+            balance_add = total_amount - paid_amount if payment_status.lower() == "partial" else total_amount
+            if balance_add < 0:
+                balance_add = 0
+            vendor.outstanding_balance = (vendor.outstanding_balance or 0) + balance_add
 
-        old_stock = med.qty
-        med.qty += item["qty"] + item["free_qty"]
-
-        history = StockHistory(
-            medicine_id=med.id,
-            medicine_name=med.name,
-            batch=med.batch,
-            action="PURCHASE",
-            stock_before=old_stock,
-            qty_change=item["qty"] + item["free_qty"],
-            stock_after=med.qty,
-            user=session.get("username"),
-            remark=f"Purchase {purchase.purchase_no} from {vendor.name}"
+        touched_names = [item["name"] for item in line_items]
+        build_scoped_medicine_code_sync(touched_names)
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        if saved_bill_attachment_ref:
+            delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, saved_bill_attachment_ref)
+        app.logger.exception(
+            "Vendor purchase save failed with integrity error for vendor_id=%s invoice_no=%s",
+            vendor.id,
+            invoice_no,
         )
-        db.session.add(history)
+        error_text = str(getattr(exc, "orig", exc)).lower()
+        if "invoice" in error_text and ("duplicate" in error_text or "unique" in error_text):
+            return purchase_error("This bill number already exists. Please use a different bill number.")
+        if "purchase_no" in error_text and ("duplicate" in error_text or "unique" in error_text):
+            return purchase_error("Purchase number collision detected. Please retry once.", 500)
+        return purchase_error("Unable to save purchase right now. Please retry once.", 500)
+    except SQLAlchemyError:
+        db.session.rollback()
+        if saved_bill_attachment_ref:
+            delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, saved_bill_attachment_ref)
+        app.logger.exception(
+            "Vendor purchase save failed with database error for vendor_id=%s invoice_no=%s",
+            vendor.id,
+            invoice_no,
+        )
+        return purchase_error("Unable to save purchase right now. Please retry once.", 500)
+    except Exception:
+        db.session.rollback()
+        if saved_bill_attachment_ref:
+            delete_uploaded_file(VENDOR_BILL_UPLOAD_FOLDER, saved_bill_attachment_ref)
+        app.logger.exception(
+            "Vendor purchase save failed unexpectedly for vendor_id=%s invoice_no=%s",
+            vendor.id,
+            invoice_no,
+        )
+        return purchase_error("Unable to save purchase right now. Please retry once.", 500)
 
-        db.session.add(VendorPurchaseItem(
-            purchase_id=purchase.id,
-            vendor_id=vendor.id,
-            medicine_id=med.id,
-            medicine_name=item["name"],
-            medicine_code="",
-            barcode=effective_barcode,
-            composition=item["composition"],
-            company=item["company"],
-            distributor_name=item["distributor_name"],
-            pack_type=item["pack_type"],
-            pack_qty=item["pack_qty"],
-            batch=item["batch"],
-            expiry=item["expiry"],
-            qty=item["qty"],
-            free_qty=item["free_qty"],
-            remaining_qty=item["qty"] + item["free_qty"],
-            purchase_rate=item["purchase_rate"],
-            mrp=item["mrp"],
-            gst_percent=item["gst_percent"],
-            discount_percent=item["discount_percent"],
-            notes=item["notes"],
-            total_value=item["total_value"]
-        ))
-
-    vendor.last_purchase_date = purchase_date.date() if purchase_date else vendor.last_purchase_date
-    vendor.total_purchases = (vendor.total_purchases or 0) + total_amount
-    vendor.payment_status = payment_status
-    if payment_status.lower() in ("unpaid", "partial"):
-        balance_add = total_amount - paid_amount if payment_status.lower() == "partial" else total_amount
-        if balance_add < 0:
-            balance_add = 0
-        vendor.outstanding_balance = (vendor.outstanding_balance or 0) + balance_add
-
-    touched_names = [item["name"] for item in line_items]
-    persist_medicine_code_sync_for_names(touched_names)
     success_message = "Purchase saved. Stock updated."
     if accepts_json:
         return jsonify({
@@ -6859,7 +6919,8 @@ def edit_vendor_purchase_item(item_id):
             )
             db.session.add(history)
 
-        persist_medicine_code_sync_for_names([name])
+        build_scoped_medicine_code_sync([name])
+        db.session.commit()
         flash("Purchase item updated successfully", "success")
         return redirect(f"/vendor/edit/{item.vendor_id}")
 
