@@ -93,6 +93,9 @@ class Invoice(db.Model):
     sgst = db.Column(db.Float, default=0)
     total = db.Column(db.Float, default=0)
     payment_mode = db.Column(db.String(20), default="CASH", index=True)
+    cash_amount = db.Column(db.Numeric(10, 2), default=0)
+    online_amount = db.Column(db.Numeric(10, 2), default=0)
+    is_split_payment = db.Column(db.Boolean, default=False)
 
 
     created_by = db.Column(db.String(50))

@@ -176,10 +176,72 @@ class EngineeringFlowTests(unittest.TestCase):
             stock_history = self.app_module.StockHistory.query.filter_by(action="SALE").all()
 
             self.assertEqual(invoice.customer, "Ravi Kumar")
+            self.assertEqual(float(invoice.cash_amount), 48.0)
+            self.assertEqual(float(invoice.online_amount), 0.0)
+            self.assertFalse(invoice.is_split_payment)
             self.assertEqual(invoice_item.qty, 2)
             self.assertEqual(medicine.qty, 8)
             self.assertEqual(purchase_item.remaining_qty, 8)
             self.assertEqual(len(stock_history), 1)
+
+    def test_billing_flow_records_split_payment_breakdown(self):
+        with self.app.app_context():
+            self._seed_patient()
+            self._seed_vendor_purchase_stack(total_qty=10)
+
+        self.login()
+        response = self.client.post(
+            "/billing",
+            data={
+                "customer": "Ravi Kumar",
+                "mobile": "9876543210",
+                "doctor": "Dr. Test",
+                "gender": "MALE",
+                "payment_mode": "UPI",
+                "split_cash_amount": "18.00",
+                "medicine_name": ["PARACETAMOL 650"],
+                "qty": ["2"],
+                "batch_override[]": ["B123"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Cash Paid", response.data)
+        self.assertIn(b"Online Paid", response.data)
+
+        with self.app.app_context():
+            invoice = self.app_module.Invoice.query.one()
+            self.assertEqual(invoice.payment_mode, "UPI")
+            self.assertEqual(float(invoice.cash_amount), 18.0)
+            self.assertEqual(float(invoice.online_amount), 30.0)
+            self.assertTrue(invoice.is_split_payment)
+
+    def test_billing_rejects_split_cash_above_total_bill_amount(self):
+        with self.app.app_context():
+            self._seed_patient()
+            self._seed_vendor_purchase_stack(total_qty=10)
+
+        self.login()
+        response = self.client.post(
+            "/billing",
+            data={
+                "customer": "Ravi Kumar",
+                "mobile": "9876543210",
+                "doctor": "Dr. Test",
+                "gender": "MALE",
+                "payment_mode": "UPI",
+                "split_cash_amount": "80.00",
+                "medicine_name": ["PARACETAMOL 650"],
+                "qty": ["2"],
+                "batch_override[]": ["B123"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Cash amount cannot exceed total bill amount.", response.data)
+
+        with self.app.app_context():
+            self.assertEqual(self.app_module.Invoice.query.count(), 0)
 
     def test_vendor_purchase_syncs_barcode_to_medicine_master(self):
         with self.app.app_context():

@@ -580,25 +580,55 @@
         <div class="section-head">
             <div>
                 <h3>Invoice Report</h3>
-                <p>Total Sale: Rs {{ total }}</p>
+                <p>Sales and collection view across the selected invoices.</p>
             </div>
         </div>
+        {% if collection_summary %}
+        <div class="summary-row" style="margin-bottom:16px;">
+            <div class="summary-pill">
+                <small>Total Sale</small>
+                <strong>Rs {{ total }}</strong>
+            </div>
+            <div class="summary-pill">
+                <small>Cash Collection</small>
+                <strong>Rs {{ collection_summary.cash_collection }}</strong>
+            </div>
+            <div class="summary-pill">
+                <small>Online Collection</small>
+                <strong>Rs {{ collection_summary.online_collection }}</strong>
+            </div>
+            <div class="summary-pill">
+                <small>Split Payment Count</small>
+                <strong>{{ collection_summary.split_payment_count }}</strong>
+            </div>
+        </div>
+        {% endif %}
         <table class="reports-table">
             <tr>
                 <th>Invoice</th>
                 <th>Patient</th>
                 <th>Mobile</th>
                 <th>Date</th>
+                <th>Payment Type</th>
+                <th>Payment Mode</th>
                 <th>Total</th>
+                <th>Cash</th>
+                <th>Online</th>
                 <th>User</th>
             </tr>
-            {% for i in invoices %}
+            {% for row in invoice_rows %}
+            {% set i = row.invoice %}
+            {% set payment = row.payment %}
             <tr>
                 <td>{{ i.invoice_no }}</td>
                 <td>{{ i.customer }}</td>
                 <td>{{ i.mobile }}</td>
                 <td>{{ i.created_at.strftime('%d-%m-%Y') }}</td>
+                <td>{{ payment.payment_type }}</td>
+                <td>{{ payment.display_mode }}</td>
                 <td>Rs {{ i.total }}</td>
+                <td>Rs {{ payment.cash_amount }}</td>
+                <td>Rs {{ payment.online_amount }}</td>
                 <td>{{ i.created_by }}</td>
             </tr>
             {% endfor %}

@@ -162,7 +162,7 @@ body {
     <div><b>Patient:</b> {{ customer }}</div>
     <div class="right"><b>Date:</b> {{ date }}</div>
     <div><b>Gender:</b> {{ gender }}</div>
-    <div class="right"><b>Payment Mode:</b> {{ inv.payment_mode }}</div>
+    <div class="right"><b>Payment Mode:</b> {{ payment_breakdown.display_mode if payment_breakdown else inv.payment_mode }}</div>
     <div><b>Mobile:</b> {{ mobile }}</div>
     <div class="right"><b>Ref. By:</b> {{ doctor }}</div>
 </div>
@@ -233,6 +233,25 @@ body {
 </table>
 
 <div class="clearfix"></div>
+{% if payment_breakdown and payment_breakdown.is_split_payment %}
+<table class="totals-table" style="float:none; width:100%; margin-top:10px;">
+    <tr>
+        <td colspan="2"><b>PAYMENT DETAILS</b></td>
+    </tr>
+    <tr>
+        <td>Cash Paid</td>
+        <td>₹{{ "%.2f"|format(payment_breakdown.cash_amount or 0) }}</td>
+    </tr>
+    <tr>
+        <td>Online Paid</td>
+        <td>₹{{ "%.2f"|format(payment_breakdown.online_amount or 0) }}</td>
+    </tr>
+    <tr>
+        <td>Payment Type</td>
+        <td>{{ payment_breakdown.payment_type }}</td>
+    </tr>
+</table>
+{% endif %}
 <div style="
     text-align:center;
     margin-top:16px;

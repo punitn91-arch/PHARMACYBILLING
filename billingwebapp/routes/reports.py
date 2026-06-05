@@ -22,6 +22,8 @@ def render_reports_page(
     build_patient_medicine_usage_report,
     build_profit_report_summary,
     build_medicine_report_data,
+    build_invoice_payment_breakdown,
+    summarize_invoice_collection,
 ):
     payload = build_reports_page_state(
         request_method,
@@ -36,6 +38,8 @@ def render_reports_page(
         build_patient_medicine_usage_report=build_patient_medicine_usage_report,
         build_profit_report_summary=build_profit_report_summary,
         build_medicine_report_data=build_medicine_report_data,
+        build_invoice_payment_breakdown=build_invoice_payment_breakdown,
+        summarize_invoice_collection=summarize_invoice_collection,
     )
     for category, message in payload.pop("messages", []):
         flash(message, category)

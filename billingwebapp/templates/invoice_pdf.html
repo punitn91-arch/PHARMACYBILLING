@@ -22,6 +22,7 @@ td {
 <h2>DR. ABHISHEK'S PHARMACY</h2>
 <p>Invoice: {{ invoice_no }} | Date: {{ date }}</p>
 <p>Customer: {{ customer }} | Mobile: {{ mobile }} | Gender: {{ gender }}</p>
+<p>Payment Mode: {{ payment_breakdown.display_mode if payment_breakdown else inv.payment_mode }}</p>
 <table border=1 cellpadding=5 cellspacing=0 width="100%">
   <tr><th>Product</th><th>Qty</th><th>MRP</th><th>Amount</th></tr>
   {% for it in cart %}
@@ -34,4 +35,9 @@ td {
   {% endfor %}
 </table>
 <p>Total: ₹{{ total }}</p>
+{% if payment_breakdown and payment_breakdown.is_split_payment %}
+<p>Cash Paid: ₹{{ "%.2f"|format(payment_breakdown.cash_amount or 0) }}</p>
+<p>Online Paid: ₹{{ "%.2f"|format(payment_breakdown.online_amount or 0) }}</p>
+<p>Payment Type: {{ payment_breakdown.payment_type }}</p>
+{% endif %}
 </body></html>

@@ -159,6 +159,8 @@ class SystemSmokeTests(unittest.TestCase):
         response = self.client.get("/billing")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Scan Barcode", response.data)
+        self.assertIn(b"Split Cash Amount", response.data)
+        self.assertIn(b"Online Amount", response.data)
         self.assertIn(b"barcodeBillingInput", response.data)
         self.assertIn(b"PARA650", response.data)
 

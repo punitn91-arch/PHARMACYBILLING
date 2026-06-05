@@ -780,6 +780,137 @@ def to_float_safe(val, default=0.0):
         return default
 
 
+POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
+
+
+def normalize_payment_mode(value, default="CASH"):
+    mode = (value or default).strip().upper() or default
+    if mode not in POS_PAYMENT_MODES:
+        return default
+    return mode
+
+
+def round_currency(value):
+    return round(to_float_safe(value, 0.0), 2)
+
+
+def compute_invoice_rounded_total(total_amount):
+    return round(float(round(to_float_safe(total_amount, 0.0))), 2)
+
+
+def parse_optional_money(raw_value):
+    if raw_value in (None, "", " "):
+        return None, None
+    raw_text = str(raw_value).strip()
+    if not raw_text:
+        return None, None
+    try:
+        amount = Decimal(raw_text)
+    except Exception:
+        return None, "Cash amount must be a valid number."
+    if amount < 0:
+        return None, "Cash amount cannot be negative."
+    return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), None
+
+
+def calculate_invoice_payment_breakdown(*, payment_mode="CASH", rounded_amount=0, split_cash_amount_raw=None):
+    normalized_mode = normalize_payment_mode(payment_mode)
+    payable_amount = max(round_currency(rounded_amount), 0.0)
+    split_cash_amount, split_error = parse_optional_money(split_cash_amount_raw)
+    if split_error:
+        return None, split_error
+    split_cash_amount = split_cash_amount or 0.0
+    if split_cash_amount > payable_amount:
+        return None, "Cash amount cannot exceed total bill amount."
+
+    if split_cash_amount > 0 and split_cash_amount < payable_amount and is_cash_payment_mode(normalized_mode):
+        return None, "Select an online payment mode for the online portion of split payment."
+
+    if split_cash_amount <= 0:
+        cash_amount = payable_amount if is_cash_payment_mode(normalized_mode) else 0.0
+        online_amount = 0.0 if is_cash_payment_mode(normalized_mode) else payable_amount
+    else:
+        cash_amount = split_cash_amount
+        online_amount = round_currency(payable_amount - split_cash_amount)
+
+    effective_mode = normalized_mode
+    if online_amount <= 0 and cash_amount > 0:
+        effective_mode = "CASH"
+
+    return {
+        "payment_mode": effective_mode,
+        "cash_amount": round_currency(cash_amount),
+        "online_amount": round_currency(online_amount),
+        "rounded_amount": payable_amount,
+        "is_split_payment": cash_amount > 0 and online_amount > 0,
+    }, None
+
+
+def build_invoice_payment_breakdown(invoice, rounded_amount=None):
+    normalized_mode = normalize_payment_mode(getattr(invoice, "payment_mode", "CASH"))
+    payable_amount = compute_invoice_rounded_total(
+        rounded_amount
+        if rounded_amount is not None
+        else getattr(invoice, "total", getattr(invoice, "subtotal", 0))
+    )
+    stored_cash_amount = round_currency(getattr(invoice, "cash_amount", 0))
+    stored_online_amount = round_currency(getattr(invoice, "online_amount", 0))
+    stored_is_split = bool(getattr(invoice, "is_split_payment", False))
+    has_explicit_breakdown = stored_is_split or stored_cash_amount > 0 or stored_online_amount > 0
+
+    if not has_explicit_breakdown:
+        if is_cash_payment_mode(normalized_mode):
+            stored_cash_amount = payable_amount
+            stored_online_amount = 0.0
+        else:
+            stored_cash_amount = 0.0
+            stored_online_amount = payable_amount
+
+    is_split = stored_cash_amount > 0 and stored_online_amount > 0
+    payment_type = "Split Payment" if is_split else ("Cash" if stored_online_amount <= 0 else normalized_mode)
+    display_mode = f"Cash + {normalized_mode}" if is_split else ("CASH" if stored_online_amount <= 0 else normalized_mode)
+
+    return {
+        "rounded_amount": payable_amount,
+        "cash_amount": round_currency(stored_cash_amount),
+        "online_amount": round_currency(stored_online_amount),
+        "is_split_payment": is_split,
+        "payment_mode": normalized_mode,
+        "payment_type": payment_type,
+        "display_mode": display_mode,
+    }
+
+
+def summarize_invoice_collection(invoices):
+    summary = {
+        "invoice_count": 0,
+        "sale_total": 0.0,
+        "cash_collection": 0.0,
+        "online_collection": 0.0,
+        "split_payment_count": 0,
+        "cash_invoice_count": 0,
+        "online_invoice_count": 0,
+    }
+
+    for invoice in invoices or []:
+        breakdown = build_invoice_payment_breakdown(invoice)
+        summary["invoice_count"] += 1
+        summary["sale_total"] += round_currency(getattr(invoice, "total", 0))
+        summary["cash_collection"] += breakdown["cash_amount"]
+        summary["online_collection"] += breakdown["online_amount"]
+        if breakdown["cash_amount"] > 0:
+            summary["cash_invoice_count"] += 1
+        if breakdown["online_amount"] > 0:
+            summary["online_invoice_count"] += 1
+        if breakdown["is_split_payment"]:
+            summary["split_payment_count"] += 1
+
+    summary["sale_total"] = round_currency(summary["sale_total"])
+    summary["cash_collection"] = round_currency(summary["cash_collection"])
+    summary["online_collection"] = round_currency(summary["online_collection"])
+    return summary
+
+
 def sanitize_json_payload(payload):
     if isinstance(payload, float):
         return payload if math.isfinite(payload) else 0.0
@@ -2217,6 +2348,7 @@ def build_medicine_audit_snapshot(med):
 def build_invoice_audit_snapshot(inv):
     if not inv:
         return None
+    payment_breakdown = build_invoice_payment_breakdown(inv)
     return {
         "id": inv.id,
         "invoice_no": (inv.invoice_no or "").strip(),
@@ -2227,6 +2359,9 @@ def build_invoice_audit_snapshot(inv):
         "subtotal": round(to_float_safe(inv.subtotal, 0), 2),
         "discount": round(to_float_safe(inv.discount, 0), 2),
         "total": round(to_float_safe(inv.total, 0), 2),
+        "cash_amount": payment_breakdown["cash_amount"],
+        "online_amount": payment_breakdown["online_amount"],
+        "is_split_payment": payment_breakdown["is_split_payment"],
         "created_by": (inv.created_by or "").strip()
     }
 
@@ -2671,6 +2806,8 @@ def build_hold_totals_from_form(form, items):
     sgst_raw = form.get("sgst")
     net_total_raw = form.get("net_total")
     rounded_raw = form.get("rounded_amount")
+    split_cash_raw = form.get("split_cash_amount")
+    online_amount_raw = form.get("online_amount")
 
     subtotal = to_float_safe(subtotal_raw, 0.0) if subtotal_raw not in (None, "") else round(sum(i["net_amount"] for i in items), 2)
     discount = to_float_safe(discount_raw, 0.0) if discount_raw not in (None, "") else round(sum(i["discount_amount"] for i in items), 2)
@@ -2678,6 +2815,11 @@ def build_hold_totals_from_form(form, items):
     sgst = to_float_safe(sgst_raw, round(subtotal * 0.025, 2)) if sgst_raw not in (None, "") else round(subtotal * 0.025, 2)
     net_total = to_float_safe(net_total_raw, subtotal) if net_total_raw not in (None, "") else subtotal
     rounded_amount = to_float_safe(rounded_raw, round(net_total, 2)) if rounded_raw not in (None, "") else round(net_total, 2)
+    split_cash_amount = max(to_float_safe(split_cash_raw, 0.0), 0.0) if split_cash_raw not in (None, "") else 0.0
+    online_amount = max(
+        to_float_safe(online_amount_raw, round(rounded_amount - split_cash_amount, 2)),
+        0.0,
+    ) if online_amount_raw not in (None, "") else max(round(rounded_amount - split_cash_amount, 2), 0.0)
 
     return {
         "subtotal": round(subtotal, 2),
@@ -2685,7 +2827,10 @@ def build_hold_totals_from_form(form, items):
         "cgst": round(cgst, 2),
         "sgst": round(sgst, 2),
         "net_total": round(net_total, 2),
-        "rounded_amount": round(rounded_amount, 2)
+        "rounded_amount": round(rounded_amount, 2),
+        "cash_amount": round(split_cash_amount, 2),
+        "online_amount": round(online_amount, 2),
+        "is_split_payment": bool(split_cash_amount > 0 and online_amount > 0),
     }
 
 def normalize_hold_bill_data(hold_bill):
@@ -2788,6 +2933,9 @@ def normalize_hold_bill_payload(*, hold_bill_id=None, customer="", mobile="", do
     sgst = to_float_safe(totals.get("sgst"), round(subtotal * 0.025, 2))
     net_total = to_float_safe(totals.get("net_total"), subtotal)
     rounded_amount = to_float_safe(totals.get("rounded_amount"), round(net_total, 2))
+    cash_amount = to_float_safe(totals.get("cash_amount"), 0)
+    online_amount = to_float_safe(totals.get("online_amount"), max(round(rounded_amount - cash_amount, 2), 0))
+    is_split_payment = bool(totals.get("is_split_payment")) if isinstance(totals.get("is_split_payment"), bool) else bool(cash_amount > 0 and online_amount > 0)
 
     return {
         "hold_bill_id": hold_bill_id,
@@ -2797,7 +2945,8 @@ def normalize_hold_bill_payload(*, hold_bill_id=None, customer="", mobile="", do
             "doctor": (header.get("doctor") or doctor or "").strip(),
             "gender": (header.get("gender") or gender or "").strip(),
             "sale_type": (header.get("sale_type") or "sale").strip().lower() or "sale",
-            "payment_mode": (header.get("payment_mode") or "CASH").strip().upper() or "CASH"
+            "payment_mode": normalize_payment_mode(header.get("payment_mode") or "CASH"),
+            "split_cash_amount": round(to_float_safe(header.get("split_cash_amount"), cash_amount), 2),
         },
         "items": items,
         "totals": {
@@ -2806,7 +2955,10 @@ def normalize_hold_bill_payload(*, hold_bill_id=None, customer="", mobile="", do
             "cgst": round(cgst, 2),
             "sgst": round(sgst, 2),
             "net_total": round(net_total, 2),
-            "rounded_amount": round(rounded_amount, 2)
+            "rounded_amount": round(rounded_amount, 2),
+            "cash_amount": round(cash_amount, 2),
+            "online_amount": round(online_amount, 2),
+            "is_split_payment": is_split_payment,
         },
         "created_at": created_at,
     }
@@ -3578,6 +3730,9 @@ with app.app_context():
         ensure_column("return_item", "gst_percent", "REAL")
         ensure_column("return_item", "reason", "TEXT")
         ensure_column("invoice", "patient_id", "INTEGER")
+        ensure_column("invoice", "cash_amount", "NUMERIC(10,2) DEFAULT 0")
+        ensure_column("invoice", "online_amount", "NUMERIC(10,2) DEFAULT 0")
+        ensure_column("invoice", "is_split_payment", "BOOLEAN DEFAULT FALSE")
         ensure_column("invoice_item", "cost_price", "REAL")
         ensure_column("invoice_item", "cost_amount", "REAL")
         ensure_column("return_item", "cost_price", "REAL")
@@ -3635,6 +3790,22 @@ with app.app_context():
         ensure_column("vendor", "is_active", "BOOLEAN DEFAULT TRUE")
         ensure_column("vendor", "deleted_at", "TIMESTAMP")
         ensure_column("vendor", "deleted_by", "TEXT")
+        db.session.execute(text(
+            'UPDATE "invoice" '
+            'SET "cash_amount" = 0 '
+            'WHERE "cash_amount" IS NULL'
+        ))
+        db.session.execute(text(
+            'UPDATE "invoice" '
+            'SET "online_amount" = 0 '
+            'WHERE "online_amount" IS NULL'
+        ))
+        db.session.execute(text(
+            'UPDATE "invoice" '
+            'SET "is_split_payment" = FALSE '
+            'WHERE "is_split_payment" IS NULL'
+        ))
+        db.session.commit()
         if (db.session.bind.dialect.name if db.session.bind else "").lower() == "postgresql":
             legacy_boolean_columns = {
                 "user": {
@@ -4218,23 +4389,20 @@ def index():
         Invoice.created_at < tomorrow_start
     ).all()
 
+    today_collection_summary = summarize_invoice_collection(today_invoices)
     cash_today_sale = 0
     online_today_sale = 0
     cash_bills_today = 0
     online_bills_today = 0
+    split_bills_today = today_collection_summary["split_payment_count"]
 
-    for invoice in today_invoices:
-        total_amount = invoice.total or 0
-        # Treat every non-cash payment mode as online so existing flows keep working.
-        if is_cash_payment_mode(invoice.payment_mode):
-            cash_today_sale += total_amount
-            cash_bills_today += 1
-        else:
-            online_today_sale += total_amount
-            online_bills_today += 1
+    cash_today_sale = today_collection_summary["cash_collection"]
+    online_today_sale = today_collection_summary["online_collection"]
+    cash_bills_today = today_collection_summary["cash_invoice_count"]
+    online_bills_today = today_collection_summary["online_invoice_count"]
 
-    today_sale = cash_today_sale + online_today_sale
-    bills_today = cash_bills_today + online_bills_today
+    today_sale = round(sum(round_currency(invoice.total) for invoice in today_invoices), 2)
+    bills_today = len(today_invoices)
 
     # ---------- LOW STOCK ----------
     low_stock_count = len(get_low_stock_items(limit=LOW_STOCK_LIMIT))
@@ -4306,6 +4474,7 @@ def index():
         online_today_sale=online_today_sale,
         cash_bills_today=cash_bills_today,
         online_bills_today=online_bills_today,
+        split_bills_today=split_bills_today,
         low_stock=low_stock_count,
         expiring_soon=expiring_soon,
         inventory_value=inventory_value,
@@ -4986,7 +5155,8 @@ def delete_medicine(id):
 @invoice_access_required
 def billing():
     meds = Medicine.query.order_by(Medicine.name).all()
-    
+    payment_modes = POS_PAYMENT_MODES
+
     cart = []
     posted_hold_bill_id = to_int_safe(request.form.get("hold_bill_id"), 0) if request.method == "POST" else 0
 
@@ -4999,6 +5169,10 @@ def billing():
         validation_error = validate_billing_submission(request.form)
         if validation_error:
             flash(validation_error, "danger")
+            return redirect_to_billing_with_context()
+        requested_payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
+        if requested_payment_mode not in payment_modes:
+            flash("Invalid payment mode selected.", "danger")
             return redirect_to_billing_with_context()
         subtotal = 0
         total_discount = 0
@@ -5099,7 +5273,16 @@ def billing():
         cgst = round(subtotal * 0.025, 2)
         sgst = round(subtotal * 0.025, 2)
         total = round(subtotal, 2)
-        rounded_total = round(subtotal)
+        rounded_total = compute_invoice_rounded_total(total)
+        payment_breakdown, payment_error = calculate_invoice_payment_breakdown(
+            payment_mode=requested_payment_mode,
+            rounded_amount=rounded_total,
+            split_cash_amount_raw=request.form.get("split_cash_amount"),
+        )
+        if payment_error:
+            db.session.rollback()
+            flash(payment_error, "danger")
+            return redirect_to_billing_with_context()
 
         last = Invoice.query.order_by(Invoice.id.desc()).first()
         inv_no = f"INV-{datetime.now().year}-{1000 + ((last.id + 1) if last else 1)}"
@@ -5120,7 +5303,10 @@ def billing():
             cgst=cgst,
             sgst=sgst,
             total=total,
-            payment_mode=request.form.get("payment_mode", "CASH"),
+            payment_mode=payment_breakdown["payment_mode"],
+            cash_amount=payment_breakdown["cash_amount"],
+            online_amount=payment_breakdown["online_amount"],
+            is_split_payment=payment_breakdown["is_split_payment"],
             created_by=session.get("username")
         )
 
@@ -5170,13 +5356,17 @@ def billing():
             after=build_invoice_audit_snapshot(inv),
             extra={
                 "item_count": len(cart),
-                "payment_mode": inv.payment_mode
+                "payment_mode": inv.payment_mode,
+                "cash_amount": payment_breakdown["cash_amount"],
+                "online_amount": payment_breakdown["online_amount"],
+                "is_split_payment": payment_breakdown["is_split_payment"],
             }
         )
 
         return render_template(
             "invoice.html",
             inv=inv,
+            payment_breakdown=payment_breakdown,
             cart=cart,
             customer=inv.customer,
             mobile=inv.mobile,
@@ -5203,6 +5393,7 @@ def billing():
 
     return render_template(
         "billing.html",
+        payment_modes=payment_modes,
         **prepare_billing_context(meds, restored_hold_bill)
     )
 
@@ -5573,7 +5764,8 @@ def hold_bill():
     doctor = (request.form.get("doctor") or "").strip()
     gender = (request.form.get("gender") or "").strip()
     sale_type = (request.form.get("sale_type") or "sale").strip().lower() or "sale"
-    payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
+    payment_mode = normalize_payment_mode(request.form.get("payment_mode") or "CASH")
+    split_cash_amount = round(max(to_float_safe(request.form.get("split_cash_amount"), 0), 0), 2)
 
     if not customer:
         flash("Please enter patient name before holding bill", "danger")
@@ -5596,7 +5788,8 @@ def hold_bill():
             "doctor": doctor,
             "gender": gender,
             "sale_type": sale_type,
-            "payment_mode": payment_mode
+            "payment_mode": payment_mode,
+            "split_cash_amount": split_cash_amount,
         },
         "draft_items": draft_items,
         "items": items,
@@ -5802,11 +5995,13 @@ def invoices():
 def view_invoice(id):
     inv = Invoice.query.get_or_404(id)
     items = InvoiceItem.query.filter_by(invoice_id=id).all()
-    rounded_total = round(inv.subtotal or 0)
+    rounded_total = compute_invoice_rounded_total(inv.total if inv.total not in (None, "") else inv.subtotal)
+    payment_breakdown = build_invoice_payment_breakdown(inv, rounded_total)
 
     return render_template(
         "invoice.html",
         inv=inv,
+        payment_breakdown=payment_breakdown,
         cart=items,
         customer=inv.customer,
         mobile=inv.mobile,
@@ -5834,19 +6029,26 @@ def edit_invoice(id):
         return redirect("/invoices")
     invoice = Invoice.query.get_or_404(id)
     items = InvoiceItem.query.filter_by(invoice_id=id).all()
-    payment_modes = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
+    payment_modes = POS_PAYMENT_MODES
 
     if request.method == "POST":
         before_snapshot = build_invoice_audit_snapshot(invoice)
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
         payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
+        current_breakdown = build_invoice_payment_breakdown(invoice)
 
         if not customer:
             flash("Patient name is required.", "danger")
             return redirect(f"/invoice/edit/{invoice.id}")
         if payment_mode not in payment_modes:
             flash("Invalid payment mode selected.", "danger")
+            return redirect(f"/invoice/edit/{invoice.id}")
+        if current_breakdown["online_amount"] > 0 and payment_mode == "CASH":
+            flash("Invoices with online payment amount need an online payment mode.", "danger")
+            return redirect(f"/invoice/edit/{invoice.id}")
+        if round_currency(getattr(invoice, "cash_amount", 0)) > 0 and current_breakdown["online_amount"] <= 0 and payment_mode != "CASH":
+            flash("Cash-only invoices must remain in Cash payment mode.", "danger")
             return redirect(f"/invoice/edit/{invoice.id}")
 
         invoice.customer = customer
@@ -9793,6 +9995,8 @@ def reports():
         build_patient_medicine_usage_report=build_patient_medicine_usage_report,
         build_profit_report_summary=build_profit_report_summary,
         build_medicine_report_data=build_medicine_report_data,
+        build_invoice_payment_breakdown=build_invoice_payment_breakdown,
+        summarize_invoice_collection=summarize_invoice_collection,
     )
 
 
@@ -9836,33 +10040,51 @@ def export_excel():
         scope = "filtered"
 
     def build_invoice_rows(rows):
-        return [{
-            "Invoice ID": i.id,
-            "Invoice No": i.invoice_no,
-            "Patient Name": i.customer,
-            "Mobile": i.mobile,
-            "Doctor": i.doctor,
-            "Gender": i.gender,
-            "Subtotal": i.subtotal,
-            "Discount": i.discount,
-            "CGST": i.cgst,
-            "SGST": i.sgst,
-            "Total": i.total,
-            "Payment Mode": i.payment_mode,
-            "Created By": i.created_by,
-            "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
-        } for i in rows]
+        result = []
+        for i in rows:
+            payment_breakdown = build_invoice_payment_breakdown(i)
+            result.append({
+                "Invoice ID": i.id,
+                "Invoice No": i.invoice_no,
+                "Patient Name": i.customer,
+                "Mobile": i.mobile,
+                "Doctor": i.doctor,
+                "Gender": i.gender,
+                "Subtotal": i.subtotal,
+                "Discount": i.discount,
+                "CGST": i.cgst,
+                "SGST": i.sgst,
+                "Total": i.total,
+                "Rounded Amount": payment_breakdown["rounded_amount"],
+                "Payment Mode": payment_breakdown["display_mode"],
+                "Payment Type": payment_breakdown["payment_type"],
+                "Cash Collection": payment_breakdown["cash_amount"],
+                "Online Collection": payment_breakdown["online_amount"],
+                "Is Split Payment": "Yes" if payment_breakdown["is_split_payment"] else "No",
+                "Created By": i.created_by,
+                "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
+            })
+        return result
 
     def build_invoice_rows_legacy(rows):
-        return [{
-            "Invoice No": i.invoice_no,
-            "Patient Name": i.customer,
-            "Mobile": i.mobile,
-            "Date": i.created_at.strftime("%d-%m-%Y") if i.created_at else "",
-            "Total (ex GST)": i.subtotal,
-            "Payment Mode": i.payment_mode,
-            "User": i.created_by
-        } for i in rows]
+        result = []
+        for i in rows:
+            payment_breakdown = build_invoice_payment_breakdown(i)
+            result.append({
+                "Invoice No": i.invoice_no,
+                "Patient Name": i.customer,
+                "Mobile": i.mobile,
+                "Date": i.created_at.strftime("%d-%m-%Y") if i.created_at else "",
+                "Total (ex GST)": i.subtotal,
+                "Rounded Amount": payment_breakdown["rounded_amount"],
+                "Payment Mode": payment_breakdown["display_mode"],
+                "Payment Type": payment_breakdown["payment_type"],
+                "Cash Collection": payment_breakdown["cash_amount"],
+                "Online Collection": payment_breakdown["online_amount"],
+                "Is Split Payment": "Yes" if payment_breakdown["is_split_payment"] else "No",
+                "User": i.created_by
+            })
+        return result
 
     def build_invoice_item_rows(rows):
         return [{
@@ -10137,8 +10359,19 @@ def export_excel():
                 InvoiceItem.invoice_id.in_(invoice_ids)
             ).order_by(InvoiceItem.invoice_id.asc(), InvoiceItem.id.asc()).all()
 
+        collection_summary = summarize_invoice_collection(invoices)
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            pd.DataFrame([{
+                "Applied Filter": applied_filter,
+                "Invoice Count": collection_summary["invoice_count"],
+                "Sales Total": collection_summary["sale_total"],
+                "Cash Collection": collection_summary["cash_collection"],
+                "Online Collection": collection_summary["online_collection"],
+                "Split Payment Count": collection_summary["split_payment_count"],
+                "Cash Received Invoices": collection_summary["cash_invoice_count"],
+                "Online Received Invoices": collection_summary["online_invoice_count"],
+            }]).to_excel(writer, sheet_name="Summary", index=False)
             pd.DataFrame(build_invoice_rows_legacy(invoices)).to_excel(writer, sheet_name="Reports", index=False)
         output.seek(0)
 

@@ -398,15 +398,20 @@ tr.item-row {
 .payment {
     margin-top: 8px;
     display: grid;
-    grid-template-columns: 150px 1fr;
-    align-items: center;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
+}
+
+.payment-field {
+    display: grid;
+    gap: 4px;
     color: #e8f3ef;
     font-size: 11px;
     text-transform: uppercase;
 }
 
-.payment select {
+.payment-field select,
+.payment-field input {
     padding: 5px 7px;
     border: 1px solid #143430;
     background: #f2f2f2;
@@ -414,11 +419,17 @@ tr.item-row {
     font-size: 12px;
 }
 
+.payment-field input[readonly] {
+    background: #dbe7f5;
+    font-weight: 700;
+}
+
 @media (max-width: 1100px) {
     .top-grid { grid-template-columns: 1fr; }
     .summary-grid { grid-template-columns: repeat(2, 1fr); }
     .summary-actions { grid-template-columns: 1fr; }
     .lookup-grid { grid-template-columns: 1fr; }
+    .payment { grid-template-columns: 1fr; }
 }
 </style>
 
@@ -545,11 +556,42 @@ tr.item-row {
         <input type="hidden" name="rounded_amount" id="roundedInput" value="0">
 
         <div class="payment">
-            <label>Payment Mode</label>
-            <select name="payment_mode" required>
-                <option value="CASH" {% if not restored_hold_bill or restored_hold_bill.header.payment_mode == "CASH" %}selected{% endif %}>Cash</option>
-                <option value="ONLINE" {% if restored_hold_bill and restored_hold_bill.header.payment_mode == "ONLINE" %}selected{% endif %}>Online / UPI</option>
-            </select>
+            <div class="payment-field">
+                <label for="paymentModeSelect">Payment Mode</label>
+                <select id="paymentModeSelect" name="payment_mode" required>
+                    {% set restored_payment_mode = restored_hold_bill.header.payment_mode if restored_hold_bill else 'CASH' %}
+                    {% for mode in payment_modes %}
+                    <option value="{{ mode }}" {% if restored_payment_mode == mode %}selected{% endif %}>
+                        {% if mode == "ONLINE" %}Online{% elif mode == "ADJUSTMENT" %}Adjustment{% else %}{{ mode }}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="payment-field">
+                <label for="splitCashAmountInput">Split Cash Amount</label>
+                <input
+                    type="number"
+                    id="splitCashAmountInput"
+                    name="split_cash_amount"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                    value="{{ '%.2f'|format(restored_hold_bill.header.split_cash_amount) if restored_hold_bill and restored_hold_bill.header.split_cash_amount else '' }}"
+                    placeholder="0.00"
+                >
+            </div>
+            <div class="payment-field">
+                <label for="onlineAmountInput">Online Amount</label>
+                <input
+                    type="number"
+                    id="onlineAmountInput"
+                    name="online_amount"
+                    min="0"
+                    step="0.01"
+                    value="{{ '%.2f'|format(restored_hold_bill.totals.online_amount) if restored_hold_bill and restored_hold_bill.totals.online_amount else '0.00' }}"
+                    readonly
+                >
+            </div>
         </div>
 
         <div class="summary-actions">
@@ -604,6 +646,46 @@ function syncSummaryHidden(subtotal, discount, cgst, sgst, netTotal, rounded) {
     if (sgstInput) sgstInput.value = sgst.toFixed(2);
     if (netTotalInput) netTotalInput.value = netTotal.toFixed(2);
     if (roundedInput) roundedInput.value = rounded.toFixed(2);
+}
+
+function syncPaymentBreakdown() {
+    let paymentSelect = document.getElementById("paymentModeSelect");
+    let splitCashInput = document.getElementById("splitCashAmountInput");
+    let onlineAmountInput = document.getElementById("onlineAmountInput");
+    let roundedInput = document.getElementById("roundedInput");
+    if (!paymentSelect || !splitCashInput || !onlineAmountInput || !roundedInput) return;
+
+    let roundedAmount = toNum(roundedInput.value, 0);
+    let rawSplitCash = String(splitCashInput.value || "").trim();
+    let splitCash = rawSplitCash === "" ? 0 : toNum(rawSplitCash, 0);
+    let paymentMode = String(paymentSelect.value || "CASH").toUpperCase();
+    let validationMessage = "";
+
+    splitCashInput.max = roundedAmount.toFixed(2);
+
+    if (rawSplitCash !== "" && !/^\d*(\.\d{0,2})?$/.test(rawSplitCash)) {
+        validationMessage = "Cash amount must be a valid number.";
+    } else if (splitCash < 0) {
+        validationMessage = "Cash amount cannot be negative.";
+    } else if (splitCash > roundedAmount) {
+        validationMessage = "Cash amount cannot exceed total bill amount.";
+    } else if (splitCash > 0 && splitCash < roundedAmount && paymentMode === "CASH") {
+        validationMessage = "Select an online payment mode for the online portion of split payment.";
+    }
+
+    splitCashInput.setCustomValidity(validationMessage);
+
+    let effectiveCash = 0;
+    let effectiveOnline = 0;
+    if (rawSplitCash === "" || splitCash <= 0) {
+        effectiveCash = paymentMode === "CASH" ? roundedAmount : 0;
+        effectiveOnline = paymentMode === "CASH" ? 0 : roundedAmount;
+    } else {
+        effectiveCash = Math.min(splitCash, roundedAmount);
+        effectiveOnline = Math.max(roundedAmount - effectiveCash, 0);
+    }
+
+    onlineAmountInput.value = effectiveOnline.toFixed(2);
 }
 
 function removeRow(el) {
@@ -760,6 +842,7 @@ function calculateTotal() {
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = rounded.toFixed(2);
     syncSummaryHidden(subtotal, discount, cgst, sgst, subtotal, rounded);
+    syncPaymentBreakdown();
 }
 
 function resetBillUI() {
@@ -812,6 +895,9 @@ function resetBillUI() {
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = "0.00";
     syncSummaryHidden(0, 0, 0, 0, 0, 0);
+    let splitCashInput = document.getElementById("splitCashAmountInput");
+    if (splitCashInput) splitCashInput.value = "";
+    syncPaymentBreakdown();
 }
 
 let billingForm = document.getElementById("billingForm");
@@ -849,6 +935,8 @@ let medicineDropdown = document.getElementById("medicineDropdown");
 let barcodeBillingInput = document.getElementById("barcodeBillingInput");
 let barcodeScanButton = document.getElementById("barcodeScanButton");
 let barcodeStatus = document.getElementById("barcodeStatus");
+let paymentModeSelect = document.getElementById("paymentModeSelect");
+let splitCashAmountInput = document.getElementById("splitCashAmountInput");
 let activeRow = document.querySelector(".item");
 let f2OnQty = false;
 let medicineData = {{ medicine_data|tojson }};
@@ -1050,6 +1138,7 @@ function setSummaryValues(subtotal, discount, cgst, sgst, netTotal, rounded) {
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = rounded.toFixed(2);
     syncSummaryHidden(subtotal, discount, cgst, sgst, netTotal, rounded);
+    syncPaymentBreakdown();
 }
 
 function populateRestoredRow(row, rawItem) {
@@ -1145,9 +1234,15 @@ function applyRestoredBill(payload) {
     if (saleSelect && header.sale_type) saleSelect.value = String(header.sale_type).toLowerCase();
     if (paymentSelect && header.payment_mode) {
         let mode = String(header.payment_mode).toUpperCase();
-        if (mode.includes("ONLINE") || mode.includes("UPI")) mode = "ONLINE";
         paymentSelect.value = mode;
     }
+    let splitCashInput = document.getElementById("splitCashAmountInput");
+    let onlineAmountInput = document.getElementById("onlineAmountInput");
+    let totals = payload.totals || {};
+    let restoredSplitCash = toNum(header.split_cash_amount, toNum(totals.cash_amount, 0));
+    let restoredOnline = toNum(totals.online_amount, 0);
+    if (splitCashInput) splitCashInput.value = restoredSplitCash > 0 ? restoredSplitCash.toFixed(2) : "";
+    if (onlineAmountInput) onlineAmountInput.value = restoredOnline.toFixed(2);
 
     let table = document.getElementById("billTable");
     if (!table) return;
@@ -1162,7 +1257,6 @@ function applyRestoredBill(payload) {
         });
     }
 
-    let totals = payload.totals || {};
     let subtotal = toNum(totals.subtotal, 0);
     let discount = toNum(totals.discount, 0);
     let cgst = toNum(totals.cgst, subtotal * 0.025);
@@ -1435,6 +1529,26 @@ if (barcodeScanButton) {
     });
 }
 
+if (paymentModeSelect) {
+    paymentModeSelect.addEventListener("change", function () {
+        syncPaymentBreakdown();
+    });
+}
+
+if (splitCashAmountInput) {
+    splitCashAmountInput.addEventListener("input", function () {
+        syncPaymentBreakdown();
+    });
+    splitCashAmountInput.addEventListener("blur", function () {
+        if (String(this.value || "").trim() === "") {
+            this.value = "";
+        } else {
+            this.value = toNum(this.value, 0).toFixed(2);
+        }
+        syncPaymentBreakdown();
+    });
+}
+
 document.addEventListener("keydown", function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
@@ -1473,6 +1587,7 @@ if (restoredHoldBill && restoredHoldBill.hold_bill_id) {
     let firstRow = document.querySelector("#billTable .item");
     if (firstRow) syncRowHidden(firstRow);
     syncSummaryHidden(0, 0, 0, 0, 0, 0);
+    syncPaymentBreakdown();
 }
 
 if (barcodeBillingInput) {

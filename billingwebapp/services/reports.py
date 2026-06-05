@@ -34,6 +34,8 @@ def build_reports_page_state(
     build_patient_medicine_usage_report,
     build_profit_report_summary,
     build_medicine_report_data,
+    build_invoice_payment_breakdown,
+    summarize_invoice_collection,
 ):
     invoices = []
     total = 0
@@ -44,6 +46,8 @@ def build_reports_page_state(
     patient_medicine_patients = []
     patient_medicine_rows = []
     patient_medicine_summary = None
+    collection_summary = None
+    invoice_rows = []
     report_filters = default_report_filters()
     messages = []
 
@@ -66,6 +70,8 @@ def build_reports_page_state(
                 "patient_medicine_patients": patient_medicine_patients,
                 "patient_medicine_rows": patient_medicine_rows,
                 "patient_medicine_summary": patient_medicine_summary,
+                "collection_summary": collection_summary,
+                "invoice_rows": invoice_rows,
                 "report_filters": report_filters,
                 "messages": messages,
             }
@@ -190,6 +196,14 @@ def build_reports_page_state(
             medicine_totals = medicine_report["medicine_totals"]
 
         total = sum(invoice.total for invoice in invoices)
+        collection_summary = summarize_invoice_collection(invoices) if invoices else None
+        invoice_rows = [
+            {
+                "invoice": invoice,
+                "payment": build_invoice_payment_breakdown(invoice),
+            }
+            for invoice in invoices
+        ]
 
     return {
         "invoices": invoices,
@@ -202,6 +216,8 @@ def build_reports_page_state(
         "patient_medicine_patients": patient_medicine_patients,
         "patient_medicine_rows": patient_medicine_rows,
         "patient_medicine_summary": patient_medicine_summary,
+        "collection_summary": collection_summary,
+        "invoice_rows": invoice_rows,
         "report_filters": report_filters,
         "messages": messages,
     }

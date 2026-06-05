@@ -12,14 +12,19 @@
             <div class="app-stat-sub">{{ bills_today }} bills processed today</div>
             <div class="dashboard-breakdown">
                 <div class="dashboard-breakdown-card cash">
-                    <div class="dashboard-micro-label">Cash</div>
+                    <div class="dashboard-micro-label">Cash Received</div>
                     <div class="dashboard-micro-value">{{ money(cash_today_sale) }}</div>
-                    <div class="dashboard-micro-note">{{ cash_bills_today }} bills</div>
+                    <div class="dashboard-micro-note">{{ cash_bills_today }} bills with cash</div>
                 </div>
                 <div class="dashboard-breakdown-card online">
-                    <div class="dashboard-micro-label">Online</div>
+                    <div class="dashboard-micro-label">Online Received</div>
                     <div class="dashboard-micro-value">{{ money(online_today_sale) }}</div>
-                    <div class="dashboard-micro-note">{{ online_bills_today }} bills</div>
+                    <div class="dashboard-micro-note">{{ online_bills_today }} bills with online</div>
+                </div>
+                <div class="dashboard-breakdown-card">
+                    <div class="dashboard-micro-label">Split Payments</div>
+                    <div class="dashboard-micro-value">{{ split_bills_today }}</div>
+                    <div class="dashboard-micro-note">Bills paid using both modes</div>
                 </div>
             </div>
         </article>
