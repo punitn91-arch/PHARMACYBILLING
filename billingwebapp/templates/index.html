@@ -5,83 +5,78 @@
 {% macro money(v) -%}₹ {{ "%.2f"|format((v or 0)|float) }}{%- endmacro %}
 
 <div class="app-page-stack">
-    <section class="app-stat-grid">
-        <article class="app-stat-card">
+    <section class="dashboard-top-grid">
+        <article class="app-stat-card dashboard-top-card dashboard-primary-card">
             <div class="app-stat-label">Today's Net Sale</div>
             <div class="app-stat-value">{{ money(today_sale) }}</div>
             <div class="app-stat-sub">{{ bills_today }} bills processed today</div>
-            <div class="dashboard-breakdown">
-                <div class="dashboard-breakdown-card cash">
-                    <div class="dashboard-micro-label">Cash Received</div>
+            <div class="dashboard-collection-strip">
+                <div class="dashboard-collection-chip cash">
+                    <div class="dashboard-micro-label">Cash</div>
                     <div class="dashboard-micro-value">{{ money(cash_today_sale) }}</div>
                     <div class="dashboard-micro-note">{{ cash_bills_today }} bills with cash</div>
                 </div>
-                <div class="dashboard-breakdown-card online">
-                    <div class="dashboard-micro-label">Online Received</div>
+                <div class="dashboard-collection-chip online">
+                    <div class="dashboard-micro-label">Online</div>
                     <div class="dashboard-micro-value">{{ money(online_today_sale) }}</div>
                     <div class="dashboard-micro-note">{{ online_bills_today }} bills with online</div>
-                </div>
-                <div class="dashboard-breakdown-card">
-                    <div class="dashboard-micro-label">Split Payments</div>
-                    <div class="dashboard-micro-value">{{ split_bills_today }}</div>
-                    <div class="dashboard-micro-note">Bills paid using both modes</div>
                 </div>
             </div>
         </article>
 
         {% if show_profit_cards %}
-        <article class="app-stat-card">
+        <article class="app-stat-card dashboard-top-card">
             <div class="app-stat-label">Gross Profit Today</div>
             <div class="app-stat-value">{{ money(today_profit.gross_profit) }}</div>
             <div class="app-stat-sub">Margin {{ "%.2f"|format(today_profit.gross_profit_percentage or 0) }}% on {{ money(today_profit.net_sales) }} net sales</div>
         </article>
 
-        <article class="app-stat-card">
+        <article class="app-stat-card dashboard-top-card">
             <div class="app-stat-label">Gross Profit This Month</div>
             <div class="app-stat-value">{{ money(month_profit.gross_profit) }}</div>
             <div class="app-stat-sub">Month margin {{ "%.2f"|format(month_profit.gross_profit_percentage or 0) }}%</div>
         </article>
         {% endif %}
 
-        <article class="app-stat-card">
+        <article class="app-stat-card dashboard-top-card">
             <div class="app-stat-label">Appointments Today</div>
             <div class="app-stat-value">{{ appointment_total_today }}</div>
             <div class="app-stat-sub">{{ appointment_booked_today }} booked · {{ appointment_completed_today }} completed</div>
         </article>
     </section>
 
-    <section class="app-stat-grid">
-        <a href="/low-stock" class="app-stat-card" style="text-decoration:none;">
+    <section class="dashboard-logo-stage app-surface">
+        <img
+            src="{{ url_for('static', filename='logo.png') }}"
+            alt="Clinic Logo"
+            class="dashboard-logo-image"
+        >
+    </section>
+
+    <section class="dashboard-support-grid">
+        <a href="/low-stock" class="app-stat-card dashboard-support-card" style="text-decoration:none;">
             <div class="app-stat-label">Low Stock Items</div>
             <div class="app-stat-value">{{ low_stock }}</div>
             <div class="app-stat-sub">Immediate attention for reorder planning</div>
         </a>
 
-        <a href="/expiring-soon" class="app-stat-card" style="text-decoration:none;">
+        <a href="/expiring-soon" class="app-stat-card dashboard-support-card" style="text-decoration:none;">
             <div class="app-stat-label">Expiring In 30 Days</div>
             <div class="app-stat-value">{{ expiring_soon }}</div>
             <div class="app-stat-sub">Expiry watchlist for liquidation action</div>
         </a>
 
-        <article class="app-stat-card">
-            <div class="app-stat-label">Inventory Value</div>
-            <div class="app-stat-value">{{ money(inventory_value) }}</div>
-            <div class="app-stat-sub">Remaining stock value at purchase rate</div>
-        </article>
-
-        <article class="app-stat-card">
+        <article class="app-stat-card dashboard-support-card">
             <div class="app-stat-label">GST Collected Today</div>
             <div class="app-stat-value">{{ money(gst_collected) }}</div>
             <div class="app-stat-sub">Display-only tax snapshot for reporting</div>
         </article>
-    </section>
 
-    <section class="app-surface" style="padding: 26px; text-align: center;">
-        <img
-            src="{{ url_for('static', filename='logo.png') }}"
-            alt="Clinic Logo"
-            style="width: min(100%, 420px); height: auto;"
-        >
+        <article class="app-stat-card dashboard-support-card">
+            <div class="app-stat-label">Inventory Value</div>
+            <div class="app-stat-value">{{ money(inventory_value) }}</div>
+            <div class="app-stat-sub">Remaining stock value at purchase rate</div>
+        </article>
     </section>
 
     <section class="dashboard-hero-grid">

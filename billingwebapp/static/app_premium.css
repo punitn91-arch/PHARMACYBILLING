@@ -32,12 +32,14 @@ body.app-shell {
 }
 
 .content-inner {
-    gap: 20px;
+    gap: clamp(16px, 1.5vw, 22px);
+    min-width: 0;
 }
 
 .app-page-stack {
     display: grid;
-    gap: 18px;
+    gap: clamp(16px, 1.4vw, 20px);
+    min-width: 0;
 }
 
 .app-surface,
@@ -237,7 +239,7 @@ body.app-shell {
 .app-stat-grid {
     display: grid;
     gap: 14px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
 }
 
 .app-stat-card {
@@ -268,17 +270,20 @@ body.app-shell {
 
 .app-table-shell {
     overflow: hidden;
+    max-width: 100%;
 }
 
 .app-table-scroll {
     overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
 }
 
 .app-table {
-    width: 100%;
+    width: max(100%, 860px);
     border-collapse: separate;
     border-spacing: 0;
-    min-width: 860px;
+    min-width: 0;
 }
 
 .app-table thead th {
@@ -340,13 +345,89 @@ body.app-shell {
 .dashboard-hero-grid {
     display: grid;
     gap: 16px;
-    grid-template-columns: 1.35fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
+}
+
+.dashboard-top-grid,
+.dashboard-support-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-top-card,
+.dashboard-support-card {
+    min-height: 168px;
+    padding: 18px;
+    display: grid;
+    align-content: start;
+}
+
+.dashboard-primary-card {
+    background:
+        radial-gradient(circle at top right, rgba(13, 110, 253, 0.1), transparent 34%),
+        linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.dashboard-top-card .app-stat-value,
+.dashboard-support-card .app-stat-value {
+    font-size: clamp(22px, 2.2vw, 28px);
+}
+
+.dashboard-top-card .app-stat-sub,
+.dashboard-support-card .app-stat-sub {
+    line-height: 1.45;
+}
+
+.dashboard-collection-strip {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.dashboard-collection-chip {
+    padding: 10px 12px;
+    border-radius: 16px;
+    border: 1px solid var(--app-border);
+    background: #fff;
+}
+
+.dashboard-collection-chip.cash {
+    background: var(--app-success-soft);
+    border-color: #cfead8;
+}
+
+.dashboard-collection-chip.online {
+    background: var(--app-brand-soft);
+    border-color: #d5e3ff;
+}
+
+.dashboard-collection-chip .dashboard-micro-value {
+    font-size: 16px;
+}
+
+.dashboard-logo-stage {
+    min-height: 190px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+    border-radius: 34px;
+}
+
+.dashboard-logo-image {
+    width: min(100%, 460px);
+    height: auto;
+    object-fit: contain;
+    filter: none;
 }
 
 .dashboard-insights-grid {
     display: grid;
     gap: 16px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
 }
 
 .dashboard-graph-card,
@@ -436,7 +517,7 @@ body.app-shell {
 
 .dashboard-breakdown {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
     gap: 10px;
     margin-top: 14px;
 }
@@ -516,7 +597,8 @@ body.app-shell {
 }
 
 .invoice-page .app-table {
-    min-width: 1020px;
+    width: max(100%, 1020px);
+    min-width: 0;
 }
 
 .invoice-page .invoice-actions {
@@ -579,10 +661,17 @@ body.app-shell {
 }
 
 @media (max-width: 1180px) {
-    .dashboard-hero-grid,
-    .dashboard-insights-grid,
-    .app-stat-grid {
+    .app-filter-grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .dashboard-top-grid,
+    .dashboard-support-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dashboard-trend-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 }
 
@@ -594,12 +683,29 @@ body.app-shell {
     .dashboard-hero-grid,
     .dashboard-insights-grid,
     .app-stat-grid,
+    .dashboard-top-grid,
+    .dashboard-support-grid,
     .dashboard-trend-grid {
         grid-template-columns: 1fr;
     }
 
     .dashboard-breakdown {
         grid-template-columns: 1fr;
+    }
+
+    .dashboard-collection-strip {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-top-card,
+    .dashboard-support-card {
+        min-height: 0;
+    }
+
+    .dashboard-logo-stage {
+        min-height: 180px;
+        padding: 22px 16px;
+        border-radius: 24px;
     }
 
     .dashboard-trend-grid {
@@ -623,7 +729,11 @@ body.app-shell {
     }
 
     .app-table {
-        min-width: 720px;
+        width: max(100%, 720px);
+    }
+
+    .invoice-page .app-table {
+        width: max(100%, 860px);
     }
 
     .pos-sticky-summary {

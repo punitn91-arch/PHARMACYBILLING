@@ -4394,7 +4394,6 @@ def index():
     online_today_sale = 0
     cash_bills_today = 0
     online_bills_today = 0
-    split_bills_today = today_collection_summary["split_payment_count"]
 
     cash_today_sale = today_collection_summary["cash_collection"]
     online_today_sale = today_collection_summary["online_collection"]
@@ -4474,7 +4473,6 @@ def index():
         online_today_sale=online_today_sale,
         cash_bills_today=cash_bills_today,
         online_bills_today=online_bills_today,
-        split_bills_today=split_bills_today,
         low_stock=low_stock_count,
         expiring_soon=expiring_soon,
         inventory_value=inventory_value,

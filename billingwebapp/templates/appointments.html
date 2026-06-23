@@ -26,6 +26,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
+.appointments-ui {
+    min-width: 0;
+}
+
 .appointments-ui table th,
 .appointments-ui table td {
     text-align: left !important;
@@ -79,14 +83,49 @@
 }
 
 .appointments-ui .appointments-table {
-    width: max-content;
+    width: max(100%, 1120px);
 }
 
 .appointments-ui .appointments-table th,
 .appointments-ui .appointments-table td {
     padding-left: 0.6rem !important;
     padding-right: 0.6rem !important;
+    white-space: normal;
+}
+
+.appointments-ui .appointments-table th:nth-child(1),
+.appointments-ui .appointments-table th:nth-child(2),
+.appointments-ui .appointments-table th:nth-child(5),
+.appointments-ui .appointments-table th:nth-child(6),
+.appointments-ui .appointments-table th:nth-child(7),
+.appointments-ui .appointments-table th:nth-child(8),
+.appointments-ui .appointments-table th:nth-child(9),
+.appointments-ui .appointments-table th:nth-child(10),
+.appointments-ui .appointments-table td:nth-child(1),
+.appointments-ui .appointments-table td:nth-child(2),
+.appointments-ui .appointments-table td:nth-child(5),
+.appointments-ui .appointments-table td:nth-child(6),
+.appointments-ui .appointments-table td:nth-child(7),
+.appointments-ui .appointments-table td:nth-child(8),
+.appointments-ui .appointments-table td:nth-child(9),
+.appointments-ui .appointments-table td:nth-child(10) {
     white-space: nowrap;
+}
+
+.appointments-ui .appointments-table th:nth-child(3),
+.appointments-ui .appointments-table td:nth-child(3) {
+    min-width: 180px;
+}
+
+.appointments-ui .appointments-table th:nth-child(4),
+.appointments-ui .appointments-table td:nth-child(4) {
+    min-width: 140px;
+}
+
+@media (max-width: 1280px) {
+    .appointments-ui .appointments-table {
+        width: max(100%, 1020px);
+    }
 }
 </style>
 
@@ -140,7 +179,7 @@
 
 <div class="appointments-ui pb-12 font-sans text-slate-900">
 {% if not list_only %}
-<section class="mb-8 flex flex-col items-start justify-between gap-4 xl:flex-row xl:items-center">
+<section class="mb-8 flex flex-col items-start justify-between gap-4 2xl:flex-row 2xl:items-center">
     <div>
         <h1 class="text-4xl font-bold tracking-tight text-slate-900">Doctor Appointments</h1>
         <p class="mt-2 text-base text-slate-500">Manage appointment flow, track consultation billing, and monitor clinic throughput.</p>
@@ -180,7 +219,7 @@
         </div>
     </div>
 
-    <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
         <div class="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
             <p class="text-xs font-semibold uppercase tracking-wide text-amber-700">Scheduled</p>
             <p class="mt-1 text-2xl font-bold text-amber-900">{{ queue_preview.board_stats.scheduled }}</p>
@@ -215,7 +254,7 @@
     {% endif %}
 </section>
 
-<section class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+<section class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
     <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-soft transition duration-150 hover:shadow-md">
         <div class="flex items-center justify-between">
             <p class="text-sm font-medium text-slate-500">Booked</p>
@@ -286,7 +325,7 @@
 
 {% set appt_report_type = report_filters.appointment_report_type %}
 <section class="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-soft appointment-sticky-panel">
-    <div class="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+    <div class="mb-4 flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
         <div class="app-chip-row">
             {{ quick_filter_link('today', 'Today') }}
             {{ quick_filter_link('tomorrow', 'Tomorrow') }}
@@ -308,7 +347,7 @@
         </div>
     </div>
 
-    <form method="GET" action="{{ url_for('appointments') }}" class="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-6">
+    <form method="GET" action="{{ url_for('appointments') }}" class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <input type="hidden" name="quick_filter" value="{{ quick_filter }}">
 
         <div>
@@ -345,12 +384,12 @@
             <input id="appointment_to_date" type="date" name="appointment_to_date" value="{{ report_filters.appointment_to_date }}" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
         </div>
 
-        <div class="md:col-span-2 xl:col-span-2">
+        <div class="md:col-span-2 xl:col-span-3 2xl:col-span-2">
             <label for="appointment_search" class="mb-1 block text-xs font-medium text-slate-500">Search Name / Mobile</label>
             <input id="appointment_search" type="text" name="search" value="{{ search_query }}" placeholder="Patient name or mobile" class="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-blue-100">
         </div>
 
-        <div class="md:col-span-2 xl:col-span-6 flex flex-wrap items-center gap-1.5 pt-0.5">
+        <div class="md:col-span-2 xl:col-span-3 2xl:col-span-6 flex flex-wrap items-center gap-1.5 pt-0.5">
             <button type="submit" class="inline-flex h-9 items-center rounded-lg bg-brand px-3 text-xs font-semibold text-white transition duration-150 hover:bg-blue-700">Apply Report</button>
             <button type="submit" formaction="{{ url_for('export_appointments_excel') }}" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Export Excel</button>
             <button type="submit" formaction="{{ url_for('print_appointments_report') }}?mode=pdf" formtarget="_blank" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition duration-150 hover:bg-slate-50">Export PDF</button>
