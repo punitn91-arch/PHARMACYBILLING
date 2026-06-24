@@ -493,6 +493,23 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn(b'Type or confirm medicine name', response.data)
         self.assertIn(b"purchase_items_json", response.data)
 
+    def test_vendor_bill_history_uses_three_dot_action_menu_and_keeps_existing_routes(self):
+        with self.app.app_context():
+            vendor, purchase, _medicine = self._seed_vendor_purchase_stack(total_qty=6)
+            vendor_id = vendor.id
+            purchase_id = purchase.id
+
+        self.login()
+        response = self.client.get(f"/vendor/edit/{vendor_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Vendor Bill History", response.data)
+        self.assertIn(b'vendor-history-action-menu', response.data)
+        self.assertIn(b'aria-label="More Actions"', response.data)
+        self.assertIn(f'/vendor/purchase/{purchase_id}'.encode(), response.data)
+        self.assertIn(f'/vendor/purchase/{purchase_id}?mode=edit'.encode(), response.data)
+        self.assertIn(f'/vendor/purchase/{purchase_id}?mode=return'.encode(), response.data)
+        self.assertIn(f'/vendor/purchase/delete/{purchase_id}'.encode(), response.data)
+
     def test_vendor_form_hides_address_bank_and_payment_sections_but_preserves_existing_values(self):
         with self.app.app_context():
             vendor = self.app_module.Vendor(
