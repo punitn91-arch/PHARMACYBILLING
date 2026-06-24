@@ -601,21 +601,76 @@ body.app-shell {
     min-width: 0;
 }
 
-.invoice-page .invoice-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+.invoice-page .invoice-action-menu {
+    position: relative;
+    display: inline-block;
 }
 
-.invoice-page .invoice-actions a {
-    text-decoration: none;
-    font-size: 11px;
-    font-weight: 800;
+.invoice-page .invoice-action-menu summary {
+    list-style: none;
+}
+
+.invoice-page .invoice-action-menu summary::-webkit-details-marker {
+    display: none;
+}
+
+.invoice-page .invoice-action-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid #d8e3f2;
+    border-radius: 10px;
+    background: #fff;
+    color: #3b4d69;
+    cursor: pointer;
+    transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.invoice-page .invoice-action-trigger:hover {
+    background: #f5f9ff;
     color: var(--app-brand-strong);
+    border-color: #bfd2eb;
+    box-shadow: 0 10px 24px rgba(15, 35, 62, 0.08);
 }
 
-.invoice-page .invoice-actions a.danger {
+.invoice-page .invoice-action-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.invoice-page .invoice-action-panel {
+    position: fixed;
+    z-index: 50;
+    width: 148px;
+    overflow: hidden;
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 14px 32px rgba(15, 35, 62, 0.16);
+}
+
+.invoice-page .invoice-action-panel a {
+    display: block;
+    padding: 10px 12px;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--app-brand-strong);
+    transition: background 0.18s ease, color 0.18s ease;
+}
+
+.invoice-page .invoice-action-panel a:hover {
+    background: #eff6ff;
+}
+
+.invoice-page .invoice-action-panel a.danger {
     color: var(--app-danger);
+}
+
+.invoice-page .invoice-action-panel a.danger:hover {
+    background: #fff1f1;
 }
 
 .invoice-page .invoice-filter-panel--staff {

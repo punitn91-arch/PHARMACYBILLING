@@ -179,6 +179,7 @@ class SystemSmokeTests(unittest.TestCase):
         self.assertIn(b"Search Invoice / Patient / Mobile", response.data)
         self.assertIn(b"High Value", response.data)
         self.assertIn(b"Internal Note", response.data)
+        self.assertIn(b"More Actions", response.data)
 
     def test_appointments_page_renders_shortcut_filters(self):
         self.login()

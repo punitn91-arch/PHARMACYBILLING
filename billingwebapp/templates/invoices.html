@@ -135,20 +135,25 @@
                             </td>
                             <td>{{ i.created_by or '-' }}</td>
                             <td>
-                                <div class="invoice-actions">
-                                    <a href="/invoice/{{ i.id }}">View</a>
-                                    <a href="/invoice/{{ i.id }}?print=1" target="_blank">Print</a>
-                                    <a href="/return-medicine?invoice_no={{ i.invoice_no }}">Return</a>
-                                    {% if session.get("role") == "admin" or session.get("can_edit_invoice") or session.get("can_invoice_action") %}
-                                    <a href="/invoice/edit/{{ i.id }}">Edit</a>
-                                    {% endif %}
-                                    {% if session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}
-                                    <a class="danger"
-                                       href="/delete-invoice/{{ i.id }}"
-                                       data-async-action="true"
-                                       onclick="return confirm('Delete invoice?')">Delete</a>
-                                    {% endif %}
-                                </div>
+                                <details class="invoice-action-menu">
+                                    <summary title="More Actions" aria-label="More Actions" class="invoice-action-trigger">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="invoice-action-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/></svg>
+                                    </summary>
+                                    <div class="invoice-action-panel">
+                                        <a href="/invoice/{{ i.id }}">View</a>
+                                        <a href="/invoice/{{ i.id }}?print=1" target="_blank">Print</a>
+                                        <a href="/return-medicine?invoice_no={{ i.invoice_no }}">Return</a>
+                                        {% if session.get("role") == "admin" or session.get("can_edit_invoice") or session.get("can_invoice_action") %}
+                                        <a href="/invoice/edit/{{ i.id }}">Edit</a>
+                                        {% endif %}
+                                        {% if session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}
+                                        <a class="danger"
+                                           href="/delete-invoice/{{ i.id }}"
+                                           data-async-action="true"
+                                           onclick="return confirm('Delete invoice?')">Delete</a>
+                                        {% endif %}
+                                    </div>
+                                </details>
                             </td>
                         </tr>
                         {% endfor %}
@@ -167,6 +172,86 @@
         </div>
     </section>
 </div>
+
+<script>
+(function () {
+    const menus = document.querySelectorAll(".invoice-action-menu");
+    if (!menus.length) return;
+
+    function positionMenu(menu) {
+        const summary = menu.querySelector("summary");
+        const panel = menu.querySelector(".invoice-action-panel");
+        if (!summary || !panel) return;
+
+        panel.style.top = "-9999px";
+        panel.style.left = "-9999px";
+
+        const triggerRect = summary.getBoundingClientRect();
+        const panelRect = panel.getBoundingClientRect();
+        const viewportPadding = 8;
+        const gap = 8;
+
+        let left = triggerRect.right - panelRect.width;
+        left = Math.max(viewportPadding, Math.min(left, window.innerWidth - panelRect.width - viewportPadding));
+
+        let top = triggerRect.bottom + gap;
+        if (top + panelRect.height > window.innerHeight - viewportPadding) {
+            top = Math.max(viewportPadding, triggerRect.top - panelRect.height - gap);
+        }
+
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+    }
+
+    function repositionOpenMenus() {
+        menus.forEach((menu) => {
+            if (menu.hasAttribute("open")) {
+                positionMenu(menu);
+            }
+        });
+    }
+
+    menus.forEach((menu) => {
+        const summary = menu.querySelector("summary");
+        if (!summary) return;
+
+        summary.addEventListener("click", function () {
+            menus.forEach((otherMenu) => {
+                if (otherMenu !== menu) {
+                    otherMenu.removeAttribute("open");
+                }
+            });
+        });
+
+        menu.addEventListener("toggle", function () {
+            if (menu.hasAttribute("open")) {
+                requestAnimationFrame(function () {
+                    positionMenu(menu);
+                });
+            }
+        });
+    });
+
+    document.addEventListener("click", function (event) {
+        menus.forEach((menu) => {
+            if (!menu.contains(event.target)) {
+                menu.removeAttribute("open");
+            }
+        });
+    });
+
+    document.addEventListener("app:async-success", function (event) {
+        const detail = event.detail || {};
+        const trigger = detail.trigger;
+        if (!trigger || !trigger.closest) return;
+        const menu = trigger.closest(".invoice-action-menu");
+        if (menu) menu.removeAttribute("open");
+    });
+
+    window.addEventListener("resize", repositionOpenMenus);
+    window.addEventListener("scroll", repositionOpenMenus, true);
+})();
+</script>
 
 <script>
 (function () {
