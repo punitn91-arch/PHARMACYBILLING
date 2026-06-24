@@ -795,7 +795,18 @@ def round_currency(value):
 
 
 def compute_invoice_rounded_total(total_amount):
-    return round(float(round(to_float_safe(total_amount, 0.0))), 2)
+    rounded_amount = to_decimal(total_amount).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return float(rounded_amount.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP))
+
+
+def build_expiring_medicines_query(reference_date=None):
+    current_day = reference_date or clinic_now().date()
+    today_iso = current_day.isoformat()
+    expiry_limit_iso = (current_day + timedelta(days=30)).isoformat()
+    return Medicine.query.filter(
+        Medicine.expiry >= today_iso,
+        Medicine.expiry <= expiry_limit_iso,
+    )
 
 
 def parse_optional_money(raw_value):
@@ -2362,6 +2373,7 @@ def build_invoice_audit_snapshot(inv):
         "cash_amount": payment_breakdown["cash_amount"],
         "online_amount": payment_breakdown["online_amount"],
         "is_split_payment": payment_breakdown["is_split_payment"],
+        "internal_note": (getattr(inv, "internal_note", "") or "").strip(),
         "created_by": (inv.created_by or "").strip()
     }
 
@@ -2947,6 +2959,7 @@ def normalize_hold_bill_payload(*, hold_bill_id=None, customer="", mobile="", do
             "sale_type": (header.get("sale_type") or "sale").strip().lower() or "sale",
             "payment_mode": normalize_payment_mode(header.get("payment_mode") or "CASH"),
             "split_cash_amount": round(to_float_safe(header.get("split_cash_amount"), cash_amount), 2),
+            "internal_note": (header.get("internal_note") or "").strip(),
         },
         "items": items,
         "totals": {
@@ -3733,6 +3746,7 @@ with app.app_context():
         ensure_column("invoice", "cash_amount", "NUMERIC(10,2) DEFAULT 0")
         ensure_column("invoice", "online_amount", "NUMERIC(10,2) DEFAULT 0")
         ensure_column("invoice", "is_split_payment", "BOOLEAN DEFAULT FALSE")
+        ensure_column("invoice", "internal_note", "TEXT")
         ensure_column("invoice_item", "cost_price", "REAL")
         ensure_column("invoice_item", "cost_amount", "REAL")
         ensure_column("return_item", "cost_price", "REAL")
@@ -4407,10 +4421,7 @@ def index():
     low_stock_count = len(get_low_stock_items(limit=LOW_STOCK_LIMIT))
 
     # ---------- EXPIRING SOON (30 days) ----------
-    exp_limit = today + timedelta(days=30)
-    expiring_soon = Medicine.query.filter(
-        Medicine.expiry <= exp_limit.strftime("%Y-%m-%d")
-    ).count()
+    expiring_soon = build_expiring_medicines_query(today).count()
 
     # ---------- INVENTORY VALUE (AT PURCHASE RATE) ----------
     inventory_value = (
@@ -4513,12 +4524,7 @@ def order_list():
 @app.route("/expiring-soon")
 @login_required
 def expiring_soon():
-    from datetime import date, timedelta
-    limit = (date.today() + timedelta(days=30)).strftime("%Y-%m-%d")
-
-    medicines = Medicine.query.filter(
-        Medicine.expiry <= limit
-    ).order_by(Medicine.expiry).all()
+    medicines = build_expiring_medicines_query(clinic_now().date()).order_by(Medicine.expiry).all()
 
     return render_template("expiring.html", medicines=medicines)
 
@@ -5286,6 +5292,7 @@ def billing():
         inv_no = f"INV-{datetime.now().year}-{1000 + ((last.id + 1) if last else 1)}"
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
+        internal_note = (request.form.get("internal_note") or "").strip()
         patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, request.form.get("gender", ""))
         if patient and not patient.id:
             db.session.flush()
@@ -5305,6 +5312,7 @@ def billing():
             cash_amount=payment_breakdown["cash_amount"],
             online_amount=payment_breakdown["online_amount"],
             is_split_payment=payment_breakdown["is_split_payment"],
+            internal_note=internal_note,
             created_by=session.get("username")
         )
 
@@ -5738,7 +5746,7 @@ def return_invoice(id):
     items = ReturnItem.query.filter_by(return_id=id).all()
     return_no = ret.return_no or f"RB-{ret.id:06d}"
     subtotal = sum((i.net_amount or 0) for i in items)
-    total_refund = ret.total_refund or round(subtotal, 2)
+    total_refund = ret.total_refund if ret.total_refund is not None else round(subtotal, 2)
 
     return render_template(
         "return_invoice.html",
@@ -5764,6 +5772,7 @@ def hold_bill():
     sale_type = (request.form.get("sale_type") or "sale").strip().lower() or "sale"
     payment_mode = normalize_payment_mode(request.form.get("payment_mode") or "CASH")
     split_cash_amount = round(max(to_float_safe(request.form.get("split_cash_amount"), 0), 0), 2)
+    internal_note = (request.form.get("internal_note") or "").strip()
 
     if not customer:
         flash("Please enter patient name before holding bill", "danger")
@@ -5788,6 +5797,7 @@ def hold_bill():
             "sale_type": sale_type,
             "payment_mode": payment_mode,
             "split_cash_amount": split_cash_amount,
+            "internal_note": internal_note,
         },
         "draft_items": draft_items,
         "items": items,
@@ -6034,6 +6044,7 @@ def edit_invoice(id):
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
         payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
+        internal_note = (request.form.get("internal_note") or "").strip()
         current_breakdown = build_invoice_payment_breakdown(invoice)
 
         if not customer:
@@ -6052,6 +6063,7 @@ def edit_invoice(id):
         invoice.customer = customer
         invoice.mobile = mobile
         invoice.payment_mode = payment_mode
+        invoice.internal_note = internal_note
         patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, invoice.gender)
         if patient and not patient.id:
             db.session.flush()
@@ -10059,6 +10071,7 @@ def export_excel():
                 "Cash Collection": payment_breakdown["cash_amount"],
                 "Online Collection": payment_breakdown["online_amount"],
                 "Is Split Payment": "Yes" if payment_breakdown["is_split_payment"] else "No",
+                "Internal Note": i.internal_note or "",
                 "Created By": i.created_by,
                 "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
             })
@@ -10080,6 +10093,7 @@ def export_excel():
                 "Cash Collection": payment_breakdown["cash_amount"],
                 "Online Collection": payment_breakdown["online_amount"],
                 "Is Split Payment": "Yes" if payment_breakdown["is_split_payment"] else "No",
+                "Internal Note": i.internal_note or "",
                 "User": i.created_by
             })
         return result

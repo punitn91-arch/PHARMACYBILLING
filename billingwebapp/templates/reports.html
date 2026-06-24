@@ -614,6 +614,7 @@
                 <th>Total</th>
                 <th>Cash</th>
                 <th>Online</th>
+                <th>Internal Note</th>
                 <th>User</th>
             </tr>
             {% for row in invoice_rows %}
@@ -629,6 +630,7 @@
                 <td>Rs {{ i.total }}</td>
                 <td>Rs {{ payment.cash_amount }}</td>
                 <td>Rs {{ payment.online_amount }}</td>
+                <td>{{ i.internal_note or '-' }}</td>
                 <td>{{ i.created_by }}</td>
             </tr>
             {% endfor %}

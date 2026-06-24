@@ -134,24 +134,27 @@ body {
 <!-- TOTAL -->
 <table class="totals-table">
     <tr>
-        <td><b>NET REFUND BASE</b></td>
+        <td><b>REFUNDABLE NET VALUE</b></td>
         <td><b>₹{{ subtotal }}</b></td>
     </tr>
     <tr>
-        <td><b>CGST (REF)</b></td>
+        <td><b>CGST SNAPSHOT (REF)</b></td>
         <td><b>₹{{ ret.cgst or 0 }}</b></td>
     </tr>
     <tr>
-        <td><b>SGST (REF)</b></td>
+        <td><b>SGST SNAPSHOT (REF)</b></td>
         <td><b>₹{{ ret.sgst or 0 }}</b></td>
     </tr>
     <tr>
-        <td><b>REFUND TOTAL</b></td>
+        <td><b>FINAL REFUND TOTAL</b></td>
         <td><b>₹{{ total_refund }}</b></td>
     </tr>
 </table>
 
 <div class="clearfix"></div>
+<div style="margin-top:8px; font-size:11px; text-align:right; color:#333;">
+    GST snapshot is shown for reporting reference. Final refund total follows the original invoice refund basis.
+</div>
 
 <!-- ACTION BUTTONS -->
 <div class="action-btns" style="text-align:center; margin-top:40px;">

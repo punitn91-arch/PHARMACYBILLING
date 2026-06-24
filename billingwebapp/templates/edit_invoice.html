@@ -58,13 +58,19 @@
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
     width: 100%;
     border: 1px solid #c8d3e6;
     border-radius: 10px;
     padding: 11px 12px;
     font-size: 15px;
     background: #fff;
+}
+
+.field textarea {
+    min-height: 92px;
+    resize: vertical;
 }
 
 .readonly-table {
@@ -119,7 +125,7 @@
 <div class="edit-shell">
     <div class="edit-card">
         <h3 class="edit-title">Edit Invoice Details</h3>
-        <p class="edit-note">Medicine rows remain read-only. You can update only the patient name, mobile number, and payment mode here.</p>
+        <p class="edit-note">Medicine rows remain read-only. You can update patient details, payment mode, and the internal invoice note here.</p>
     </div>
 
     <div class="edit-card">
@@ -157,6 +163,10 @@
                         <option value="{{ mode }}" {% if (invoice.payment_mode or 'CASH')|upper == mode %}selected{% endif %}>{{ mode }}</option>
                         {% endfor %}
                     </select>
+                </div>
+                <div class="field" style="grid-column: 1 / -1;">
+                    <label for="internal_note">Internal Note</label>
+                    <textarea id="internal_note" name="internal_note" maxlength="400" placeholder="Internal note only. This will not show on printed bill.">{{ invoice.internal_note or '' }}</textarea>
                 </div>
             </div>
 

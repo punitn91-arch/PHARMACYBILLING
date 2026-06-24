@@ -96,6 +96,7 @@ class Invoice(db.Model):
     cash_amount = db.Column(db.Numeric(10, 2), default=0)
     online_amount = db.Column(db.Numeric(10, 2), default=0)
     is_split_payment = db.Column(db.Boolean, default=False)
+    internal_note = db.Column(db.Text)
 
 
     created_by = db.Column(db.String(50))

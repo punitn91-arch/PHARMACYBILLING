@@ -187,10 +187,10 @@ body {
 {% for item in cart %}
 {% set line_amount = (item.amount or 0)|float %}
 {% set gross_total.value = gross_total.value + line_amount %}
-{% set cgst_amt = (item.amount * 0.025) %}
-{% set sgst_amt = (item.amount * 0.025) %}
-{% set disc_amt = (item.amount * (item.discount_percent or 0) / 100) %}
-{% set net_amt = item.amount - disc_amt %}
+{% set disc_amt = line_amount * ((item.discount_percent or 0)|float) / 100 %}
+{% set net_amt = (item.net_amount if item.net_amount is not none else (line_amount - disc_amt))|float %}
+{% set cgst_amt = net_amt * 0.025 %}
+{% set sgst_amt = net_amt * 0.025 %}
 <tr>
     <td>{{ item.name }}</td>
     <td>{{ item.qty }}</td>
@@ -198,8 +198,8 @@ body {
     <td>{{ item.expiry }}</td>
     <td>{{ "%.2f"|format((item.price or 0)|float) }}</td>
 
-    <td>₹{{ "%.2f"|format(((item.amount or 0)|float) * 0.025) }}</td>
-    <td>₹{{ "%.2f"|format(((item.amount or 0)|float) * 0.025) }}</td>
+    <td>₹{{ "%.2f"|format(cgst_amt) }}</td>
+    <td>₹{{ "%.2f"|format(sgst_amt) }}</td>
 
     <td>₹{{ "%.1f"|format((item.amount or 0)|float) }}</td>
     <td>{{ item.discount_percent }}%</td>

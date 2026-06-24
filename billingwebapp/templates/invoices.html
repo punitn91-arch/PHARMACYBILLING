@@ -93,6 +93,7 @@
                         <th>Date</th>
                         <th>Payment</th>
                         <th>Total</th>
+                        <th>Internal Note</th>
                         <th>User</th>
                         <th>Actions</th>
                     </tr>
@@ -124,6 +125,14 @@
                                 {% endif %}
                             </td>
                             <td><strong>{{ money(i.total) }}</strong></td>
+                            <td>
+                                {% if i.internal_note %}
+                                <strong>{{ i.internal_note[:80] }}</strong>{% if i.internal_note|length > 80 %}...{% endif %}
+                                <div class="app-inline-help">Internal only</div>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
                             <td>{{ i.created_by or '-' }}</td>
                             <td>
                                 <div class="invoice-actions">
@@ -145,7 +154,7 @@
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="8">
+                            <td colspan="9">
                                 <div class="app-empty">
                                     <strong>No invoices found</strong>
                                     Try a wider date range or clear the search filter.

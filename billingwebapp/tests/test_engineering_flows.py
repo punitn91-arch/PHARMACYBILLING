@@ -159,6 +159,7 @@ class EngineeringFlowTests(unittest.TestCase):
                 "doctor": "Dr. Test",
                 "gender": "MALE",
                 "payment_mode": "CASH",
+                "internal_note": "Handle quietly at counter",
                 "medicine_name": ["PARACETAMOL 650"],
                 "qty": ["2"],
                 "batch_override[]": ["B123"],
@@ -179,10 +180,12 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(float(invoice.cash_amount), 48.0)
             self.assertEqual(float(invoice.online_amount), 0.0)
             self.assertFalse(invoice.is_split_payment)
+            self.assertEqual(invoice.internal_note, "Handle quietly at counter")
             self.assertEqual(invoice_item.qty, 2)
             self.assertEqual(medicine.qty, 8)
             self.assertEqual(purchase_item.remaining_qty, 8)
             self.assertEqual(len(stock_history), 1)
+        self.assertNotIn(b"Handle quietly at counter", response.data)
 
     def test_billing_flow_records_split_payment_breakdown(self):
         with self.app.app_context():
@@ -215,6 +218,36 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(float(invoice.cash_amount), 18.0)
             self.assertEqual(float(invoice.online_amount), 30.0)
             self.assertTrue(invoice.is_split_payment)
+
+    def test_compute_invoice_rounded_total_uses_half_up_rounding(self):
+        self.assertEqual(self.app_module.compute_invoice_rounded_total(48.5), 49.0)
+        self.assertEqual(self.app_module.compute_invoice_rounded_total(100.5), 101.0)
+        self.assertEqual(self.app_module.compute_invoice_rounded_total("101.49"), 101.0)
+
+    def test_discounted_invoice_print_uses_net_tax_values(self):
+        with self.app.app_context():
+            self._seed_patient()
+            self._seed_vendor_purchase_stack(total_qty=10)
+
+        self.login()
+        response = self.client.post(
+            "/billing",
+            data={
+                "customer": "Ravi Kumar",
+                "mobile": "9876543210",
+                "doctor": "Dr. Test",
+                "gender": "MALE",
+                "payment_mode": "CASH",
+                "medicine_name": ["PARACETAMOL 650"],
+                "qty": ["2"],
+                "batch_override[]": ["B123"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("₹1.19", html)
+        self.assertNotIn("₹1.25", html)
 
     def test_billing_rejects_split_cash_above_total_bill_amount(self):
         with self.app.app_context():
@@ -849,6 +882,64 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(purchase_item.remaining_qty, 2)
             self.assertEqual(allocation.returned_qty, 2)
 
+    def test_return_invoice_labels_gst_as_snapshot_and_keeps_refund_total(self):
+        with self.app.app_context():
+            patient = self._seed_patient()
+            invoice = self.app_module.Invoice(
+                invoice_no="INV-2002",
+                patient_id=patient.id,
+                customer=patient.name,
+                mobile=patient.mobile,
+                subtotal=50.0,
+                cgst=1.25,
+                sgst=1.25,
+                total=50.0,
+                payment_mode="CASH",
+                created_by="admin",
+                created_at=datetime.utcnow(),
+            )
+            self.db.session.add(invoice)
+            self.db.session.flush()
+            ret = self.app_module.Return(
+                invoice_id=invoice.id,
+                invoice_no=invoice.invoice_no,
+                customer=invoice.customer,
+                mobile=invoice.mobile,
+                total_refund=50.0,
+                cgst=1.25,
+                sgst=1.25,
+                payment_mode="CASH",
+                created_by="admin",
+                created_at=datetime.utcnow(),
+            )
+            self.db.session.add(ret)
+            self.db.session.flush()
+            self.db.session.add(
+                self.app_module.ReturnItem(
+                    return_id=ret.id,
+                    invoice_item_id=1,
+                    medicine_name="PARACETAMOL 650",
+                    qty=2,
+                    price=25.0,
+                    amount=50.0,
+                    discount_percent=0,
+                    net_amount=50.0,
+                    gst_percent=5.0,
+                    reason="Damaged strip",
+                )
+            )
+            self.db.session.commit()
+            return_id = ret.id
+
+        self.login()
+        response = self.client.get(f"/return-invoice/{return_id}")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("CGST SNAPSHOT (REF)", html)
+        self.assertIn("SGST SNAPSHOT (REF)", html)
+        self.assertIn("FINAL REFUND TOTAL", html)
+        self.assertIn("₹50.0", html)
+
     def test_appointment_payment_flow_marks_paid_and_blocks_duplicate(self):
         with self.app.app_context():
             patient = self._seed_patient()
@@ -1052,6 +1143,51 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn(b"Gross Profit Today", visible_response.data)
         self.assertIn(b"Gross Profit This Month", visible_response.data)
 
+    def test_dashboard_expiring_count_excludes_already_expired_stock(self):
+        with self.app.app_context():
+            today = date.today()
+            self.db.session.add_all(
+                [
+                    self.app_module.Medicine(
+                        name="Expired Med",
+                        batch="EXP-1",
+                        expiry=(today - timedelta(days=1)).isoformat(),
+                        mrp=10.0,
+                        qty=5,
+                        discount_percent=0,
+                        is_active=True,
+                    ),
+                    self.app_module.Medicine(
+                        name="Soon Med",
+                        batch="SOON-1",
+                        expiry=(today + timedelta(days=7)).isoformat(),
+                        mrp=10.0,
+                        qty=5,
+                        discount_percent=0,
+                        is_active=True,
+                    ),
+                    self.app_module.Medicine(
+                        name="Later Med",
+                        batch="LATE-1",
+                        expiry=(today + timedelta(days=45)).isoformat(),
+                        mrp=10.0,
+                        qty=5,
+                        discount_percent=0,
+                        is_active=True,
+                    ),
+                ]
+            )
+            self.db.session.commit()
+
+        self.login()
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertRegex(
+            html,
+            r'Expiring In 30 Days</div>\s*<div class="app-stat-value">\s*1\s*</div>',
+        )
+
     def test_invalid_login_creates_security_event(self):
         response = self.client.post(
             "/login",
@@ -1159,6 +1295,7 @@ class EngineeringFlowTests(unittest.TestCase):
                 "doctor": "Dr. Save",
                 "gender": "MALE",
                 "payment_mode": "CASH",
+                "internal_note": "Call before delivery",
                 "medicine_name": [""],
                 "qty": [""],
                 "batch_override[]": [""],
@@ -1178,6 +1315,35 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(hold_bill.customer, "Saved Patient")
             self.assertEqual(normalized["header"]["doctor"], "Dr. Save")
             self.assertEqual(normalized["header"]["payment_mode"], "CASH")
+            self.assertEqual(normalized["header"]["internal_note"], "Call before delivery")
+
+    def test_reports_invoice_report_shows_internal_note(self):
+        with self.app.app_context():
+            patient = self._seed_patient()
+            invoice = self.app_module.Invoice(
+                invoice_no="INV-REPORT-1",
+                patient_id=patient.id,
+                customer=patient.name,
+                mobile=patient.mobile,
+                subtotal=50.0,
+                total=50.0,
+                payment_mode="CASH",
+                internal_note="Doctor sample adjustment",
+                created_by="admin",
+                created_at=datetime.utcnow(),
+            )
+            self.db.session.add(invoice)
+            self.db.session.commit()
+
+        self.login()
+        response = self.client.post(
+            "/reports",
+            data={"report_type": "daily"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Internal Note", response.data)
+        self.assertIn(b"Doctor sample adjustment", response.data)
 
     def test_normalize_hold_bill_data_accepts_string_payload(self):
         payload = {

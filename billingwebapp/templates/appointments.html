@@ -422,7 +422,7 @@
                 {% set row_status = (a.status or 'BOOKED')|upper %}
                 {% set pay_status = (a.payment_status or ('PAID' if (a.payment_mode or '')|upper == 'PAID' else 'UNPAID'))|upper %}
                 {% set has_mobile = ((a.mobile or '')|trim) != '' %}
-                <tr class="transition duration-150 appointment-row">
+                <tr class="transition duration-150 appointment-row" data-appointment-id="{{ a.id }}">
                     <td class="px-4 py-4 text-sm font-semibold text-slate-900">
                         {{ a.appointment_no }}
                         <p class="mt-1 text-xs font-medium text-slate-500">Token {{ a.token_no or '-' }} | {{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</p>
@@ -640,6 +640,76 @@ function openAppointmentWhatsapp(button) {
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
 }
 
+const APPOINTMENTS_VIEWPORT_KEY = 'appointments:viewport';
+
+function saveAppointmentsViewport(trigger) {
+    if (!window.sessionStorage) return;
+
+    const row = trigger && trigger.closest ? trigger.closest('tr[data-appointment-id]') : null;
+    const payload = {
+        pageKey: `${window.location.pathname}${window.location.search}`,
+        scrollY: window.scrollY || window.pageYOffset || 0,
+        rowId: row ? row.dataset.appointmentId || '' : '',
+        rowTop: row ? row.getBoundingClientRect().top : 0,
+        savedAt: Date.now()
+    };
+
+    try {
+        sessionStorage.setItem(APPOINTMENTS_VIEWPORT_KEY, JSON.stringify(payload));
+    } catch (_err) {
+        // Ignore storage failures and fall back to normal reload behavior.
+    }
+}
+
+function restoreAppointmentsViewport() {
+    if (!window.sessionStorage) return;
+
+    let rawState = '';
+    try {
+        rawState = sessionStorage.getItem(APPOINTMENTS_VIEWPORT_KEY) || '';
+    } catch (_err) {
+        return;
+    }
+    if (!rawState) return;
+
+    let state = null;
+    try {
+        state = JSON.parse(rawState);
+    } catch (_err) {
+        sessionStorage.removeItem(APPOINTMENTS_VIEWPORT_KEY);
+        return;
+    }
+
+    sessionStorage.removeItem(APPOINTMENTS_VIEWPORT_KEY);
+
+    const currentPageKey = `${window.location.pathname}${window.location.search}`;
+    if (!state || state.pageKey !== currentPageKey) return;
+
+    const restore = function () {
+        const savedScrollY = Number.isFinite(Number(state.scrollY)) ? Number(state.scrollY) : 0;
+        const savedRowTop = Number.isFinite(Number(state.rowTop)) ? Number(state.rowTop) : 0;
+        const rowId = String(state.rowId || '').trim();
+        const row = rowId ? document.querySelector(`tr[data-appointment-id="${rowId}"]`) : null;
+
+        if (row) {
+            const rowRect = row.getBoundingClientRect();
+            const targetY = Math.max(0, (window.scrollY || window.pageYOffset || 0) + rowRect.top - savedRowTop);
+            window.scrollTo({ top: targetY, left: 0, behavior: 'auto' });
+            row.classList.add('is-shortcut-selected');
+            window.setTimeout(function () {
+                row.classList.remove('is-shortcut-selected');
+            }, 1600);
+            return;
+        }
+
+        window.scrollTo({ top: Math.max(0, savedScrollY), left: 0, behavior: 'auto' });
+    };
+
+    window.requestAnimationFrame(function () {
+        window.requestAnimationFrame(restore);
+    });
+}
+
 document.addEventListener('app:async-success', function (event) {
     const detail = event.detail || {};
     const trigger = detail.trigger;
@@ -653,6 +723,7 @@ document.addEventListener('app:async-success', function (event) {
     if (actionMenu) actionMenu.removeAttribute('open');
 
     if (url.includes('/appointments/')) {
+        saveAppointmentsViewport(trigger);
         window.setTimeout(function () {
             window.location.reload();
         }, 180);
@@ -661,5 +732,6 @@ document.addEventListener('app:async-success', function (event) {
 
 toggleAppointmentFilters("{{ report_filters.appointment_report_type }}");
 setupAppointmentActionMenus();
+restoreAppointmentsViewport();
 </script>
 {% endblock %}

@@ -161,6 +161,7 @@ class SystemSmokeTests(unittest.TestCase):
         self.assertIn(b"Scan Barcode", response.data)
         self.assertIn(b"Split Cash Amount", response.data)
         self.assertIn(b"Online Amount", response.data)
+        self.assertIn(b"Internal Note", response.data)
         self.assertIn(b"barcodeBillingInput", response.data)
         self.assertIn(b"PARA650", response.data)
 
@@ -177,6 +178,7 @@ class SystemSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Search Invoice / Patient / Mobile", response.data)
         self.assertIn(b"High Value", response.data)
+        self.assertIn(b"Internal Note", response.data)
 
     def test_appointments_page_renders_shortcut_filters(self):
         self.login()
