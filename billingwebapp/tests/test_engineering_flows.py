@@ -142,6 +142,50 @@ class EngineeringFlowTests(unittest.TestCase):
         self.db.session.commit()
         return vendor, purchase, medicine
 
+    def _seed_invoice(
+        self,
+        *,
+        customer="Ravi Kumar",
+        mobile="9876543210",
+        total=50.0,
+        subtotal=None,
+        payment_mode="CASH",
+        cash_amount=None,
+        online_amount=None,
+        is_split_payment=False,
+        internal_note="",
+        created_by="admin",
+    ):
+        patient = self._seed_patient(name=customer, mobile=mobile)
+        invoice_count = self.app_module.Invoice.query.count() + 1
+        payable_total = float(total if total is not None else 0)
+        rounded_total = self.app_module.compute_invoice_rounded_total(payable_total)
+        if subtotal is None:
+            subtotal = payable_total
+        if cash_amount is None:
+            cash_amount = rounded_total if (payment_mode or "").strip().upper() == "CASH" else 0.0
+        if online_amount is None:
+            online_amount = 0.0 if (payment_mode or "").strip().upper() == "CASH" else rounded_total
+
+        invoice = self.app_module.Invoice(
+            invoice_no=f"INV-SEED-{invoice_count}",
+            patient_id=patient.id,
+            customer=customer,
+            mobile=mobile,
+            subtotal=subtotal,
+            total=payable_total,
+            payment_mode=payment_mode,
+            cash_amount=cash_amount,
+            online_amount=online_amount,
+            is_split_payment=is_split_payment,
+            internal_note=internal_note,
+            created_by=created_by,
+            created_at=datetime.utcnow(),
+        )
+        self.db.session.add(invoice)
+        self.db.session.commit()
+        return patient, invoice
+
     def _expected_auto_code(self, name, serial=1):
         return f"{self.app_module.build_medicine_code_prefix(name)}{serial:03d}"
 
@@ -1361,6 +1405,91 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Internal Note", response.data)
         self.assertIn(b"Doctor sample adjustment", response.data)
+
+    def test_admin_invoice_edit_can_move_cash_invoice_to_online_mode(self):
+        with self.app.app_context():
+            _patient, invoice = self._seed_invoice(total=50.0, payment_mode="CASH", cash_amount=50.0, online_amount=0.0)
+            invoice_id = invoice.id
+
+        self.login()
+        response = self.client.post(
+            f"/invoice/edit/{invoice_id}",
+            data={
+                "customer": "Ravi Kumar",
+                "mobile": "9876543210",
+                "payment_mode": "UPI",
+                "internal_note": "Corrected by admin",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"/invoice/{invoice_id}", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            updated_invoice = self.db.session.get(self.app_module.Invoice, invoice_id)
+            self.assertEqual(updated_invoice.payment_mode, "UPI")
+            self.assertEqual(float(updated_invoice.cash_amount), 0.0)
+            self.assertEqual(float(updated_invoice.online_amount), 50.0)
+            self.assertFalse(updated_invoice.is_split_payment)
+            self.assertEqual(updated_invoice.internal_note, "Corrected by admin")
+
+    def test_admin_invoice_edit_preserves_split_breakdown_when_online_mode_changes(self):
+        with self.app.app_context():
+            _patient, invoice = self._seed_invoice(
+                total=50.0,
+                payment_mode="UPI",
+                cash_amount=20.0,
+                online_amount=30.0,
+                is_split_payment=True,
+            )
+            invoice_id = invoice.id
+
+        self.login()
+        response = self.client.post(
+            f"/invoice/edit/{invoice_id}",
+            data={
+                "customer": "Ravi Kumar",
+                "mobile": "9876543210",
+                "payment_mode": "CARD",
+                "internal_note": "Mode corrected",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"/invoice/{invoice_id}", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            updated_invoice = self.db.session.get(self.app_module.Invoice, invoice_id)
+            self.assertEqual(updated_invoice.payment_mode, "CARD")
+            self.assertEqual(float(updated_invoice.cash_amount), 20.0)
+            self.assertEqual(float(updated_invoice.online_amount), 30.0)
+            self.assertTrue(updated_invoice.is_split_payment)
+            self.assertEqual(updated_invoice.internal_note, "Mode corrected")
+
+    def test_non_admin_users_cannot_edit_invoices_and_do_not_see_edit_action(self):
+        with self.app.app_context():
+            _patient, invoice = self._seed_invoice(total=50.0, payment_mode="CASH", cash_amount=50.0, online_amount=0.0)
+            invoice_id = invoice.id
+            staff_user = self.app_module.User(
+                username="billing_staff",
+                role="staff",
+                access_profile="custom",
+                can_invoice_action=True,
+                can_edit_invoice=True,
+                is_active=True,
+            )
+            staff_user.set_password("Password@123")
+            self.db.session.add(staff_user)
+            self.db.session.commit()
+
+        self.login_as("billing_staff", "Password@123")
+        list_response = self.client.get("/invoices")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertNotIn(f'/invoice/edit/{invoice_id}'.encode(), list_response.data)
+
+        edit_response = self.client.get(f"/invoice/edit/{invoice_id}", follow_redirects=False)
+        self.assertEqual(edit_response.status_code, 302)
+        self.assertIn("/invoices", edit_response.headers.get("Location", ""))
 
     def test_normalize_hold_bill_data_accepts_string_payload(self):
         payload = {

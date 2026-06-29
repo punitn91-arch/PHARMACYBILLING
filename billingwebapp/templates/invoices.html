@@ -143,7 +143,7 @@
                                         <a href="/invoice/{{ i.id }}">View</a>
                                         <a href="/invoice/{{ i.id }}?print=1" target="_blank">Print</a>
                                         <a href="/return-medicine?invoice_no={{ i.invoice_no }}">Return</a>
-                                        {% if session.get("role") == "admin" or session.get("can_edit_invoice") or session.get("can_invoice_action") %}
+                                        {% if session.get("role") == "admin" %}
                                         <a href="/invoice/edit/{{ i.id }}">Edit</a>
                                         {% endif %}
                                         {% if session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}

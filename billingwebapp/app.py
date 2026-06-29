@@ -892,6 +892,36 @@ def build_invoice_payment_breakdown(invoice, rounded_amount=None):
     }
 
 
+def resolve_invoice_edit_payment_update(invoice, requested_payment_mode):
+    normalized_mode = normalize_payment_mode(requested_payment_mode)
+    current_breakdown = build_invoice_payment_breakdown(invoice)
+
+    if current_breakdown["is_split_payment"]:
+        if is_cash_payment_mode(normalized_mode):
+            return None, "Split-payment invoices must keep an online payment mode."
+        return {
+            "payment_mode": normalized_mode,
+            "cash_amount": current_breakdown["cash_amount"],
+            "online_amount": current_breakdown["online_amount"],
+            "is_split_payment": True,
+        }, None
+
+    payable_amount = current_breakdown["rounded_amount"]
+    if is_cash_payment_mode(normalized_mode):
+        cash_amount = payable_amount
+        online_amount = 0.0
+    else:
+        cash_amount = 0.0
+        online_amount = payable_amount
+
+    return {
+        "payment_mode": normalized_mode,
+        "cash_amount": round_currency(cash_amount),
+        "online_amount": round_currency(online_amount),
+        "is_split_payment": False,
+    }, None
+
+
 def summarize_invoice_collection(invoices):
     summary = {
         "invoice_count": 0,
@@ -6032,7 +6062,7 @@ def edit_invoice(id):
     if not user:
         flash("Access denied", "danger")
         return redirect("/")
-    if user.role != "admin" and not (user.can_edit_invoice or user.can_invoice_action):
+    if user.role != "admin":
         flash("Access denied", "danger")
         return redirect("/invoices")
     invoice = Invoice.query.get_or_404(id)
@@ -6045,7 +6075,6 @@ def edit_invoice(id):
         mobile = (request.form.get("mobile") or "").strip()
         payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
         internal_note = (request.form.get("internal_note") or "").strip()
-        current_breakdown = build_invoice_payment_breakdown(invoice)
 
         if not customer:
             flash("Patient name is required.", "danger")
@@ -6053,16 +6082,18 @@ def edit_invoice(id):
         if payment_mode not in payment_modes:
             flash("Invalid payment mode selected.", "danger")
             return redirect(f"/invoice/edit/{invoice.id}")
-        if current_breakdown["online_amount"] > 0 and payment_mode == "CASH":
-            flash("Invoices with online payment amount need an online payment mode.", "danger")
-            return redirect(f"/invoice/edit/{invoice.id}")
-        if round_currency(getattr(invoice, "cash_amount", 0)) > 0 and current_breakdown["online_amount"] <= 0 and payment_mode != "CASH":
-            flash("Cash-only invoices must remain in Cash payment mode.", "danger")
+
+        payment_update, payment_error = resolve_invoice_edit_payment_update(invoice, payment_mode)
+        if payment_error:
+            flash(payment_error, "danger")
             return redirect(f"/invoice/edit/{invoice.id}")
 
         invoice.customer = customer
         invoice.mobile = mobile
-        invoice.payment_mode = payment_mode
+        invoice.payment_mode = payment_update["payment_mode"]
+        invoice.cash_amount = payment_update["cash_amount"]
+        invoice.online_amount = payment_update["online_amount"]
+        invoice.is_split_payment = payment_update["is_split_payment"]
         invoice.internal_note = internal_note
         patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, invoice.gender)
         if patient and not patient.id:
