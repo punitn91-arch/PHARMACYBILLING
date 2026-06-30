@@ -97,6 +97,13 @@ class Invoice(db.Model):
     online_amount = db.Column(db.Numeric(10, 2), default=0)
     is_split_payment = db.Column(db.Boolean, default=False)
     internal_note = db.Column(db.Text)
+    print_profile_code = db.Column(db.String(40))
+    print_address_line_1 = db.Column(db.String(255))
+    print_address_line_2 = db.Column(db.String(255))
+    print_mobile = db.Column(db.String(30))
+    print_gst_no = db.Column(db.String(40))
+    print_licence_no = db.Column(db.String(80))
+    print_logo_path = db.Column(db.String(255))
 
 
     created_by = db.Column(db.String(50))

@@ -781,6 +781,25 @@ def to_float_safe(val, default=0.0):
 
 
 POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
+INVOICE_PRINT_PROFILE_CUTOVER = date(2026, 7, 1)
+LEGACY_INVOICE_PRINT_PROFILE = {
+    "profile_code": "legacy_pre_2026_07",
+    "address_line_1": "FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER",
+    "address_line_2": "JAIPUR, RAJASTHAN",
+    "mobile": "9024648186",
+    "gst_no": "A8BPWPP5023C1ZP",
+    "licence_no": "",
+    "logo_path": "/static/endo-pharmacy-logo.png",
+}
+CURRENT_INVOICE_PRINT_PROFILE = {
+    "profile_code": "endo_pharmacy_2026_07",
+    "address_line_1": "FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER",
+    "address_line_2": "JAIPUR, RAJASTHAN",
+    "mobile": "9024648186",
+    "gst_no": "08ABAFT0637R1ZP",
+    "licence_no": "DRUG/2026-27/154505",
+    "logo_path": "/static/endo-pharmacy-logo.png",
+}
 
 
 def normalize_payment_mode(value, default="CASH"):
@@ -792,6 +811,99 @@ def normalize_payment_mode(value, default="CASH"):
 
 def round_currency(value):
     return round(to_float_safe(value, 0.0), 2)
+
+
+def _clone_invoice_print_profile(profile):
+    return {
+        "profile_code": profile.get("profile_code", ""),
+        "address_line_1": profile.get("address_line_1", ""),
+        "address_line_2": profile.get("address_line_2", ""),
+        "mobile": profile.get("mobile", ""),
+        "gst_no": profile.get("gst_no", ""),
+        "licence_no": profile.get("licence_no", ""),
+        "logo_path": profile.get("logo_path", ""),
+    }
+
+
+def _invoice_profile_local_date(value=None):
+    if isinstance(value, datetime):
+        return storage_datetime_to_local_date(value) or value.date()
+    if isinstance(value, date):
+        return value
+    return clinic_now().date()
+
+
+def get_invoice_print_profile_for_date(value=None):
+    effective_date = _invoice_profile_local_date(value)
+    if effective_date < INVOICE_PRINT_PROFILE_CUTOVER:
+        return _clone_invoice_print_profile(LEGACY_INVOICE_PRINT_PROFILE)
+    return _clone_invoice_print_profile(CURRENT_INVOICE_PRINT_PROFILE)
+
+
+def build_invoice_print_profile_snapshot(value=None):
+    profile = get_invoice_print_profile_for_date(value)
+    return {
+        "print_profile_code": profile["profile_code"],
+        "print_address_line_1": profile["address_line_1"],
+        "print_address_line_2": profile["address_line_2"],
+        "print_mobile": profile["mobile"],
+        "print_gst_no": profile["gst_no"],
+        "print_licence_no": profile["licence_no"],
+        "print_logo_path": profile["logo_path"],
+    }
+
+
+def apply_invoice_print_profile(invoice, value=None):
+    snapshot = build_invoice_print_profile_snapshot(value or getattr(invoice, "created_at", None))
+    for field, field_value in snapshot.items():
+        setattr(invoice, field, field_value)
+    return snapshot
+
+
+def resolve_invoice_print_profile(invoice):
+    profile = get_invoice_print_profile_for_date(getattr(invoice, "created_at", None))
+    field_mapping = {
+        "profile_code": "print_profile_code",
+        "address_line_1": "print_address_line_1",
+        "address_line_2": "print_address_line_2",
+        "mobile": "print_mobile",
+        "gst_no": "print_gst_no",
+        "licence_no": "print_licence_no",
+        "logo_path": "print_logo_path",
+    }
+
+    for profile_key, invoice_field in field_mapping.items():
+        raw_value = getattr(invoice, invoice_field, None)
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str):
+            if not raw_value.strip() and profile_key != "licence_no":
+                continue
+            profile[profile_key] = raw_value.strip()
+            continue
+        profile[profile_key] = raw_value
+    return profile
+
+
+def backfill_invoice_print_profiles():
+    invoices = Invoice.query.filter(
+        or_(
+            Invoice.print_profile_code.is_(None),
+            Invoice.print_address_line_1.is_(None),
+            Invoice.print_address_line_2.is_(None),
+            Invoice.print_mobile.is_(None),
+            Invoice.print_gst_no.is_(None),
+            Invoice.print_licence_no.is_(None),
+            Invoice.print_logo_path.is_(None),
+        )
+    ).all()
+    updated = 0
+    for invoice in invoices:
+        apply_invoice_print_profile(invoice, getattr(invoice, "created_at", None))
+        updated += 1
+    if updated:
+        db.session.commit()
+    return updated
 
 
 def compute_invoice_rounded_total(total_amount):
@@ -3082,6 +3194,73 @@ def medicine_expiry_display(expiry):
     return raw or "-", None
 
 
+def build_medicine_purchase_rate_lookup(medicines):
+    medicine_rows = list(medicines or [])
+    if not medicine_rows:
+        return {}
+
+    medicine_ids = {med.id for med in medicine_rows if getattr(med, "id", None)}
+    medicine_name_keys = {
+        (
+            normalize_medicine_name(getattr(med, "name", "")).casefold(),
+            (getattr(med, "batch", "") or "").strip().casefold(),
+        )
+        for med in medicine_rows
+        if normalize_medicine_name(getattr(med, "name", "")) and (getattr(med, "batch", "") or "").strip()
+    }
+
+    filters = []
+    if medicine_ids:
+        filters.append(VendorPurchaseItem.medicine_id.in_(medicine_ids))
+    if medicine_name_keys:
+        medicine_name_values = sorted({name for name, _batch in medicine_name_keys})
+        batch_values = sorted({batch for _name, batch in medicine_name_keys})
+        filters.append(
+            and_(
+                db.func.lower(db.func.trim(db.func.coalesce(VendorPurchaseItem.medicine_name, ""))).in_(medicine_name_values),
+                db.func.lower(db.func.trim(db.func.coalesce(VendorPurchaseItem.batch, ""))).in_(batch_values),
+            )
+        )
+
+    if not filters:
+        return {}
+
+    purchase_items = VendorPurchaseItem.query.filter(
+        or_(*filters)
+    ).order_by(
+        VendorPurchaseItem.created_at.desc(),
+        VendorPurchaseItem.id.desc()
+    ).all()
+
+    latest_rate_by_medicine_id = {}
+    latest_rate_by_name_batch = {}
+    for item in purchase_items:
+        purchase_rate = to_float_safe(getattr(item, "purchase_rate", 0), 0)
+        medicine_id = getattr(item, "medicine_id", None)
+        if medicine_id and medicine_id in medicine_ids and medicine_id not in latest_rate_by_medicine_id:
+            latest_rate_by_medicine_id[medicine_id] = purchase_rate
+
+        fallback_key = (
+            normalize_medicine_name(getattr(item, "medicine_name", "")).casefold(),
+            (getattr(item, "batch", "") or "").strip().casefold(),
+        )
+        if fallback_key in medicine_name_keys and fallback_key not in latest_rate_by_name_batch:
+            latest_rate_by_name_batch[fallback_key] = purchase_rate
+
+    purchase_rate_lookup = {}
+    for med in medicine_rows:
+        med_id = getattr(med, "id", None)
+        fallback_key = (
+            normalize_medicine_name(getattr(med, "name", "")).casefold(),
+            (getattr(med, "batch", "") or "").strip().casefold(),
+        )
+        purchase_rate_lookup[med_id] = latest_rate_by_medicine_id.get(
+            med_id,
+            latest_rate_by_name_batch.get(fallback_key, 0.0)
+        )
+    return purchase_rate_lookup
+
+
 def build_medicine_master_groups(show_archived=False):
     today = date.today()
     medicines = Medicine.query.order_by(
@@ -3777,6 +3956,13 @@ with app.app_context():
         ensure_column("invoice", "online_amount", "NUMERIC(10,2) DEFAULT 0")
         ensure_column("invoice", "is_split_payment", "BOOLEAN DEFAULT FALSE")
         ensure_column("invoice", "internal_note", "TEXT")
+        ensure_column("invoice", "print_profile_code", "TEXT")
+        ensure_column("invoice", "print_address_line_1", "TEXT")
+        ensure_column("invoice", "print_address_line_2", "TEXT")
+        ensure_column("invoice", "print_mobile", "TEXT")
+        ensure_column("invoice", "print_gst_no", "TEXT")
+        ensure_column("invoice", "print_licence_no", "TEXT")
+        ensure_column("invoice", "print_logo_path", "TEXT")
         ensure_column("invoice_item", "cost_price", "REAL")
         ensure_column("invoice_item", "cost_amount", "REAL")
         ensure_column("return_item", "cost_price", "REAL")
@@ -3850,6 +4036,7 @@ with app.app_context():
             'WHERE "is_split_payment" IS NULL'
         ))
         db.session.commit()
+        backfill_invoice_print_profiles()
         if (db.session.bind.dialect.name if db.session.bind else "").lower() == "postgresql":
             legacy_boolean_columns = {
                 "user": {
@@ -5323,6 +5510,8 @@ def billing():
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
         internal_note = (request.form.get("internal_note") or "").strip()
+        invoice_created_at = datetime.utcnow()
+        invoice_print_date = clinic_now().date()
         patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, request.form.get("gender", ""))
         if patient and not patient.id:
             db.session.flush()
@@ -5343,8 +5532,10 @@ def billing():
             online_amount=payment_breakdown["online_amount"],
             is_split_payment=payment_breakdown["is_split_payment"],
             internal_note=internal_note,
-            created_by=session.get("username")
+            created_by=session.get("username"),
+            created_at=invoice_created_at,
         )
+        apply_invoice_print_profile(inv, invoice_print_date)
 
         db.session.add(inv)
         db.session.flush()
@@ -5402,6 +5593,7 @@ def billing():
         return render_template(
             "invoice.html",
             inv=inv,
+            print_profile=resolve_invoice_print_profile(inv),
             payment_breakdown=payment_breakdown,
             cart=cart,
             customer=inv.customer,
@@ -5415,7 +5607,8 @@ def billing():
             sgst=sgst,
             total=total,
             rounded_total=rounded_total,
-            date=datetime.now().strftime("%d-%m-%Y")
+            date=(storage_datetime_to_local(inv.created_at) or clinic_now()).strftime("%d-%m-%Y"),
+            bill_time=(storage_datetime_to_local(inv.created_at) or clinic_now()).strftime("%I:%M %p")
         )
 
     restored_hold_bill = None
@@ -6039,6 +6232,7 @@ def view_invoice(id):
     return render_template(
         "invoice.html",
         inv=inv,
+        print_profile=resolve_invoice_print_profile(inv),
         payment_breakdown=payment_breakdown,
         cart=items,
         customer=inv.customer,
@@ -6052,7 +6246,8 @@ def view_invoice(id):
         sgst=inv.sgst,
         total=inv.total,
         rounded_total=rounded_total,
-        date=inv.created_at.strftime("%d-%m-%Y")
+        date=(storage_datetime_to_local(inv.created_at) or inv.created_at).strftime("%d-%m-%Y"),
+        bill_time=(storage_datetime_to_local(inv.created_at) or inv.created_at).strftime("%I:%M %p")
     )
 @app.route("/invoice/edit/<int:id>", methods=["GET", "POST"])
 @login_required
@@ -10436,6 +10631,7 @@ def export_excel():
     ).all()
     patients = Patient.query.order_by(Patient.updated_at.desc(), Patient.id.desc()).all()
     medicines = Medicine.query.order_by(Medicine.name.asc(), Medicine.batch.asc(), Medicine.id.asc()).all()
+    medicine_purchase_rate_lookup = build_medicine_purchase_rate_lookup(medicines)
     returns = Return.query.order_by(Return.created_at.desc(), Return.id.desc()).all()
     return_items = ReturnItem.query.order_by(ReturnItem.id.asc()).all()
 
@@ -10483,6 +10679,7 @@ def export_excel():
         "Company": m.company,
         "Pack Type": m.pack_type,
         "Pack Qty": m.pack_qty,
+        "Purchase Rate": round(to_float_safe(medicine_purchase_rate_lookup.get(m.id), 0), 4),
         "MRP": m.mrp,
         "Qty": m.qty,
         "Discount %": m.discount_percent,
@@ -10845,6 +11042,7 @@ def export_medicines():
     from io import BytesIO
 
     medicines = Medicine.query.order_by(Medicine.name).all()
+    purchase_rate_lookup = build_medicine_purchase_rate_lookup(medicines)
 
     data = []
     for m in medicines:
@@ -10859,6 +11057,7 @@ def export_medicines():
             "Medicine Name": m.name,
             "Batch": m.batch,
             "Expiry (MM/YYYY)": f"{m.expiry[5:7]}/{m.expiry[0:4]}",
+            "Purchase Rate": round(to_float_safe(purchase_rate_lookup.get(m.id), 0), 4),
             "MRP": m.mrp,
             "Stock": m.qty,
             "Pack Type": m.pack_type,

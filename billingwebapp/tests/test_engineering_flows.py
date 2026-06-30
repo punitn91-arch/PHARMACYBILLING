@@ -4,6 +4,9 @@ import sys
 import tempfile
 import unittest
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
+
+from openpyxl import load_workbook
 
 
 class EngineeringFlowTests(unittest.TestCase):
@@ -155,6 +158,7 @@ class EngineeringFlowTests(unittest.TestCase):
         is_split_payment=False,
         internal_note="",
         created_by="admin",
+        created_at=None,
     ):
         patient = self._seed_patient(name=customer, mobile=mobile)
         invoice_count = self.app_module.Invoice.query.count() + 1
@@ -166,6 +170,8 @@ class EngineeringFlowTests(unittest.TestCase):
             cash_amount = rounded_total if (payment_mode or "").strip().upper() == "CASH" else 0.0
         if online_amount is None:
             online_amount = 0.0 if (payment_mode or "").strip().upper() == "CASH" else rounded_total
+        if created_at is None:
+            created_at = datetime.utcnow()
 
         invoice = self.app_module.Invoice(
             invoice_no=f"INV-SEED-{invoice_count}",
@@ -180,7 +186,7 @@ class EngineeringFlowTests(unittest.TestCase):
             is_split_payment=is_split_payment,
             internal_note=internal_note,
             created_by=created_by,
-            created_at=datetime.utcnow(),
+            created_at=created_at,
         )
         self.db.session.add(invoice)
         self.db.session.commit()
@@ -292,6 +298,67 @@ class EngineeringFlowTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn("₹1.19", html)
         self.assertNotIn("₹1.25", html)
+
+    def test_invoice_print_profile_backfill_respects_cutover_date(self):
+        with self.app.app_context():
+            _patient_old, legacy_invoice = self._seed_invoice(
+                customer="Legacy Patient",
+                mobile="9000000001",
+                created_at=datetime(2026, 6, 30, 12, 0, 0),
+            )
+            _patient_new, current_invoice = self._seed_invoice(
+                customer="Current Patient",
+                mobile="9000000002",
+                created_at=datetime(2026, 7, 1, 12, 0, 0),
+            )
+
+            self.app_module.backfill_invoice_print_profiles()
+            self.db.session.refresh(legacy_invoice)
+            self.db.session.refresh(current_invoice)
+
+            self.assertEqual(legacy_invoice.print_profile_code, "legacy_pre_2026_07")
+            self.assertEqual(legacy_invoice.print_gst_no, "A8BPWPP5023C1ZP")
+            self.assertEqual(legacy_invoice.print_licence_no, "")
+
+            self.assertEqual(current_invoice.print_profile_code, "endo_pharmacy_2026_07")
+            self.assertEqual(current_invoice.print_gst_no, "08ABAFT0637R1ZP")
+            self.assertEqual(current_invoice.print_licence_no, "DRUG/2026-27/154505")
+
+    def test_invoice_view_prefers_stored_print_snapshot_over_date_fallback(self):
+        with self.app.app_context():
+            _patient, invoice = self._seed_invoice(
+                customer="Snapshot Patient",
+                mobile="9000000003",
+                created_at=datetime(2026, 7, 2, 12, 0, 0),
+            )
+            self.app_module.apply_invoice_print_profile(invoice, date(2026, 6, 30))
+            self.db.session.commit()
+            invoice_id = invoice.id
+
+        self.login()
+        response = self.client.get(f"/invoice/{invoice_id}")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("A8BPWPP5023C1ZP", html)
+        self.assertNotIn("08ABAFT0637R1ZP", html)
+        self.assertNotIn("DRUG/2026-27/154505", html)
+
+    def test_invoice_view_shows_local_bill_time_next_to_date(self):
+        with self.app.app_context():
+            _patient, invoice = self._seed_invoice(
+                customer="Time Patient",
+                mobile="9000000004",
+                created_at=datetime(2026, 7, 2, 12, 0, 0),
+            )
+            self.app_module.apply_invoice_print_profile(invoice, invoice.created_at)
+            self.db.session.commit()
+            invoice_id = invoice.id
+
+        self.login()
+        response = self.client.get(f"/invoice/{invoice_id}")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("02-07-2026 05:30 PM", html)
 
     def test_billing_rejects_split_cash_above_total_bill_amount(self):
         with self.app.app_context():
@@ -1405,6 +1472,36 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Internal Note", response.data)
         self.assertIn(b"Doctor sample adjustment", response.data)
+
+    def test_full_reports_export_medicines_sheet_includes_purchase_rate(self):
+        with self.app.app_context():
+            self._seed_vendor_purchase_stack(total_qty=8, purchase_chunks=[(8, 13.75, datetime.utcnow())])
+
+        self.login()
+        response = self.client.get("/reports/export?scope=all")
+        self.assertEqual(response.status_code, 200)
+
+        workbook = load_workbook(BytesIO(response.data))
+        sheet = workbook["Medicines"]
+        headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+        self.assertIn("Purchase Rate", headers)
+        purchase_rate_index = headers.index("Purchase Rate") + 1
+        self.assertEqual(sheet.cell(row=2, column=purchase_rate_index).value, 13.75)
+
+    def test_medicines_export_includes_purchase_rate_column(self):
+        with self.app.app_context():
+            self._seed_vendor_purchase_stack(total_qty=8, purchase_chunks=[(8, 17.25, datetime.utcnow())])
+
+        self.login()
+        response = self.client.get("/medicines/export")
+        self.assertEqual(response.status_code, 200)
+
+        workbook = load_workbook(BytesIO(response.data))
+        sheet = workbook.active
+        headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+        self.assertIn("Purchase Rate", headers)
+        purchase_rate_index = headers.index("Purchase Rate") + 1
+        self.assertEqual(sheet.cell(row=2, column=purchase_rate_index).value, 17.25)
 
     def test_admin_invoice_edit_can_move_cash_invoice_to_online_mode(self):
         with self.app.app_context():
