@@ -404,12 +404,12 @@ body {
 <header class="invoice-top">
     <div class="brand-panel">
         <div class="brand-logo-wrap">
-            <img class="brand-logo" src="{{ print_profile.logo_path or '/static/endo-pharmacy-logo.png' }}" alt="The Endo Pharmacy Logo">
+            <img class="brand-logo" src="/static/endo-pharmacy-logo.png" alt="The Endo Pharmacy Logo">
         </div>
         <div class="brand-meta">
-            <div>{{ print_profile.address_line_1 }}</div>
-            <div>{{ print_profile.address_line_2 }}</div>
-            <div><strong>Mobile:</strong> {{ print_profile.mobile }}</div>
+            <div>FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER</div>
+            <div>JAIPUR, RAJASTHAN</div>
+            <div><strong>Mobile:</strong> 9024648186</div>
         </div>
     </div>
 
@@ -417,12 +417,12 @@ body {
         <div class="invoice-title">TAX INVOICE</div>
         <div class="invoice-meta-list">
             <div class="invoice-meta-row">
-                <span>Licence No</span>
-                <strong>{{ print_profile.licence_no or '-' }}</strong>
+                <span>RMC No</span>
+                <strong>33607/15184/29606</strong>
             </div>
             <div class="invoice-meta-row">
                 <span>GST No</span>
-                <strong>{{ print_profile.gst_no }}</strong>
+                <strong>08BPWPP5023C1ZP</strong>
             </div>
             <div class="invoice-meta-row">
                 <span>Invoice No</span>
@@ -435,15 +435,15 @@ body {
 <section class="section-card">
     <div class="patient-grid">
         <div>
-            <div class="section-label">{{ 'Party Details' if customer_gst_no else 'Patient Details' }}</div>
+            <div class="section-label">Patient Details</div>
             <div class="detail-list">
                 <div class="detail-row">
-                    <span>{{ 'Party Name' if customer_gst_no else 'Patient Name' }}</span>
+                    <span>Patient Name</span>
                     <strong>{{ customer or '-' }}</strong>
                 </div>
                 <div class="detail-row">
-                    <span>{{ 'GST Number' if customer_gst_no else 'Gender' }}</span>
-                    <strong>{{ customer_gst_no or gender or '-' }}</strong>
+                    <span>Gender</span>
+                    <strong>{{ gender or '-' }}</strong>
                 </div>
                 <div class="detail-row">
                     <span>Mobile</span>
@@ -464,7 +464,7 @@ body {
                 </div>
                 <div class="detail-row">
                     <span>Bill Date</span>
-                    <strong>{{ date }}{% if bill_time %} Time {{ bill_time }}{% endif %}</strong>
+                    <strong>{{ date }}</strong>
                 </div>
             </div>
         </div>
