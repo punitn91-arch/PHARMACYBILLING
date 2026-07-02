@@ -278,8 +278,12 @@
         <form class="stock-sale-form" method="post">
             <div class="stock-sale-form-grid">
                 <div class="stock-sale-field">
-                    <label for="customer">Customer Name</label>
+                    <label for="customer">Party Name</label>
                     <input id="customer" name="customer" type="text" value="{{ form_state.customer }}">
+                </div>
+                <div class="stock-sale-field">
+                    <label for="customer_gst_no">GST Number</label>
+                    <input id="customer_gst_no" name="customer_gst_no" type="text" value="{{ form_state.customer_gst_no }}">
                 </div>
                 <div class="stock-sale-field">
                     <label for="mobile">Mobile</label>

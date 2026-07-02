@@ -84,8 +84,8 @@ body {
 }
 
 .brand-logo-wrap {
-    width: 49mm;
-    height: 24mm;
+    width: 44mm;
+    height: 21mm;
     overflow: hidden;
     margin-bottom: 3px;
 }
@@ -404,7 +404,7 @@ body {
 <header class="invoice-top">
     <div class="brand-panel">
         <div class="brand-logo-wrap">
-            <img class="brand-logo" src="{{ print_profile.logo_path or '/static/endo-pharmacy-logo.png' }}" alt="Pharmacy Logo">
+            <img class="brand-logo" src="{{ print_profile.logo_path or '/static/endo-pharmacy-logo.png' }}" alt="The Endo Pharmacy Logo">
         </div>
         <div class="brand-meta">
             <div>{{ print_profile.address_line_1 }}</div>
@@ -416,12 +416,10 @@ body {
     <div class="invoice-badge">
         <div class="invoice-title">TAX INVOICE</div>
         <div class="invoice-meta-list">
-            {% if print_profile.licence_no %}
             <div class="invoice-meta-row">
                 <span>Licence No</span>
-                <strong>{{ print_profile.licence_no }}</strong>
+                <strong>{{ print_profile.licence_no or '-' }}</strong>
             </div>
-            {% endif %}
             <div class="invoice-meta-row">
                 <span>GST No</span>
                 <strong>{{ print_profile.gst_no }}</strong>
@@ -437,15 +435,15 @@ body {
 <section class="section-card">
     <div class="patient-grid">
         <div>
-            <div class="section-label">Patient Details</div>
+            <div class="section-label">{{ 'Party Details' if customer_gst_no else 'Patient Details' }}</div>
             <div class="detail-list">
                 <div class="detail-row">
-                    <span>Patient Name</span>
+                    <span>{{ 'Party Name' if customer_gst_no else 'Patient Name' }}</span>
                     <strong>{{ customer or '-' }}</strong>
                 </div>
                 <div class="detail-row">
-                    <span>Gender</span>
-                    <strong>{{ gender or '-' }}</strong>
+                    <span>{{ 'GST Number' if customer_gst_no else 'Gender' }}</span>
+                    <strong>{{ customer_gst_no or gender or '-' }}</strong>
                 </div>
                 <div class="detail-row">
                     <span>Mobile</span>
@@ -519,8 +517,8 @@ body {
     <div class="footer-policy">
         <div class="footer-title">Return Policy</div>
         <div>1. Cold Chain Items Are Strictly Not Returnable.</div>
-        <div>2. Medicines Can Be Returned Only Within 7 Days From The Date Of Purchase With The Original Invoice.</div>
-        <div>3. Partially Used Or Cut Strips Are Not Eligible For Return Or Exchange.</div>
+        <div>2. Medicines Can Be Replaced Only Within 7 Days.</div>
+        <div>3. Cut Strips Are Not Eligible For Replacement.</div>
     </div>
 
     <div class="summary-stack">

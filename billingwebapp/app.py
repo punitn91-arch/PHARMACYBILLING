@@ -354,6 +354,10 @@ def to_float(val):
 def is_cash_payment_mode(value):
     return ((value or "CASH").strip().upper() or "CASH") == "CASH"
 
+
+def is_non_collection_payment_mode(value):
+    return ((value or "").strip().upper()) in {"ADJUSTMENT", "CREDIT"}
+
 def to_decimal(val, default="0"):
     if val in (None, "", " "):
         return Decimal(default)
@@ -780,7 +784,7 @@ def to_float_safe(val, default=0.0):
         return default
 
 
-POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
+POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT", "CREDIT")
 INVOICE_PRINT_PROFILE_CUTOVER = date(2026, 7, 1)
 STOCK_SALE_REENTRY_VENDOR_NAME = "DR ABHISHEK PRAKASH"
 STOCK_SALE_DEFAULT_CUSTOMER = "STOCK SALE"
@@ -951,12 +955,17 @@ def calculate_invoice_payment_breakdown(*, payment_mode="CASH", rounded_amount=0
     if split_cash_amount > payable_amount:
         return None, "Cash amount cannot exceed total bill amount."
 
-    if split_cash_amount > 0 and split_cash_amount < payable_amount and is_cash_payment_mode(normalized_mode):
+    if split_cash_amount > 0 and split_cash_amount < payable_amount and (
+        is_cash_payment_mode(normalized_mode) or is_non_collection_payment_mode(normalized_mode)
+    ):
         return None, "Select an online payment mode for the online portion of split payment."
 
     if split_cash_amount <= 0:
         cash_amount = payable_amount if is_cash_payment_mode(normalized_mode) else 0.0
-        online_amount = 0.0 if is_cash_payment_mode(normalized_mode) else payable_amount
+        if is_cash_payment_mode(normalized_mode) or is_non_collection_payment_mode(normalized_mode):
+            online_amount = 0.0
+        else:
+            online_amount = payable_amount
     else:
         cash_amount = split_cash_amount
         online_amount = round_currency(payable_amount - split_cash_amount)
@@ -990,13 +999,23 @@ def build_invoice_payment_breakdown(invoice, rounded_amount=None):
         if is_cash_payment_mode(normalized_mode):
             stored_cash_amount = payable_amount
             stored_online_amount = 0.0
+        elif is_non_collection_payment_mode(normalized_mode):
+            stored_cash_amount = 0.0
+            stored_online_amount = 0.0
         else:
             stored_cash_amount = 0.0
             stored_online_amount = payable_amount
 
     is_split = stored_cash_amount > 0 and stored_online_amount > 0
-    payment_type = "Split Payment" if is_split else ("Cash" if stored_online_amount <= 0 else normalized_mode)
-    display_mode = f"Cash + {normalized_mode}" if is_split else ("CASH" if stored_online_amount <= 0 else normalized_mode)
+    if is_split:
+        payment_type = "Split Payment"
+        display_mode = f"Cash + {normalized_mode}"
+    elif stored_cash_amount > 0 and stored_online_amount <= 0:
+        payment_type = "Cash"
+        display_mode = "CASH"
+    else:
+        payment_type = normalized_mode
+        display_mode = normalized_mode
 
     return {
         "rounded_amount": payable_amount,
@@ -1415,7 +1434,7 @@ def build_stock_sale_internal_note(operation_ref, custom_note=""):
     return base_note
 
 
-def execute_stock_sale_operation(*, customer, mobile, doctor, payment_mode, internal_note, lines_per_invoice, actor_username):
+def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, payment_mode, internal_note, lines_per_invoice, actor_username):
     preview = build_stock_sale_preview(lines_per_invoice)
     if not preview["sale_rows"]:
         return None, "No stock available for stock sale."
@@ -1423,6 +1442,7 @@ def execute_stock_sale_operation(*, customer, mobile, doctor, payment_mode, inte
         return None, "Some stock rows are not linked to active purchase layers or medicine records. Fix inventory sync first, then retry."
 
     customer_name = (customer or "").strip() or STOCK_SALE_DEFAULT_CUSTOMER
+    customer_gst_no = (customer_gst_no or "").strip().upper()
     mobile_number = (mobile or "").strip()
     doctor_name = (doctor or "").strip()
     normalized_payment_mode = normalize_payment_mode(payment_mode, default=STOCK_SALE_DEFAULT_PAYMENT_MODE)
@@ -1449,6 +1469,7 @@ def execute_stock_sale_operation(*, customer, mobile, doctor, payment_mode, inte
                 patient_id=patient.id if patient else None,
                 customer=customer_name,
                 mobile=normalized_mobile or mobile_number,
+                customer_gst_no=customer_gst_no,
                 doctor=doctor_name,
                 gender="",
                 subtotal=0,
@@ -4641,6 +4662,7 @@ with app.app_context():
         ensure_column("invoice", "print_gst_no", "TEXT")
         ensure_column("invoice", "print_licence_no", "TEXT")
         ensure_column("invoice", "print_logo_path", "TEXT")
+        ensure_column("invoice", "customer_gst_no", "TEXT")
         ensure_column("invoice_item", "cost_price", "REAL")
         ensure_column("invoice_item", "cost_amount", "REAL")
         ensure_column("return_item", "cost_price", "REAL")
@@ -6325,6 +6347,7 @@ def stock_sale():
 
     form_state = {
         "customer": STOCK_SALE_DEFAULT_CUSTOMER,
+        "customer_gst_no": "",
         "mobile": "",
         "doctor": "",
         "payment_mode": STOCK_SALE_DEFAULT_PAYMENT_MODE,
@@ -6335,6 +6358,7 @@ def stock_sale():
     if request.method == "POST":
         form_state.update({
             "customer": (request.form.get("customer") or "").strip() or STOCK_SALE_DEFAULT_CUSTOMER,
+            "customer_gst_no": (request.form.get("customer_gst_no") or "").strip().upper(),
             "mobile": (request.form.get("mobile") or "").strip(),
             "doctor": (request.form.get("doctor") or "").strip(),
             "payment_mode": normalize_payment_mode(request.form.get("payment_mode"), default=STOCK_SALE_DEFAULT_PAYMENT_MODE),
@@ -6345,6 +6369,7 @@ def stock_sale():
         if request.form.get("confirm_stock_sale") == "yes":
             result, error = execute_stock_sale_operation(
                 customer=form_state["customer"],
+                customer_gst_no=form_state["customer_gst_no"],
                 mobile=form_state["mobile"],
                 doctor=form_state["doctor"],
                 payment_mode=form_state["payment_mode"],
@@ -6990,6 +7015,7 @@ def view_invoice(id):
         payment_breakdown=payment_breakdown,
         cart=items,
         customer=inv.customer,
+        customer_gst_no=(inv.customer_gst_no or "").strip(),
         mobile=inv.mobile,
         doctor=inv.doctor,
         gender=inv.gender,

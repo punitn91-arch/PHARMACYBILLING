@@ -84,6 +84,7 @@ class Invoice(db.Model):
     patient_id = db.Column(db.Integer, index=True)
     customer = db.Column(db.String(100), index=True)
     mobile = db.Column(db.String(20), index=True)
+    customer_gst_no = db.Column(db.String(30), index=True)
     doctor = db.Column(db.String(100))
     gender = db.Column(db.String(10))
 

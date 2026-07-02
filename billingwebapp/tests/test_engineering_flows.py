@@ -149,6 +149,7 @@ class EngineeringFlowTests(unittest.TestCase):
         self,
         *,
         customer="Ravi Kumar",
+        customer_gst_no="",
         mobile="9876543210",
         total=50.0,
         subtotal=None,
@@ -166,10 +167,14 @@ class EngineeringFlowTests(unittest.TestCase):
         rounded_total = self.app_module.compute_invoice_rounded_total(payable_total)
         if subtotal is None:
             subtotal = payable_total
+        normalized_payment_mode = (payment_mode or "").strip().upper()
         if cash_amount is None:
-            cash_amount = rounded_total if (payment_mode or "").strip().upper() == "CASH" else 0.0
+            cash_amount = rounded_total if normalized_payment_mode == "CASH" else 0.0
         if online_amount is None:
-            online_amount = 0.0 if (payment_mode or "").strip().upper() == "CASH" else rounded_total
+            if normalized_payment_mode in {"CASH", "ADJUSTMENT", "CREDIT"}:
+                online_amount = 0.0
+            else:
+                online_amount = rounded_total
         if created_at is None:
             created_at = datetime.utcnow()
 
@@ -177,6 +182,7 @@ class EngineeringFlowTests(unittest.TestCase):
             invoice_no=f"INV-SEED-{invoice_count}",
             patient_id=patient.id,
             customer=customer,
+            customer_gst_no=customer_gst_no,
             mobile=mobile,
             subtotal=subtotal,
             total=payable_total,
@@ -415,6 +421,44 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(total_remaining, 10)
             self.assertEqual(sale_history_count, 1)
             self.assertEqual(purchase_history_count, 1)
+
+    def test_stock_sale_supports_credit_payment_mode_and_party_gst_on_invoice(self):
+        with self.app.app_context():
+            self._seed_vendor_purchase_stack(total_qty=6, purchase_chunks=[(6, 10.0, datetime.utcnow())])
+
+        self.login()
+        response = self.client.post(
+            "/stock-sale",
+            data={
+                "customer": "M/S SHARMA TRADERS",
+                "customer_gst_no": "08ABCDE1234F1Z5",
+                "mobile": "9000000001",
+                "doctor": "Dr. Admin",
+                "payment_mode": "CREDIT",
+                "lines_per_invoice": "50",
+                "confirm_stock_sale": "yes",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Stock sale completed.", response.data)
+
+        with self.app.app_context():
+            invoice = self.app_module.Invoice.query.order_by(self.app_module.Invoice.id.desc()).first()
+            self.assertEqual(invoice.payment_mode, "CREDIT")
+            self.assertEqual(float(invoice.cash_amount or 0), 0.0)
+            self.assertEqual(float(invoice.online_amount or 0), 0.0)
+            self.assertEqual(invoice.customer_gst_no, "08ABCDE1234F1Z5")
+            invoice_id = invoice.id
+
+        response = self.client.get(f"/invoice/{invoice_id}")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("Party Details", html)
+        self.assertIn("Party Name", html)
+        self.assertIn("GST Number", html)
+        self.assertIn("08ABCDE1234F1Z5", html)
+        self.assertIn("CREDIT", html)
 
     def test_stock_sale_preview_matches_dashboard_purchase_layer_value_and_syncs_qty_deltas(self):
         with self.app.app_context():
