@@ -782,6 +782,11 @@ def to_float_safe(val, default=0.0):
 
 POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT")
 INVOICE_PRINT_PROFILE_CUTOVER = date(2026, 7, 1)
+STOCK_SALE_REENTRY_VENDOR_NAME = "DR ABHISHEK PRAKASH"
+STOCK_SALE_DEFAULT_CUSTOMER = "STOCK SALE"
+STOCK_SALE_DEFAULT_PAYMENT_MODE = "ADJUSTMENT"
+STOCK_SALE_DEFAULT_LINES_PER_INVOICE = 50
+STOCK_SALE_MAX_LINES_PER_INVOICE = 200
 LEGACY_INVOICE_PRINT_PROFILE = {
     "profile_code": "legacy_pre_2026_07",
     "address_line_1": "FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER",
@@ -1031,6 +1036,679 @@ def resolve_invoice_edit_payment_update(invoice, requested_payment_mode):
         "cash_amount": round_currency(cash_amount),
         "online_amount": round_currency(online_amount),
         "is_split_payment": False,
+    }, None
+
+
+def normalize_stock_sale_lines_per_invoice(raw_value):
+    chunk_size = to_int_safe(raw_value, STOCK_SALE_DEFAULT_LINES_PER_INVOICE)
+    if chunk_size < 1:
+        chunk_size = STOCK_SALE_DEFAULT_LINES_PER_INVOICE
+    if chunk_size > STOCK_SALE_MAX_LINES_PER_INVOICE:
+        chunk_size = STOCK_SALE_MAX_LINES_PER_INVOICE
+    return chunk_size
+
+
+def chunk_sequence(items, chunk_size):
+    size = max(1, to_int_safe(chunk_size, 1))
+    for index in range(0, len(items), size):
+        yield items[index:index + size]
+
+
+def build_stock_sale_purchase_context(medicines):
+    medicine_rows = list(medicines or [])
+    if not medicine_rows:
+        return {}
+
+    rate_lookup = build_medicine_purchase_rate_lookup(medicine_rows)
+    medicine_ids = {med.id for med in medicine_rows if getattr(med, "id", None)}
+    medicine_name_keys = {
+        (
+            normalize_medicine_name(getattr(med, "name", "")).casefold(),
+            (getattr(med, "batch", "") or "").strip().casefold(),
+        )
+        for med in medicine_rows
+        if normalize_medicine_name(getattr(med, "name", "")) and (getattr(med, "batch", "") or "").strip()
+    }
+
+    filters = []
+    if medicine_ids:
+        filters.append(VendorPurchaseItem.medicine_id.in_(medicine_ids))
+    if medicine_name_keys:
+        medicine_name_values = sorted({name for name, _batch in medicine_name_keys})
+        batch_values = sorted({batch for _name, batch in medicine_name_keys})
+        filters.append(
+            and_(
+                db.func.lower(db.func.trim(db.func.coalesce(VendorPurchaseItem.medicine_name, ""))).in_(medicine_name_values),
+                db.func.lower(db.func.trim(db.func.coalesce(VendorPurchaseItem.batch, ""))).in_(batch_values),
+            )
+        )
+
+    latest_item_by_medicine_id = {}
+    latest_item_by_name_batch = {}
+    if filters:
+        purchase_items = VendorPurchaseItem.query.filter(
+            or_(*filters)
+        ).order_by(
+            VendorPurchaseItem.created_at.desc(),
+            VendorPurchaseItem.id.desc()
+        ).all()
+        for item in purchase_items:
+            item_medicine_id = getattr(item, "medicine_id", None)
+            if item_medicine_id and item_medicine_id in medicine_ids and item_medicine_id not in latest_item_by_medicine_id:
+                latest_item_by_medicine_id[item_medicine_id] = item
+
+            fallback_key = (
+                normalize_medicine_name(getattr(item, "medicine_name", "")).casefold(),
+                (getattr(item, "batch", "") or "").strip().casefold(),
+            )
+            if fallback_key in medicine_name_keys and fallback_key not in latest_item_by_name_batch:
+                latest_item_by_name_batch[fallback_key] = item
+
+    context = {}
+    for med in medicine_rows:
+        fallback_key = (
+            normalize_medicine_name(getattr(med, "name", "")).casefold(),
+            (getattr(med, "batch", "") or "").strip().casefold(),
+        )
+        latest_item = latest_item_by_medicine_id.get(getattr(med, "id", None)) or latest_item_by_name_batch.get(fallback_key)
+        purchase_rate = to_float_safe(getattr(latest_item, "purchase_rate", None), rate_lookup.get(getattr(med, "id", None), 0.0))
+        if purchase_rate <= 0:
+            purchase_rate = to_float_safe(rate_lookup.get(getattr(med, "id", None), 0.0), 0.0)
+        source = "latest_purchase" if latest_item and purchase_rate > 0 else ("historical_rate" if purchase_rate > 0 else "missing_rate")
+        context[getattr(med, "id", None)] = {
+            "purchase_rate": purchase_rate,
+            "gst_percent": to_float_safe(getattr(latest_item, "gst_percent", 0), 0),
+            "discount_percent": to_float_safe(getattr(latest_item, "discount_percent", 0), 0),
+            "distributor_name": (getattr(latest_item, "distributor_name", "") or "").strip(),
+            "source": source,
+            "latest_item": latest_item,
+        }
+    return context
+
+
+def resolve_stock_sale_medicine_for_purchase_item(purchase_item, medicine_by_id, medicine_by_name_batch):
+    item_medicine_id = getattr(purchase_item, "medicine_id", None)
+    if item_medicine_id:
+        med = medicine_by_id.get(item_medicine_id)
+        if med:
+            return med, "purchase_layer"
+
+    fallback_key = (
+        normalize_medicine_name(getattr(purchase_item, "medicine_name", "")).casefold(),
+        (getattr(purchase_item, "batch", "") or "").strip().casefold(),
+    )
+    med = medicine_by_name_batch.get(fallback_key)
+    if med:
+        return med, "name_batch_match"
+    return None, "missing_medicine"
+
+
+def consume_purchase_item_layer(purchase_item_id, qty):
+    purchase_item = VendorPurchaseItem.query.get(purchase_item_id)
+    if not purchase_item:
+        raise ValueError(f"Purchase layer not found for stock sale row {purchase_item_id}.")
+
+    available = max(to_int_safe(getattr(purchase_item, "remaining_qty", 0), 0), 0)
+    requested = max(to_int_safe(qty, 0), 0)
+    if requested <= 0:
+        return []
+    if available < requested:
+        raise ValueError(
+            f"Purchase layer stock changed before sale for {getattr(purchase_item, 'medicine_name', '')} ({getattr(purchase_item, 'batch', '')}). Please refresh and retry."
+        )
+
+    purchase_item.remaining_qty = available - requested
+    return [{
+        "purchase_item": purchase_item,
+        "qty": requested,
+        "cost_rate": to_float(getattr(purchase_item, "purchase_rate", 0)),
+    }]
+
+
+def sync_medicine_qty_to_stock_sale_layers(rows, actor_username, operation_ref):
+    expected_qty_by_medicine_id = {}
+    for row in rows:
+        if row.get("is_unresolved"):
+            continue
+        medicine_id = row.get("medicine_id")
+        if not medicine_id:
+            continue
+        expected_qty_by_medicine_id[medicine_id] = expected_qty_by_medicine_id.get(medicine_id, 0) + max(
+            to_int_safe(row.get("qty"), 0),
+            0,
+        )
+
+    touched_names = []
+    for medicine_id, expected_qty in expected_qty_by_medicine_id.items():
+        med = Medicine.query.get(medicine_id)
+        if not med:
+            raise ValueError(f"Medicine missing before stock sale sync: {medicine_id}")
+        current_qty = max(to_int_safe(getattr(med, "qty", 0), 0), 0)
+        if current_qty == expected_qty:
+            continue
+
+        med.qty = expected_qty
+        touched_names.append(med.name)
+        db.session.add(StockHistory(
+            medicine_id=med.id,
+            medicine_name=med.name,
+            batch=med.batch,
+            action="ADJUSTMENT",
+            stock_before=current_qty,
+            qty_change=expected_qty - current_qty,
+            stock_after=expected_qty,
+            user=actor_username,
+            remark=f"Stock sale sync {operation_ref} to purchase layers",
+            ref_table="stock_sale",
+            ref_id=None,
+        ))
+    return touched_names
+
+
+def build_stock_sale_preview(lines_per_invoice=STOCK_SALE_DEFAULT_LINES_PER_INVOICE):
+    chunk_size = normalize_stock_sale_lines_per_invoice(lines_per_invoice)
+    purchase_items = VendorPurchaseItem.query.filter(
+        db.func.coalesce(VendorPurchaseItem.remaining_qty, 0) > 0
+    ).order_by(
+        db.func.lower(db.func.coalesce(VendorPurchaseItem.medicine_name, "")).asc(),
+        VendorPurchaseItem.batch.asc(),
+        VendorPurchaseItem.created_at.asc(),
+        VendorPurchaseItem.id.asc(),
+    ).all()
+    today = clinic_now().date()
+
+    positive_medicines = Medicine.query.filter(Medicine.qty > 0).all()
+    medicines_for_lookup = {
+        med.id: med
+        for med in Medicine.query.all()
+        if getattr(med, "id", None)
+    }
+
+    medicine_by_name_batch = {}
+    for med in medicines_for_lookup.values():
+        key = (
+            normalize_medicine_name(getattr(med, "name", "")).casefold(),
+            (getattr(med, "batch", "") or "").strip().casefold(),
+        )
+        if key not in medicine_by_name_batch:
+            medicine_by_name_batch[key] = med
+
+    rows = []
+    sale_rows = []
+    unresolved_rows = []
+    total_qty = 0
+    estimated_sale_value = 0.0
+    estimated_reentry_total = 0.0
+    expired_count = 0
+    expected_qty_by_medicine_id = {}
+
+    for purchase_item in purchase_items:
+        med, source = resolve_stock_sale_medicine_for_purchase_item(
+            purchase_item,
+            medicines_for_lookup,
+            medicine_by_name_batch,
+        )
+        qty = max(to_int_safe(getattr(purchase_item, "remaining_qty", 0), 0), 0)
+        if qty <= 0:
+            continue
+        raw_purchase_rate = to_float_safe(getattr(purchase_item, "purchase_rate", 0), 0)
+        discount_percent = to_float_safe(getattr(purchase_item, "discount_percent", 0), 0)
+        gst_percent = to_float_safe(getattr(purchase_item, "gst_percent", 0), 0)
+        base_amount = qty * raw_purchase_rate
+        discount_amount = base_amount * discount_percent / 100
+        taxable_amount = base_amount - discount_amount
+        gst_amount = taxable_amount * gst_percent / 100
+        reentry_total = taxable_amount + gst_amount
+        expiry_value = (getattr(med, "expiry", None) or getattr(purchase_item, "expiry", "") or "").strip()
+        expiry_date = parse_expiry_date(expiry_value)
+        is_expired = bool(expiry_date and expiry_date < today)
+        if is_expired:
+            expired_count += 1
+
+        row = {
+            "purchase_item_id": purchase_item.id,
+            "medicine_id": getattr(med, "id", None),
+            "medicine_code": normalize_medicine_code(
+                getattr(med, "medicine_code", "") or getattr(purchase_item, "medicine_code", "")
+            ),
+            "name": normalize_medicine_name(getattr(med, "name", "") or getattr(purchase_item, "medicine_name", "")),
+            "batch": ((getattr(med, "batch", None) or getattr(purchase_item, "batch", "") or "")).strip(),
+            "expiry": expiry_value,
+            "qty": qty,
+            "purchase_rate": round_currency(raw_purchase_rate),
+            "purchase_rate_raw": raw_purchase_rate,
+            "sale_value": round_currency(base_amount),
+            "reentry_total": round_currency(reentry_total),
+            "mrp": to_float_safe(getattr(med, "mrp", None), to_float_safe(getattr(purchase_item, "mrp", 0), 0)),
+            "barcode": (getattr(med, "barcode", "") or getattr(purchase_item, "barcode", "") or "").strip(),
+            "composition": (getattr(med, "composition", "") or getattr(purchase_item, "composition", "") or "").strip(),
+            "company": (getattr(med, "company", "") or getattr(purchase_item, "company", "") or "").strip(),
+            "pack_type": (getattr(med, "pack_type", "") or getattr(purchase_item, "pack_type", "") or "").strip(),
+            "pack_qty": getattr(med, "pack_qty", None) if med and getattr(med, "pack_qty", None) not in (None, "") else getattr(purchase_item, "pack_qty", None),
+            "gst_percent": gst_percent,
+            "discount_percent": discount_percent,
+            "source": source,
+            "source_label": {
+                "purchase_layer": "Purchase layer",
+                "name_batch_match": "Name/batch match",
+                "missing_medicine": "Medicine missing",
+                "missing_purchase_layer": "No purchase layer",
+            }.get(source, "Purchase layer"),
+            "is_expired": is_expired,
+            "is_unresolved": False,
+        }
+        rows.append(row)
+        total_qty += qty
+        estimated_sale_value += base_amount
+        estimated_reentry_total += reentry_total
+        if med and getattr(med, "id", None):
+            expected_qty_by_medicine_id[med.id] = expected_qty_by_medicine_id.get(med.id, 0) + qty
+        if raw_purchase_rate <= 0 or not med:
+            row["is_unresolved"] = True
+            unresolved_rows.append(row)
+        else:
+            sale_rows.append(row)
+
+    orphan_count = 0
+    sync_mismatch_count = 0
+    sync_total_delta = 0
+    for med in positive_medicines:
+        current_qty = max(to_int_safe(getattr(med, "qty", 0), 0), 0)
+        expected_qty = expected_qty_by_medicine_id.get(med.id)
+        if expected_qty is None:
+            orphan_row = {
+                "purchase_item_id": None,
+                "medicine_id": med.id,
+                "medicine_code": normalize_medicine_code(getattr(med, "medicine_code", "")),
+                "name": normalize_medicine_name(getattr(med, "name", "")),
+                "batch": (getattr(med, "batch", "") or "").strip(),
+                "expiry": (getattr(med, "expiry", "") or "").strip(),
+                "qty": current_qty,
+                "purchase_rate": 0.0,
+                "purchase_rate_raw": 0.0,
+                "sale_value": 0.0,
+                "reentry_total": 0.0,
+                "mrp": to_float_safe(getattr(med, "mrp", 0), 0),
+                "barcode": (getattr(med, "barcode", "") or "").strip(),
+                "composition": (getattr(med, "composition", "") or "").strip(),
+                "company": (getattr(med, "company", "") or "").strip(),
+                "pack_type": (getattr(med, "pack_type", "") or "").strip(),
+                "pack_qty": getattr(med, "pack_qty", None),
+                "gst_percent": 0.0,
+                "discount_percent": 0.0,
+                "source": "missing_purchase_layer",
+                "source_label": "No purchase layer",
+                "is_expired": False,
+                "is_unresolved": True,
+            }
+            rows.append(orphan_row)
+            unresolved_rows.append(orphan_row)
+            orphan_count += 1
+            continue
+        if current_qty != expected_qty:
+            sync_mismatch_count += 1
+            sync_total_delta += expected_qty - current_qty
+
+    rows.sort(key=lambda row: (
+        row.get("is_unresolved", False),
+        (row.get("name") or "").lower(),
+        row.get("batch") or "",
+        row.get("purchase_item_id") or 0,
+    ))
+
+    return {
+        "rows": rows,
+        "sale_rows": sale_rows,
+        "line_count": len(sale_rows),
+        "total_qty": total_qty,
+        "estimated_sale_value": round_currency(estimated_sale_value),
+        "estimated_reentry_total": round_currency(estimated_reentry_total),
+        "expired_count": expired_count,
+        "unresolved_count": len(unresolved_rows),
+        "unresolved_rows": unresolved_rows,
+        "orphan_count": orphan_count,
+        "sync_mismatch_count": sync_mismatch_count,
+        "sync_total_delta": sync_total_delta,
+        "sync_total_delta_display": f"{sync_total_delta:+d}",
+        "lines_per_invoice": chunk_size,
+        "invoice_chunk_count": math.ceil(len(sale_rows) / chunk_size) if sale_rows else 0,
+        "reentry_vendor_name": STOCK_SALE_REENTRY_VENDOR_NAME,
+    }
+
+
+def get_or_create_stock_sale_vendor():
+    vendor = Vendor.query.filter(
+        db.func.lower(db.func.trim(db.func.coalesce(Vendor.name, ""))) == STOCK_SALE_REENTRY_VENDOR_NAME.lower()
+    ).order_by(Vendor.id.asc()).first()
+    if vendor:
+        if vendor.deleted_at is not None:
+            vendor.deleted_at = None
+            vendor.deleted_by = None
+        if getattr(vendor, "is_active", True) in (False, 0, "0", "false", "False", None):
+            vendor.is_active = True
+        if not getattr(vendor, "vendor_type", ""):
+            vendor.vendor_type = "Distributor"
+        if not getattr(vendor, "default_payment_mode", ""):
+            vendor.default_payment_mode = "CASH"
+        if not getattr(vendor, "payment_status", ""):
+            vendor.payment_status = "Paid"
+        db.session.add(vendor)
+        return vendor
+
+    vendor = Vendor(
+        name=STOCK_SALE_REENTRY_VENDOR_NAME,
+        vendor_type="Distributor",
+        default_payment_mode="CASH",
+        payment_status="Paid",
+        is_active=True,
+    )
+    db.session.add(vendor)
+    db.session.flush()
+    return vendor
+
+
+def build_stock_sale_internal_note(operation_ref, custom_note=""):
+    base_note = f"Bulk stock sale operation {operation_ref}. Auto re-entry vendor: {STOCK_SALE_REENTRY_VENDOR_NAME}."
+    custom_text = (custom_note or "").strip()
+    if custom_text:
+        return f"{base_note} {custom_text}"
+    return base_note
+
+
+def execute_stock_sale_operation(*, customer, mobile, doctor, payment_mode, internal_note, lines_per_invoice, actor_username):
+    preview = build_stock_sale_preview(lines_per_invoice)
+    if not preview["sale_rows"]:
+        return None, "No stock available for stock sale."
+    if preview["unresolved_count"] > 0:
+        return None, "Some stock rows are not linked to active purchase layers or medicine records. Fix inventory sync first, then retry."
+
+    customer_name = (customer or "").strip() or STOCK_SALE_DEFAULT_CUSTOMER
+    mobile_number = (mobile or "").strip()
+    doctor_name = (doctor or "").strip()
+    normalized_payment_mode = normalize_payment_mode(payment_mode, default=STOCK_SALE_DEFAULT_PAYMENT_MODE)
+    operation_ref = clinic_now().strftime("STOCKSALE-%Y%m%d-%H%M%S")
+    invoice_print_date = clinic_now().date()
+    chunk_size = preview["lines_per_invoice"]
+
+    patient, normalized_mobile = upsert_patient_from_invoice(customer_name, mobile_number, "")
+    if patient and not patient.id:
+        db.session.flush()
+
+    vendor = get_or_create_stock_sale_vendor()
+    created_invoices = []
+    touched_names = []
+    stock_sale_note = build_stock_sale_internal_note(operation_ref, internal_note)
+
+    try:
+        touched_names.extend(sync_medicine_qty_to_stock_sale_layers(preview["sale_rows"], actor_username, operation_ref))
+
+        for chunk_rows in chunk_sequence(preview["sale_rows"], chunk_size):
+            created_at = datetime.utcnow()
+            invoice = Invoice(
+                invoice_no=None,
+                patient_id=patient.id if patient else None,
+                customer=customer_name,
+                mobile=normalized_mobile or mobile_number,
+                doctor=doctor_name,
+                gender="",
+                subtotal=0,
+                discount=0,
+                cgst=0,
+                sgst=0,
+                total=0,
+                payment_mode=normalized_payment_mode,
+                cash_amount=0,
+                online_amount=0,
+                is_split_payment=False,
+                internal_note=stock_sale_note,
+                created_by=actor_username,
+                created_at=created_at,
+            )
+            db.session.add(invoice)
+            db.session.flush()
+            invoice.invoice_no = f"INV-{clinic_now().year}-{1000 + invoice.id}"
+
+            subtotal = 0.0
+            total_discount = 0.0
+            for row in chunk_rows:
+                med = Medicine.query.get(row["medicine_id"])
+                if not med:
+                    raise ValueError(f"Medicine not found: {row['name']} ({row['batch']})")
+                sell_qty = to_int_safe(row["qty"], 0)
+                if sell_qty <= 0:
+                    continue
+                if med.qty < sell_qty:
+                    raise ValueError(f"Stock changed before sale for {med.name} ({med.batch}). Please retry.")
+
+                amount = round_currency(sell_qty * to_float_safe(row.get("purchase_rate_raw", row["purchase_rate"]), 0))
+                subtotal += amount
+                old_stock = med.qty
+                med.qty -= sell_qty
+                touched_names.append(med.name)
+
+                db.session.add(StockHistory(
+                    medicine_id=med.id,
+                    medicine_name=med.name,
+                    batch=med.batch,
+                    action="SALE",
+                    stock_before=old_stock,
+                    qty_change=-sell_qty,
+                    stock_after=med.qty,
+                    user=actor_username,
+                    remark=f"Bulk stock sale {operation_ref}",
+                    ref_table="invoice",
+                    ref_id=invoice.id,
+                ))
+
+                fifo_alloc = consume_purchase_item_layer(row.get("purchase_item_id"), sell_qty)
+                cost_amount = sum(a["qty"] * a["cost_rate"] for a in fifo_alloc)
+                cost_price = round(cost_amount / sell_qty, 4) if sell_qty else 0
+
+                invoice_item = InvoiceItem(
+                    invoice_id=invoice.id,
+                    name=row["name"],
+                    qty=sell_qty,
+                    price=to_float_safe(row.get("purchase_rate_raw", row["purchase_rate"]), 0),
+                    amount=amount,
+                    batch=row["batch"],
+                    expiry=row["expiry"],
+                    discount_percent=0,
+                    discount_amount=0,
+                    net_amount=amount,
+                    cost_price=cost_price,
+                    cost_amount=cost_amount,
+                )
+                db.session.add(invoice_item)
+                db.session.flush()
+                for alloc in fifo_alloc:
+                    db.session.add(SalesAllocation(
+                        invoice_item_id=invoice_item.id,
+                        purchase_item_id=alloc["purchase_item"].id if alloc["purchase_item"] else None,
+                        qty=alloc["qty"],
+                        cost_rate=alloc["cost_rate"],
+                        returned_qty=0,
+                    ))
+
+            invoice.subtotal = round_currency(subtotal)
+            invoice.discount = round_currency(total_discount)
+            invoice.cgst = round(invoice.subtotal * 0.025, 2)
+            invoice.sgst = round(invoice.subtotal * 0.025, 2)
+            invoice.total = round_currency(invoice.subtotal)
+            payment_breakdown, payment_error = calculate_invoice_payment_breakdown(
+                payment_mode=normalized_payment_mode,
+                rounded_amount=compute_invoice_rounded_total(invoice.total),
+                split_cash_amount_raw=None,
+            )
+            if payment_error:
+                raise ValueError(payment_error)
+            invoice.payment_mode = payment_breakdown["payment_mode"]
+            invoice.cash_amount = payment_breakdown["cash_amount"]
+            invoice.online_amount = payment_breakdown["online_amount"]
+            invoice.is_split_payment = payment_breakdown["is_split_payment"]
+            apply_invoice_print_profile(invoice, invoice_print_date)
+            created_invoices.append(invoice)
+
+        purchase_created_at = datetime.utcnow()
+        purchase = VendorPurchase(
+            vendor_id=vendor.id,
+            purchase_date=purchase_created_at,
+            invoice_no=f"{operation_ref}-REENTRY",
+            payment_mode="CASH",
+            payment_status="Paid",
+            paid_amount=0,
+            notes=f"Auto re-entry after bulk stock sale {operation_ref}",
+            subtotal=0,
+            gst_total=0,
+            discount_total=0,
+            total_amount=0,
+            created_by=actor_username,
+            created_at=purchase_created_at,
+        )
+        db.session.add(purchase)
+        db.session.flush()
+        purchase.purchase_no = f"PB-{purchase.id:06d}"
+
+        purchase_subtotal = 0.0
+        purchase_gst_total = 0.0
+        purchase_discount_total = 0.0
+        purchase_total_amount = 0.0
+
+        for row in preview["sale_rows"]:
+            med = Medicine.query.get(row["medicine_id"])
+            if not med:
+                raise ValueError(f"Medicine missing before re-entry: {row['name']} ({row['batch']})")
+            qty = to_int_safe(row["qty"], 0)
+            if qty <= 0:
+                continue
+
+            discount_percent = to_float_safe(row.get("discount_percent"), 0)
+            gst_percent = to_float_safe(row.get("gst_percent"), 0)
+            purchase_rate = to_float_safe(row.get("purchase_rate_raw", row.get("purchase_rate")), 0)
+            base_amount = qty * purchase_rate
+            discount_amount = base_amount * discount_percent / 100
+            taxable_amount = base_amount - discount_amount
+            gst_amount = taxable_amount * gst_percent / 100
+            total_value = taxable_amount + gst_amount
+
+            med.name = row["name"]
+            med.batch = row["batch"]
+            med.expiry = row["expiry"]
+            med.mrp = to_float_safe(row["mrp"], med.mrp)
+            med.barcode = row["barcode"] or med.barcode
+            med.composition = row["composition"] or med.composition
+            med.company = row["company"] or med.company
+            med.pack_type = row["pack_type"] or med.pack_type
+            if row["pack_qty"] not in (None, "", " "):
+                med.pack_qty = row["pack_qty"]
+
+            old_stock = med.qty
+            med.qty += qty
+            touched_names.append(med.name)
+
+            db.session.add(StockHistory(
+                medicine_id=med.id,
+                medicine_name=med.name,
+                batch=med.batch,
+                action="PURCHASE",
+                stock_before=old_stock,
+                qty_change=qty,
+                stock_after=med.qty,
+                user=actor_username,
+                remark=f"Auto re-entry {purchase.purchase_no} after {operation_ref}",
+                ref_table="vendor_purchase",
+                ref_id=purchase.id,
+            ))
+
+            db.session.add(VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=med.id,
+                medicine_name=med.name,
+                medicine_code=row["medicine_code"],
+                barcode=row["barcode"],
+                composition=row["composition"],
+                company=row["company"],
+                distributor_name=vendor.name,
+                pack_type=row["pack_type"],
+                pack_qty=row["pack_qty"],
+                batch=row["batch"],
+                expiry=row["expiry"],
+                qty=qty,
+                free_qty=0,
+                remaining_qty=qty,
+                purchase_rate=purchase_rate,
+                mrp=to_float_safe(row["mrp"], 0),
+                gst_percent=gst_percent,
+                discount_percent=discount_percent,
+                notes=f"Auto re-entry from bulk stock sale {operation_ref}",
+                total_value=total_value,
+            ))
+
+            purchase_subtotal += taxable_amount
+            purchase_gst_total += gst_amount
+            purchase_discount_total += discount_amount
+            purchase_total_amount += total_value
+
+        purchase.subtotal = round_currency(purchase_subtotal)
+        purchase.gst_total = round_currency(purchase_gst_total)
+        purchase.discount_total = round_currency(purchase_discount_total)
+        purchase.total_amount = round_currency(purchase_total_amount)
+        purchase.paid_amount = purchase.total_amount
+
+        vendor.last_purchase_date = purchase_created_at.date()
+        vendor.total_purchases = round_currency((vendor.total_purchases or 0) + purchase.total_amount)
+        vendor.payment_status = "Paid"
+        if not getattr(vendor, "default_payment_mode", ""):
+            vendor.default_payment_mode = "CASH"
+
+        build_scoped_medicine_code_sync(touched_names)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception("Bulk stock sale failed")
+        return None, summarize_exception_message(exc)
+
+    invoice_nos = [invoice.invoice_no for invoice in created_invoices]
+    for invoice in created_invoices:
+        record_audit_event(
+            action="Created stock sale invoice",
+            entity_type="INVOICE",
+            entity_id=invoice.id,
+            ref_code=invoice.invoice_no,
+            before=None,
+            after=build_invoice_audit_snapshot(invoice),
+            extra={
+                "operation_ref": operation_ref,
+                "payment_mode": invoice.payment_mode,
+                "customer": invoice.customer,
+            }
+        )
+    record_audit_event(
+        action="Executed bulk stock sale",
+        entity_type="INVENTORY",
+        entity_id=vendor.id,
+        ref_code=operation_ref,
+        before=None,
+        after=None,
+        extra={
+            "invoice_count": len(invoice_nos),
+            "invoice_nos": invoice_nos,
+            "purchase_no": purchase.purchase_no,
+            "purchase_invoice_no": purchase.invoice_no,
+            "reentry_vendor": vendor.name,
+            "line_count": preview["line_count"],
+            "total_qty": preview["total_qty"],
+            "estimated_sale_value": preview["estimated_sale_value"],
+        }
+    )
+
+    return {
+        "operation_ref": operation_ref,
+        "invoice_nos": invoice_nos,
+        "purchase_no": purchase.purchase_no,
+        "purchase_invoice_no": purchase.invoice_no,
+        "vendor_name": vendor.name,
+        "invoice_count": len(invoice_nos),
     }, None
 
 
@@ -5624,6 +6302,82 @@ def billing():
         "billing.html",
         payment_modes=payment_modes,
         **prepare_billing_context(meds, restored_hold_bill)
+    )
+
+
+@app.route("/stock-sale", methods=["GET", "POST"])
+@login_required
+def stock_sale():
+    user = active_user_by_id(session.get("user_id"))
+    if not user:
+        flash("Access denied", "danger")
+        return redirect("/")
+    if user.role != "admin":
+        flash("Access denied", "danger")
+        return redirect("/")
+
+    schema_ok, schema_err = ensure_inventory_runtime_schema()
+    if not schema_ok:
+        flash("Unable to open Stock Sale because inventory schema update failed.", "danger")
+        if schema_err:
+            app.logger.error("Inventory schema check failed before stock sale: %s", schema_err)
+        return redirect("/")
+
+    form_state = {
+        "customer": STOCK_SALE_DEFAULT_CUSTOMER,
+        "mobile": "",
+        "doctor": "",
+        "payment_mode": STOCK_SALE_DEFAULT_PAYMENT_MODE,
+        "internal_note": "",
+        "lines_per_invoice": STOCK_SALE_DEFAULT_LINES_PER_INVOICE,
+    }
+
+    if request.method == "POST":
+        form_state.update({
+            "customer": (request.form.get("customer") or "").strip() or STOCK_SALE_DEFAULT_CUSTOMER,
+            "mobile": (request.form.get("mobile") or "").strip(),
+            "doctor": (request.form.get("doctor") or "").strip(),
+            "payment_mode": normalize_payment_mode(request.form.get("payment_mode"), default=STOCK_SALE_DEFAULT_PAYMENT_MODE),
+            "internal_note": (request.form.get("internal_note") or "").strip(),
+            "lines_per_invoice": normalize_stock_sale_lines_per_invoice(request.form.get("lines_per_invoice")),
+        })
+        preview = build_stock_sale_preview(form_state["lines_per_invoice"])
+        if request.form.get("confirm_stock_sale") == "yes":
+            result, error = execute_stock_sale_operation(
+                customer=form_state["customer"],
+                mobile=form_state["mobile"],
+                doctor=form_state["doctor"],
+                payment_mode=form_state["payment_mode"],
+                internal_note=form_state["internal_note"],
+                lines_per_invoice=form_state["lines_per_invoice"],
+                actor_username=session.get("username"),
+            )
+            if error:
+                flash(error, "danger")
+            else:
+                invoice_preview = ", ".join(result["invoice_nos"][:5])
+                if len(result["invoice_nos"]) > 5:
+                    invoice_preview += f" +{len(result['invoice_nos']) - 5} more"
+                flash(
+                    f"Stock sale completed. Created {result['invoice_count']} invoice(s) [{invoice_preview}] and re-entry purchase {result['purchase_no']} for vendor {result['vendor_name']}.",
+                    "success"
+                )
+                return redirect("/stock-sale")
+        return render_template(
+            "stock_sale.html",
+            payment_modes=POS_PAYMENT_MODES,
+            preview=preview,
+            form_state=form_state,
+            reentry_vendor_name=STOCK_SALE_REENTRY_VENDOR_NAME,
+        )
+
+    preview = build_stock_sale_preview(form_state["lines_per_invoice"])
+    return render_template(
+        "stock_sale.html",
+        payment_modes=POS_PAYMENT_MODES,
+        preview=preview,
+        form_state=form_state,
+        reentry_vendor_name=STOCK_SALE_REENTRY_VENDOR_NAME,
     )
 
 

@@ -358,7 +358,171 @@ class EngineeringFlowTests(unittest.TestCase):
         response = self.client.get(f"/invoice/{invoice_id}")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("02-07-2026 05:30 PM", html)
+        self.assertIn("02-07-2026 Time 05:30 PM", html)
+
+    def test_admin_stock_sale_creates_purchase_rate_invoice_and_reentry_vendor_purchase(self):
+        with self.app.app_context():
+            self._seed_vendor_purchase_stack(total_qty=10, purchase_chunks=[(10, 10.0, datetime.utcnow())])
+
+        self.login()
+        response = self.client.post(
+            "/stock-sale",
+            data={
+                "customer": "STOCK SALE",
+                "mobile": "",
+                "doctor": "Dr. Admin",
+                "payment_mode": "ADJUSTMENT",
+                "lines_per_invoice": "50",
+                "internal_note": "Cycle all stock",
+                "confirm_stock_sale": "yes",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Stock sale completed.", response.data)
+        self.assertIn(b"DR ABHISHEK PRAKASH", response.data)
+
+        with self.app.app_context():
+            medicine = self.app_module.Medicine.query.filter_by(name="PARACETAMOL 650", batch="B123").one()
+            vendor = self.app_module.Vendor.query.filter_by(name="DR ABHISHEK PRAKASH").one()
+            invoice = self.app_module.Invoice.query.order_by(self.app_module.Invoice.id.desc()).first()
+            invoice_item = self.app_module.InvoiceItem.query.filter_by(invoice_id=invoice.id).one()
+            reentry_purchase = self.app_module.VendorPurchase.query.filter_by(vendor_id=vendor.id).one()
+            reentry_item = self.app_module.VendorPurchaseItem.query.filter_by(purchase_id=reentry_purchase.id).one()
+            total_remaining = sum(
+                item.remaining_qty
+                for item in self.app_module.VendorPurchaseItem.query.filter_by(
+                    medicine_name="PARACETAMOL 650",
+                    batch="B123",
+                ).all()
+            )
+            sale_history_count = self.app_module.StockHistory.query.filter(
+                self.app_module.StockHistory.remark.like("Bulk stock sale%")
+            ).count()
+            purchase_history_count = self.app_module.StockHistory.query.filter(
+                self.app_module.StockHistory.remark.like("Auto re-entry%")
+            ).count()
+
+            self.assertEqual(medicine.qty, 10)
+            self.assertEqual(invoice.customer, "STOCK SALE")
+            self.assertEqual(invoice.payment_mode, "ADJUSTMENT")
+            self.assertIn("Bulk stock sale operation", invoice.internal_note)
+            self.assertEqual(float(invoice_item.price), 10.0)
+            self.assertEqual(float(invoice_item.net_amount), 100.0)
+            self.assertEqual(reentry_purchase.payment_status, "Paid")
+            self.assertEqual(reentry_item.remaining_qty, 10)
+            self.assertEqual(float(reentry_item.purchase_rate), 10.0)
+            self.assertEqual(total_remaining, 10)
+            self.assertEqual(sale_history_count, 1)
+            self.assertEqual(purchase_history_count, 1)
+
+    def test_stock_sale_preview_matches_dashboard_purchase_layer_value_and_syncs_qty_deltas(self):
+        with self.app.app_context():
+            _vendor, _purchase, medicine = self._seed_vendor_purchase_stack(
+                total_qty=10,
+                purchase_chunks=[
+                    (5, 10.0, datetime.utcnow() - timedelta(days=2)),
+                    (5, 12.0, datetime.utcnow() - timedelta(days=1)),
+                ],
+            )
+            medicine.qty = 8
+            self.db.session.commit()
+
+            preview = self.app_module.build_stock_sale_preview(50)
+            dashboard_value = (
+                self.db.session.query(
+                    self.app_module.db.func.coalesce(
+                        self.app_module.db.func.sum(
+                            self.app_module.db.func.coalesce(self.app_module.VendorPurchaseItem.remaining_qty, 0) *
+                            self.app_module.db.func.coalesce(self.app_module.VendorPurchaseItem.purchase_rate, 0)
+                        ),
+                        0,
+                    )
+                ).scalar()
+                or 0
+            )
+
+            self.assertEqual(preview["estimated_sale_value"], round(dashboard_value, 2))
+            self.assertEqual(preview["line_count"], 2)
+            self.assertEqual(preview["total_qty"], 10)
+            self.assertEqual(preview["sync_mismatch_count"], 1)
+            self.assertEqual(preview["sync_total_delta"], 2)
+
+        self.login()
+        response = self.client.post(
+            "/stock-sale",
+            data={
+                "customer": "STOCK SALE",
+                "payment_mode": "ADJUSTMENT",
+                "lines_per_invoice": "50",
+                "confirm_stock_sale": "yes",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Stock sale completed.", response.data)
+
+        with self.app.app_context():
+            medicine = self.app_module.Medicine.query.filter_by(name="PARACETAMOL 650", batch="B123").one()
+            adjustment_history = self.app_module.StockHistory.query.filter(
+                self.app_module.StockHistory.remark.like("Stock sale sync%")
+            ).one()
+            self.assertEqual(medicine.qty, 10)
+            self.assertEqual(adjustment_history.stock_before, 8)
+            self.assertEqual(adjustment_history.stock_after, 10)
+
+    def test_stock_sale_is_admin_only_even_for_staff_with_purchase_access(self):
+        with self.app.app_context():
+            staff = self.app_module.User(
+                username="stockstaff",
+                role="staff",
+                access_profile="custom",
+                can_manage_purchases=True,
+                can_invoice_action=True,
+                can_edit_invoice=True,
+            )
+            staff.set_password("Staff@123")
+            self.db.session.add(staff)
+            self.db.session.commit()
+
+        self.login_as("stockstaff", "Staff@123")
+        response = self.client.get("/stock-sale", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Access denied", response.data)
+
+    def test_stock_sale_blocks_execution_when_purchase_rate_history_is_missing(self):
+        with self.app.app_context():
+            self.db.session.add(
+                self.app_module.Medicine(
+                    name="UNMAPPED STOCK",
+                    batch="U-100",
+                    expiry="2027-12-31",
+                    mrp=55.0,
+                    qty=4,
+                    discount_percent=0,
+                    barcode="UNMAPPED100",
+                    reorder_level=1,
+                    is_active=True,
+                )
+            )
+            self.db.session.commit()
+
+        self.login()
+        response = self.client.post(
+            "/stock-sale",
+            data={
+                "customer": "STOCK SALE",
+                "payment_mode": "ADJUSTMENT",
+                "lines_per_invoice": "50",
+                "confirm_stock_sale": "yes",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"no purchase layer", response.data.lower())
+
+        with self.app.app_context():
+            self.assertEqual(self.app_module.Invoice.query.count(), 0)
 
     def test_billing_rejects_split_cash_above_total_bill_amount(self):
         with self.app.app_context():

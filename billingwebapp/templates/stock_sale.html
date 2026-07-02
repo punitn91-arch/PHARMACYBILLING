@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+{% block title %}Stock Sale{% endblock %}
+{% block body %}
+<style>
+.stock-sale-shell {
+    display: grid;
+    gap: 20px;
+}
+
+.stock-sale-card {
+    background: #ffffff;
+    border: 1px solid #d7e3f3;
+    border-radius: 18px;
+    box-shadow: 0 14px 30px rgba(19, 43, 77, 0.08);
+    padding: 24px;
+}
+
+.stock-sale-card h2,
+.stock-sale-card h3 {
+    margin: 0 0 8px;
+    color: #163a7a;
+}
+
+.stock-sale-lead {
+    margin: 0;
+    color: #54657d;
+    line-height: 1.5;
+}
+
+.stock-sale-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+}
+
+.stock-sale-pill {
+    border-radius: 16px;
+    border: 1px solid #dce7f5;
+    background: linear-gradient(180deg, #f9fbff 0%, #f2f7ff 100%);
+    padding: 16px;
+}
+
+.stock-sale-pill small {
+    display: block;
+    color: #61758d;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.stock-sale-pill strong {
+    display: block;
+    margin-top: 8px;
+    color: #11233d;
+    font-size: 28px;
+    line-height: 1.1;
+}
+
+.stock-sale-pill span {
+    display: block;
+    margin-top: 6px;
+    color: #6b7e95;
+    font-size: 13px;
+}
+
+.stock-sale-form {
+    display: grid;
+    gap: 16px;
+}
+
+.stock-sale-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+}
+
+.stock-sale-field label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #51657f;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.stock-sale-field input,
+.stock-sale-field select,
+.stock-sale-field textarea {
+    width: 100%;
+    border: 1px solid #cfdced;
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 14px;
+    color: #13233b;
+    background: #fff;
+}
+
+.stock-sale-field textarea {
+    min-height: 92px;
+    resize: vertical;
+}
+
+.stock-sale-callout {
+    border-radius: 14px;
+    padding: 16px 18px;
+    border: 1px solid #ffd8d8;
+    background: #fff5f5;
+    color: #8b2c2c;
+    line-height: 1.5;
+}
+
+.stock-sale-callout.safe {
+    border-color: #cfe8d8;
+    background: #f4fbf6;
+    color: #1f6b3b;
+}
+
+.stock-sale-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.stock-sale-btn {
+    border: 0;
+    border-radius: 12px;
+    padding: 13px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.stock-sale-btn.primary {
+    background: #1846a3;
+    color: #fff;
+}
+
+.stock-sale-btn.primary[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.stock-sale-btn.secondary {
+    background: #edf3fb;
+    color: #153873;
+}
+
+.stock-sale-note {
+    color: #64758c;
+    font-size: 13px;
+}
+
+.stock-sale-table-wrap {
+    overflow-x: auto;
+}
+
+.stock-sale-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 960px;
+}
+
+.stock-sale-table th,
+.stock-sale-table td {
+    padding: 12px 10px;
+    border-bottom: 1px solid #e4edf8;
+    font-size: 14px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.stock-sale-table th {
+    color: #5d7089;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+}
+
+.stock-sale-table td.num,
+.stock-sale-table th.num {
+    text-align: right;
+}
+
+.stock-sale-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    background: #eef4ff;
+    color: #204d9c;
+}
+
+.stock-sale-chip.warn {
+    background: #fff0d9;
+    color: #9b5b00;
+}
+
+.stock-sale-chip.danger {
+    background: #ffe3e3;
+    color: #a32d2d;
+}
+
+@media (max-width: 768px) {
+    .stock-sale-card {
+        padding: 18px;
+    }
+}
+</style>
+
+<div class="stock-sale-shell">
+    <section class="stock-sale-card">
+        <h2>Stock Sale</h2>
+        <p class="stock-sale-lead">
+            Ye admin-only module current stock ko purchase rate par sale invoice me convert karega, phir wahi stock
+            auto re-entry ke through vendor <strong>{{ reentry_vendor_name }}</strong> ke under wapas add karega.
+            Normal POS billing flow isse alag rahega.
+        </p>
+    </section>
+
+    <section class="stock-sale-grid">
+        <div class="stock-sale-pill">
+            <small>Stock Lines</small>
+            <strong>{{ preview.line_count }}</strong>
+            <span>Purchase-layer rows ready for stock sale</span>
+        </div>
+        <div class="stock-sale-pill">
+            <small>Total Qty</small>
+            <strong>{{ preview.total_qty }}</strong>
+            <span>Current sellable quantity that will be cycled</span>
+        </div>
+        <div class="stock-sale-pill">
+            <small>Sale Value</small>
+            <strong>Rs {{ preview.estimated_sale_value }}</strong>
+            <span>Calculated at purchase rate for invoice creation</span>
+        </div>
+        <div class="stock-sale-pill">
+            <small>Re-entry Total</small>
+            <strong>Rs {{ preview.estimated_reentry_total }}</strong>
+            <span>Purchase-side re-entry estimate with GST/discount profile</span>
+        </div>
+        <div class="stock-sale-pill">
+            <small>Invoices</small>
+            <strong>{{ preview.invoice_chunk_count }}</strong>
+            <span>Estimated invoice count based on selected line limit</span>
+        </div>
+        <div class="stock-sale-pill">
+            <small>Expired Rows</small>
+            <strong>{{ preview.expired_count }}</strong>
+            <span>Included in operation because this is an internal stock cycle</span>
+        </div>
+    </section>
+
+    {% if preview.unresolved_count > 0 %}
+    <section class="stock-sale-callout">
+        <strong>{{ preview.unresolved_count }} row(s) are not ready for exact stock sale.</strong>
+        Kuch stock rows active purchase layer ya linked medicine record se sync nahi hain. Inko fix karo, tabhi dashboard aur stock sale value exact aligned rahegi.
+        Neeche preview table me un rows par mismatch status dikh raha hai.
+    </section>
+    {% elif preview.sync_mismatch_count > 0 %}
+    <section class="stock-sale-callout safe">
+        Dashboard aur Stock Sale ab same purchase-layer value use kar rahe hain. Confirm karne par
+        <strong>{{ preview.sync_mismatch_count }}</strong> medicine row(s) ki `Medicine.qty` auto-sync hogi
+        purchase-layer quantity ke saath (net delta <strong>{{ preview.sync_total_delta_display }}</strong> units),
+        phir sale/re-entry workflow chalega.
+    </section>
+    {% else %}
+    <section class="stock-sale-callout safe">
+        Purchase-layer history resolved for all visible stock rows. Confirm karne par stock sale invoice(s) aur auto re-entry purchase ek hi workflow me ban jayenge.
+    </section>
+    {% endif %}
+
+    <section class="stock-sale-card">
+        <h3>Execution Settings</h3>
+        <form class="stock-sale-form" method="post">
+            <div class="stock-sale-form-grid">
+                <div class="stock-sale-field">
+                    <label for="customer">Customer Name</label>
+                    <input id="customer" name="customer" type="text" value="{{ form_state.customer }}">
+                </div>
+                <div class="stock-sale-field">
+                    <label for="mobile">Mobile</label>
+                    <input id="mobile" name="mobile" type="text" value="{{ form_state.mobile }}">
+                </div>
+                <div class="stock-sale-field">
+                    <label for="doctor">Ref. By</label>
+                    <input id="doctor" name="doctor" type="text" value="{{ form_state.doctor }}">
+                </div>
+                <div class="stock-sale-field">
+                    <label for="payment_mode">Payment Mode</label>
+                    <select id="payment_mode" name="payment_mode">
+                        {% for mode in payment_modes %}
+                        <option value="{{ mode }}" {% if form_state.payment_mode == mode %}selected{% endif %}>{{ mode }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="stock-sale-field">
+                    <label for="lines_per_invoice">Lines Per Invoice</label>
+                    <input id="lines_per_invoice" name="lines_per_invoice" type="number" min="1" max="200" value="{{ form_state.lines_per_invoice }}">
+                </div>
+            </div>
+            <div class="stock-sale-field">
+                <label for="internal_note">Internal Note</label>
+                <textarea id="internal_note" name="internal_note">{{ form_state.internal_note }}</textarea>
+            </div>
+            <div class="stock-sale-actions">
+                <input type="hidden" name="confirm_stock_sale" value="yes">
+                <button class="stock-sale-btn primary" type="submit" {% if preview.line_count == 0 or preview.unresolved_count > 0 %}disabled{% endif %}>
+                    Execute Stock Sale + Re-entry
+                </button>
+                <a class="stock-sale-btn secondary" href="/stock-sale">Refresh Preview</a>
+                <div class="stock-sale-note">
+                    Vendor auto-create / reuse: <strong>{{ reentry_vendor_name }}</strong>
+                </div>
+            </div>
+        </form>
+    </section>
+
+    <section class="stock-sale-card">
+        <h3>Stock Preview</h3>
+        <div class="stock-sale-table-wrap">
+            <table class="stock-sale-table">
+                <thead>
+                    <tr>
+                        <th>Medicine</th>
+                        <th>Batch</th>
+                        <th>Expiry</th>
+                        <th class="num">Qty</th>
+                        <th class="num">Purchase Rate</th>
+                        <th class="num">Sale Value</th>
+                        <th class="num">Re-entry Total</th>
+                        <th>Rate Source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if preview.rows %}
+                        {% for row in preview.rows %}
+                        <tr>
+                            <td>
+                                <strong>{{ row.name }}</strong>
+                                {% if row.medicine_code %}<div class="stock-sale-note">{{ row.medicine_code }}</div>{% endif %}
+                            </td>
+                            <td>{{ row.batch or "-" }}</td>
+                            <td>
+                                {{ row.expiry or "-" }}
+                                {% if row.is_expired %}
+                                <div><span class="stock-sale-chip warn">Expired</span></div>
+                                {% endif %}
+                            </td>
+                            <td class="num">{{ row.qty }}</td>
+                            <td class="num">Rs {{ row.purchase_rate }}</td>
+                            <td class="num">Rs {{ row.sale_value }}</td>
+                            <td class="num">Rs {{ row.reentry_total }}</td>
+                            <td>
+                                <span class="stock-sale-chip {% if row.source in ['missing_medicine', 'missing_purchase_layer'] %}danger{% elif row.source == 'name_batch_match' %}warn{% endif %}">
+                                    {{ row.source_label }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="8">No current stock found.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

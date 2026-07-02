@@ -928,7 +928,7 @@
     <div class="topbar">
         <div class="topbar-left">
             <button id="sidebarToggle" class="menu-toggle" type="button" aria-label="Toggle menu" aria-expanded="true">&#9776;</button>
-            <div class="title">DR. ABHISHEK'S PHARMACY – BILLING</div>
+            <div class="title">THE ENDO PHARMACY</div>
         </div>
 
         {% if session.get("user_id") %}
@@ -974,6 +974,9 @@
         <a href="/invoices">📄 Manage Invoice</a>
         <a href="/return-bills">&#8617; Return Bills</a>
         <a href="/pending-bills">&#9203; Pending Bills</a>
+        {% if session.get("role") == "admin" %}
+        <a href="/stock-sale" class="{% if request.path.startswith('/stock-sale') %}active{% endif %}">📦 Stock Sale</a>
+        {% endif %}
         {% endif %}
        
         <h4>Master</h4>
