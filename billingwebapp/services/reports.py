@@ -6,12 +6,17 @@ except ImportError:  # pragma: no cover - script/local fallback
     from models import Invoice, db
 
 
-def default_report_filters():
+def default_report_filters(fresh_start_date=None, current_date=None):
+    from_date = ""
+    to_date = ""
+    if fresh_start_date and current_date and current_date >= fresh_start_date:
+        from_date = fresh_start_date.isoformat()
+        to_date = current_date.isoformat()
     return {
         "month": "",
         "year": "",
-        "from_date": "",
-        "to_date": "",
+        "from_date": from_date,
+        "to_date": to_date,
         "patient": "",
         "mobile": "",
         "search_query": "",
@@ -26,6 +31,7 @@ def build_reports_page_state(
     *,
     prevalidated_error=None,
     clinic_now,
+    fresh_start_date,
     parse_date,
     to_int_safe,
     local_date_range_to_storage_bounds,
@@ -48,10 +54,18 @@ def build_reports_page_state(
     patient_medicine_summary = None
     collection_summary = None
     invoice_rows = []
-    report_filters = default_report_filters()
+    current_date = clinic_now().date()
+    report_filters = default_report_filters(fresh_start_date=fresh_start_date, current_date=current_date)
     messages = []
 
-    report_type = form_data.get("report_type")
+    report_type = (form_data.get("report_type") or "").strip()
+    default_cutover_view = False
+    if request_method == "GET" and not report_type and fresh_start_date and current_date >= fresh_start_date:
+        report_type = "custom"
+        default_cutover_view = True
+
+    should_build_report = request_method == "POST" or bool(report_type)
+
     if request_method == "POST":
         for key in report_filters.keys():
             report_filters[key] = (form_data.get(key) or "").strip()
@@ -75,7 +89,13 @@ def build_reports_page_state(
                 "report_filters": report_filters,
                 "messages": messages,
             }
+    elif should_build_report:
+        for key in report_filters.keys():
+            raw_value = (form_data.get(key) or "").strip()
+            if raw_value:
+                report_filters[key] = raw_value
 
+    if should_build_report:
         if report_type == "daily":
             today = clinic_now().date()
             start_bound, end_bound = local_date_range_to_storage_bounds(today, today)
@@ -102,8 +122,8 @@ def build_reports_page_state(
                     Invoice.created_at < end_bound,
                 ).all()
         elif report_type == "custom":
-            from_date = form_data.get("from_date")
-            to_date = form_data.get("to_date")
+            from_date = report_filters["from_date"]
+            to_date = report_filters["to_date"]
             if from_date and to_date:
                 from_date_value = parse_date(from_date)
                 to_date_value = parse_date(to_date)
@@ -176,8 +196,8 @@ def build_reports_page_state(
                 messages.append(("danger", usage_error))
         elif report_type == "profit":
             profit_summary, profit_error = build_profit_report_summary(
-                form_data.get("from_date"),
-                form_data.get("to_date"),
+                report_filters["from_date"],
+                report_filters["to_date"],
             )
             if profit_error:
                 messages.append(("danger", profit_error))
@@ -219,5 +239,7 @@ def build_reports_page_state(
         "collection_summary": collection_summary,
         "invoice_rows": invoice_rows,
         "report_filters": report_filters,
+        "fresh_start_date": fresh_start_date.isoformat() if fresh_start_date else "",
+        "default_cutover_view": default_cutover_view,
         "messages": messages,
     }

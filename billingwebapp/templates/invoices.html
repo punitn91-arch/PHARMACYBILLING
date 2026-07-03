@@ -48,11 +48,11 @@
         <form method="get" class="app-filter-grid">
             <div class="app-field" style="grid-column: span 2;">
                 <label for="invoiceFrom">From Date</label>
-                <input id="invoiceFrom" type="date" name="from" value="{{ request.args.get('from', '') }}">
+                <input id="invoiceFrom" type="date" name="from" value="{{ active_from or '' }}">
             </div>
             <div class="app-field" style="grid-column: span 2;">
                 <label for="invoiceTo">To Date</label>
-                <input id="invoiceTo" type="date" name="to" value="{{ request.args.get('to', '') }}">
+                <input id="invoiceTo" type="date" name="to" value="{{ active_to or '' }}">
             </div>
             <div class="app-field" style="grid-column: span 5;">
                 <label for="invoiceSearch">Search Invoice / Patient / Mobile</label>
@@ -79,7 +79,12 @@
             <span class="app-shortcut-kbd">/ or Ctrl/Cmd + K · global search</span>
         </div>
 
-        <div class="app-inline-help" id="invoiceResultsNote">Dense view active. Sticky filters and the table header keep context visible in large invoice lists.</div>
+        <div class="app-inline-help" id="invoiceResultsNote">
+            Dense view active. Sticky filters and the table header keep context visible in large invoice lists.
+            {% if default_cutover_window %}
+            Default view is showing invoices from {{ fresh_start_date }} onward. Change the date filter to open older records.
+            {% endif %}
+        </div>
     </section>
 
     <section class="app-table-shell">

@@ -786,6 +786,8 @@ def to_float_safe(val, default=0.0):
 
 POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT", "CREDIT")
 INVOICE_PRINT_PROFILE_CUTOVER = date(2026, 7, 1)
+OPERATIONS_FRESH_START_DATE = INVOICE_PRINT_PROFILE_CUTOVER
+FRESH_START_PUBLIC_NUMBER_WIDTH = 5
 STOCK_SALE_REENTRY_VENDOR_NAME = "DR ABHISHEK PRAKASH"
 STOCK_SALE_DEFAULT_CUSTOMER = "STOCK SALE"
 STOCK_SALE_DEFAULT_PAYMENT_MODE = "ADJUSTMENT"
@@ -796,13 +798,13 @@ LEGACY_INVOICE_PRINT_PROFILE = {
     "address_line_1": "FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER",
     "address_line_2": "JAIPUR, RAJASTHAN",
     "mobile": "9024648186",
-    "gst_no": "A8BPWPP5023C1ZP",
+    "gst_no": "08BPWPP5023C1ZP",
     "licence_no": "",
     "logo_path": "/static/endo-pharmacy-logo.png",
 }
 CURRENT_INVOICE_PRINT_PROFILE = {
     "profile_code": "endo_pharmacy_2026_07",
-    "address_line_1": "FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER",
+    "address_line_1": "SHOP NO. FF12, 2ND FLOOR, MANGLAM AANANDA PLAZA, SANGANER",
     "address_line_2": "JAIPUR, RAJASTHAN",
     "mobile": "9024648186",
     "gst_no": "08ABAFT0637R1ZP",
@@ -840,6 +842,95 @@ def _invoice_profile_local_date(value=None):
     if isinstance(value, date):
         return value
     return clinic_now().date()
+
+
+def get_operations_fresh_start_date():
+    return OPERATIONS_FRESH_START_DATE
+
+
+def is_post_operations_fresh_start(value=None):
+    return _invoice_profile_local_date(value) >= get_operations_fresh_start_date()
+
+
+def floor_start_date_to_operations_fresh_start(start_date, end_date=None):
+    if not start_date:
+        return start_date
+    fresh_start = get_operations_fresh_start_date()
+    if end_date and end_date < fresh_start:
+        return start_date
+    return max(start_date, fresh_start)
+
+
+def _extract_fresh_start_public_sequence(value, prefix):
+    raw_value = str(value or "").strip().upper()
+    match = re.fullmatch(
+        rf"{re.escape(prefix)}-(\d{{{FRESH_START_PUBLIC_NUMBER_WIDTH}}})",
+        raw_value,
+    )
+    if not match:
+        return None
+    return to_int_safe(match.group(1), 0) or None
+
+
+def _next_fresh_start_public_sequence(model, field_name, prefix, effective_date, date_field_name):
+    if not is_post_operations_fresh_start(effective_date):
+        return None
+    fresh_start_date = get_operations_fresh_start_date()
+    start_bound, _unused_end = local_date_range_to_storage_bounds(fresh_start_date, fresh_start_date)
+    field = getattr(model, field_name)
+    date_field = getattr(model, date_field_name)
+    values = db.session.query(field).filter(date_field >= start_bound).all()
+    max_sequence = 0
+    for (raw_value,) in values:
+        parsed_sequence = _extract_fresh_start_public_sequence(raw_value, prefix)
+        if parsed_sequence and parsed_sequence > max_sequence:
+            max_sequence = parsed_sequence
+    return max_sequence + 1
+
+
+def build_fresh_start_invoice_no(effective_date=None):
+    sequence = _next_fresh_start_public_sequence(
+        Invoice,
+        "invoice_no",
+        "INV",
+        effective_date,
+        "created_at",
+    )
+    if not sequence:
+        return None
+    return f"INV-{sequence:0{FRESH_START_PUBLIC_NUMBER_WIDTH}d}"
+
+
+def build_fresh_start_purchase_no(effective_date=None):
+    sequence = _next_fresh_start_public_sequence(
+        VendorPurchase,
+        "purchase_no",
+        "PB",
+        effective_date,
+        "purchase_date",
+    )
+    if not sequence:
+        return None
+    return f"PB-{sequence:0{FRESH_START_PUBLIC_NUMBER_WIDTH}d}"
+
+
+def assign_invoice_number(invoice, effective_date=None):
+    local_date = _invoice_profile_local_date(effective_date or getattr(invoice, "created_at", None))
+    if is_post_operations_fresh_start(local_date):
+        invoice.invoice_no = build_fresh_start_invoice_no(local_date)
+    else:
+        invoice.invoice_no = f"INV-{local_date.year}-{1000 + invoice.id}"
+    return invoice.invoice_no
+
+
+def assign_purchase_number(purchase, effective_date=None):
+    purchase_date = effective_date or getattr(purchase, "purchase_date", None) or getattr(purchase, "created_at", None)
+    local_date = _invoice_profile_local_date(purchase_date)
+    if is_post_operations_fresh_start(local_date):
+        purchase.purchase_no = build_fresh_start_purchase_no(local_date)
+    else:
+        purchase.purchase_no = f"PB-{purchase.id:06d}"
+    return purchase.purchase_no
 
 
 def get_invoice_print_profile_for_date(value=None):
@@ -910,6 +1001,23 @@ def backfill_invoice_print_profiles():
     for invoice in invoices:
         apply_invoice_print_profile(invoice, getattr(invoice, "created_at", None))
         updated += 1
+    if updated:
+        db.session.commit()
+    return updated
+
+
+def sync_invoice_print_profiles_to_cutover():
+    invoices = Invoice.query.all()
+    updated = 0
+    for invoice in invoices:
+        expected_snapshot = build_invoice_print_profile_snapshot(getattr(invoice, "created_at", None))
+        changed = False
+        for field, expected_value in expected_snapshot.items():
+            if getattr(invoice, field, None) != expected_value:
+                setattr(invoice, field, expected_value)
+                changed = True
+        if changed:
+            updated += 1
     if updated:
         db.session.commit()
     return updated
@@ -1487,7 +1595,6 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
             )
             db.session.add(invoice)
             db.session.flush()
-            invoice.invoice_no = f"INV-{clinic_now().year}-{1000 + invoice.id}"
 
             subtotal = 0.0
             total_discount = 0.0
@@ -1568,6 +1675,7 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
             invoice.is_split_payment = payment_breakdown["is_split_payment"]
             apply_invoice_print_profile(invoice, invoice_print_date)
             created_invoices.append(invoice)
+            assign_invoice_number(invoice, invoice_print_date)
 
         purchase_created_at = datetime.utcnow()
         purchase = VendorPurchase(
@@ -1587,7 +1695,7 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
         )
         db.session.add(purchase)
         db.session.flush()
-        purchase.purchase_no = f"PB-{purchase.id:06d}"
+        assign_purchase_number(purchase, purchase_created_at)
 
         purchase_subtotal = 0.0
         purchase_gst_total = 0.0
@@ -2771,9 +2879,11 @@ def build_dashboard_sales_trend(days=7):
     days = max(3, min(to_int_safe(days, 7), 31))
     end_date = clinic_now().date()
     start_date = end_date - timedelta(days=days - 1)
+    start_date = floor_start_date_to_operations_fresh_start(start_date, end_date)
     start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
+    observed_days = (end_date - start_date).days + 1
 
-    ordered_days = [start_date + timedelta(days=offset) for offset in range(days)]
+    ordered_days = [start_date + timedelta(days=offset) for offset in range(observed_days)]
     bucket_map = {
         day_key: {
             "date": day_key.isoformat(),
@@ -2827,7 +2937,9 @@ def build_dashboard_appointment_trend(days=7):
     days = max(3, min(to_int_safe(days, 7), 31))
     end_date = clinic_now().date()
     start_date = end_date - timedelta(days=days - 1)
-    ordered_days = [start_date + timedelta(days=offset) for offset in range(days)]
+    start_date = floor_start_date_to_operations_fresh_start(start_date, end_date)
+    observed_days = (end_date - start_date).days + 1
+    ordered_days = [start_date + timedelta(days=offset) for offset in range(observed_days)]
     bucket_map = {
         day_key: {
             "date": day_key.isoformat(),
@@ -2878,6 +2990,10 @@ def build_dashboard_dead_stock(limit=5, dormant_days=60):
     dormant_days = max(30, min(to_int_safe(dormant_days, 60), 365))
     end_date = clinic_now().date()
     start_date = end_date - timedelta(days=dormant_days - 1)
+    start_date = floor_start_date_to_operations_fresh_start(start_date, end_date)
+    observed_days = (end_date - start_date).days + 1
+    if observed_days < dormant_days:
+        return []
 
     medicine_data, _errors = build_medicine_report_data(
         start_date.isoformat(),
@@ -2894,7 +3010,7 @@ def build_dashboard_dead_stock(limit=5, dormant_days=60):
             "name": (row.get("medicine") or "").strip(),
             "qty": to_int_safe(row.get("current_stock"), 0),
             "blocked_value": 0.0,
-            "days_without_sale": dormant_days
+            "days_without_sale": observed_days
         }
 
     if not dormant_rows:
@@ -2926,6 +3042,7 @@ def build_dashboard_top_medicines(limit=5, period_days=30):
     period_days = max(7, min(to_int_safe(period_days, 30), 120))
     end_date = clinic_now().date()
     start_date = end_date - timedelta(days=period_days - 1)
+    start_date = floor_start_date_to_operations_fresh_start(start_date, end_date)
     medicine_data, _errors = build_medicine_report_data(
         start_date.isoformat(),
         end_date.isoformat(),
@@ -4737,6 +4854,7 @@ with app.app_context():
         ))
         db.session.commit()
         backfill_invoice_print_profiles()
+        sync_invoice_print_profiles_to_cutover()
         if (db.session.bind.dialect.name if db.session.bind else "").lower() == "postgresql":
             legacy_boolean_columns = {
                 "user": {
@@ -6205,8 +6323,6 @@ def billing():
             flash(payment_error, "danger")
             return redirect_to_billing_with_context()
 
-        last = Invoice.query.order_by(Invoice.id.desc()).first()
-        inv_no = f"INV-{datetime.now().year}-{1000 + ((last.id + 1) if last else 1)}"
         customer = (request.form.get("customer") or "").strip()
         mobile = (request.form.get("mobile") or "").strip()
         internal_note = (request.form.get("internal_note") or "").strip()
@@ -6216,7 +6332,7 @@ def billing():
         if patient and not patient.id:
             db.session.flush()
         inv = Invoice(
-            invoice_no=inv_no,
+            invoice_no=None,
             patient_id=patient.id if patient else None,
             customer=customer,
             mobile=normalized_mobile or mobile,
@@ -6239,6 +6355,7 @@ def billing():
 
         db.session.add(inv)
         db.session.flush()
+        assign_invoice_number(inv, invoice_print_date)
 
         for item in cart:
             inv_item = InvoiceItem(
@@ -6970,6 +7087,22 @@ def invoices():
     to_str = request.args.get("to", "").strip()
     search_query = (request.args.get("search") or "").strip()
     query = Invoice.query
+    active_from = from_str
+    active_to = to_str
+    fresh_start_date = get_operations_fresh_start_date()
+    default_cutover_window = False
+
+    if (
+        not from_str
+        and not to_str
+        and not search_query
+        and is_post_operations_fresh_start()
+    ):
+        default_cutover_window = True
+        active_from = fresh_start_date.isoformat()
+        from_dt, _unused = local_date_range_to_storage_bounds(fresh_start_date, fresh_start_date)
+        query = query.filter(Invoice.created_at >= from_dt)
+
     if from_str:
         try:
             from_dt = datetime.strptime(from_str, "%Y-%m-%d")
@@ -6995,7 +7128,11 @@ def invoices():
     return render_template(
         "invoices.html",
         invoices=query.order_by(Invoice.id.desc()).all(),
-        search_query=search_query
+        search_query=search_query,
+        active_from=active_from,
+        active_to=active_to,
+        default_cutover_window=default_cutover_window,
+        fresh_start_date=fresh_start_date.isoformat(),
     )
 
 # ---------------- PART-3: VIEW / PRINT INVOICE ----------------
@@ -7714,7 +7851,7 @@ def add_vendor_purchase(id):
         )
         db.session.add(purchase)
         db.session.flush()
-        purchase.purchase_no = f"PB-{purchase.id:06d}"
+        assign_purchase_number(purchase, purchase_date)
         if bill_attachment_file and (bill_attachment_file.filename or "").strip():
             saved_bill_attachment_ref = save_uploaded_file(
                 bill_attachment_file,
@@ -11003,6 +11140,7 @@ def reports():
         form_data=request.form if request.method == "POST" else request.args,
         prevalidated_error=report_validation_error,
         clinic_now=clinic_now,
+        fresh_start_date=get_operations_fresh_start_date(),
         parse_date=parse_date,
         to_int_safe=to_int_safe,
         local_date_range_to_storage_bounds=local_date_range_to_storage_bounds,

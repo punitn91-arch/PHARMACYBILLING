@@ -275,6 +275,69 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(float(invoice.online_amount), 30.0)
             self.assertTrue(invoice.is_split_payment)
 
+    def test_billing_flow_starts_fresh_start_invoice_series_from_one(self):
+        with self.app.app_context():
+            self._seed_patient()
+            self._seed_vendor_purchase_stack(total_qty=12)
+            legacy_style_invoice = self.app_module.Invoice(
+                invoice_no="INV-2026-1622",
+                customer="Already Created",
+                mobile="9000000100",
+                subtotal=50.0,
+                total=50.0,
+                payment_mode="CASH",
+                created_by="admin",
+                created_at=datetime(2026, 7, 2, 10, 0, 0),
+            )
+            self.db.session.add(legacy_style_invoice)
+            self.db.session.commit()
+
+        self.login()
+        first_response = self.client.post(
+            "/billing",
+            data={
+                "customer": "Fresh Start One",
+                "mobile": "9876543210",
+                "doctor": "Dr. Test",
+                "gender": "MALE",
+                "payment_mode": "CASH",
+                "medicine_name": ["PARACETAMOL 650"],
+                "qty": ["1"],
+                "batch_override[]": ["B123"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(first_response.status_code, 200)
+        self.assertIn(b"INV-00001", first_response.data)
+
+        second_response = self.client.post(
+            "/billing",
+            data={
+                "customer": "Fresh Start Two",
+                "mobile": "9876543211",
+                "doctor": "Dr. Test",
+                "gender": "MALE",
+                "payment_mode": "CASH",
+                "medicine_name": ["PARACETAMOL 650"],
+                "qty": ["1"],
+                "batch_override[]": ["B123"],
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertIn(b"INV-00002", second_response.data)
+
+        with self.app.app_context():
+            invoice_nos = [
+                row[0]
+                for row in self.db.session.query(self.app_module.Invoice.invoice_no)
+                .order_by(self.app_module.Invoice.id.asc())
+                .all()
+            ]
+            self.assertIn("INV-2026-1622", invoice_nos)
+            self.assertIn("INV-00001", invoice_nos)
+            self.assertIn("INV-00002", invoice_nos)
+
     def test_compute_invoice_rounded_total_uses_half_up_rounding(self):
         self.assertEqual(self.app_module.compute_invoice_rounded_total(48.5), 49.0)
         self.assertEqual(self.app_module.compute_invoice_rounded_total(100.5), 101.0)
@@ -323,12 +386,48 @@ class EngineeringFlowTests(unittest.TestCase):
             self.db.session.refresh(current_invoice)
 
             self.assertEqual(legacy_invoice.print_profile_code, "legacy_pre_2026_07")
-            self.assertEqual(legacy_invoice.print_gst_no, "A8BPWPP5023C1ZP")
+            self.assertEqual(legacy_invoice.print_gst_no, "08BPWPP5023C1ZP")
             self.assertEqual(legacy_invoice.print_licence_no, "")
 
             self.assertEqual(current_invoice.print_profile_code, "endo_pharmacy_2026_07")
             self.assertEqual(current_invoice.print_gst_no, "08ABAFT0637R1ZP")
             self.assertEqual(current_invoice.print_licence_no, "DRUG/2026-27/154505")
+            self.assertEqual(
+                current_invoice.print_address_line_1,
+                "SHOP NO. FF12, 2ND FLOOR, MANGLAM AANANDA PLAZA, SANGANER",
+            )
+
+    def test_invoice_print_profile_sync_realigns_existing_snapshots_to_cutover_profiles(self):
+        with self.app.app_context():
+            _patient_old, legacy_invoice = self._seed_invoice(
+                customer="Legacy Snapshot",
+                mobile="9000000011",
+                created_at=datetime(2026, 6, 30, 12, 0, 0),
+            )
+            _patient_new, current_invoice = self._seed_invoice(
+                customer="Current Snapshot",
+                mobile="9000000012",
+                created_at=datetime(2026, 7, 2, 12, 0, 0),
+            )
+
+            legacy_invoice.print_profile_code = "legacy_pre_2026_07"
+            legacy_invoice.print_gst_no = "WRONG-LEGACY-GST"
+            current_invoice.print_profile_code = "endo_pharmacy_2026_07"
+            current_invoice.print_address_line_1 = "OLD CURRENT ADDRESS"
+            current_invoice.print_gst_no = "WRONG-CURRENT-GST"
+            self.db.session.commit()
+
+            updated = self.app_module.sync_invoice_print_profiles_to_cutover()
+            self.db.session.refresh(legacy_invoice)
+            self.db.session.refresh(current_invoice)
+
+            self.assertEqual(updated, 2)
+            self.assertEqual(legacy_invoice.print_gst_no, "08BPWPP5023C1ZP")
+            self.assertEqual(
+                current_invoice.print_address_line_1,
+                "SHOP NO. FF12, 2ND FLOOR, MANGLAM AANANDA PLAZA, SANGANER",
+            )
+            self.assertEqual(current_invoice.print_gst_no, "08ABAFT0637R1ZP")
 
     def test_invoice_view_prefers_stored_print_snapshot_over_date_fallback(self):
         with self.app.app_context():
@@ -345,7 +444,7 @@ class EngineeringFlowTests(unittest.TestCase):
         response = self.client.get(f"/invoice/{invoice_id}")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("A8BPWPP5023C1ZP", html)
+        self.assertIn("08BPWPP5023C1ZP", html)
         self.assertNotIn("08ABAFT0637R1ZP", html)
         self.assertNotIn("DRUG/2026-27/154505", html)
 
@@ -456,7 +555,7 @@ class EngineeringFlowTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn("Party Details", html)
         self.assertIn("Party Name", html)
-        self.assertIn("GST Number", html)
+        self.assertIn("GST No", html)
         self.assertIn("08ABCDE1234F1Z5", html)
         self.assertIn("CREDIT", html)
 
@@ -793,6 +892,81 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(saved_medicine.medicine_code, expected_code)
             self.assertEqual(purchase_item.medicine_code, expected_code)
             self.assertEqual(saved_medicine.qty, 22)
+
+    def test_vendor_purchase_starts_fresh_start_purchase_series_from_one(self):
+        with self.app.app_context():
+            vendor, _purchase, _medicine = self._seed_vendor_purchase_stack(total_qty=10)
+            vendor_id = vendor.id
+
+        self.login()
+        first_response = self.client.post(
+            f"/vendor/{vendor_id}/purchase",
+            data={
+                "invoice_no": "FRESH-PUR-001",
+                "purchase_date": date.today().isoformat(),
+                "payment_mode": "CASH",
+                "payment_status": "Paid",
+                "paid_amount": "0",
+                "medicine_name": ["PARACETAMOL 650"],
+                "medicine_code": [""],
+                "barcode": [""],
+                "composition": [""],
+                "company": ["Test Pharma"],
+                "distributor_name": ["Prime Distributor"],
+                "pack_type": ["Box"],
+                "pack_qty": ["1"],
+                "batch": ["P001"],
+                "expiry": ["12/2027"],
+                "qty": ["3"],
+                "free_qty": ["0"],
+                "purchase_rate": ["15"],
+                "mrp": ["25"],
+                "gst_percent": ["0"],
+                "discount_percent": ["0"],
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(first_response.status_code, 302)
+
+        second_response = self.client.post(
+            f"/vendor/{vendor_id}/purchase",
+            data={
+                "invoice_no": "FRESH-PUR-002",
+                "purchase_date": date.today().isoformat(),
+                "payment_mode": "CASH",
+                "payment_status": "Paid",
+                "paid_amount": "0",
+                "medicine_name": ["PARACETAMOL 650"],
+                "medicine_code": [""],
+                "barcode": [""],
+                "composition": [""],
+                "company": ["Test Pharma"],
+                "distributor_name": ["Prime Distributor"],
+                "pack_type": ["Box"],
+                "pack_qty": ["1"],
+                "batch": ["P002"],
+                "expiry": ["12/2027"],
+                "qty": ["2"],
+                "free_qty": ["0"],
+                "purchase_rate": ["16"],
+                "mrp": ["25"],
+                "gst_percent": ["0"],
+                "discount_percent": ["0"],
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(second_response.status_code, 302)
+
+        with self.app.app_context():
+            purchase_nos = [
+                row[0]
+                for row in self.db.session.query(self.app_module.VendorPurchase.purchase_no)
+                .order_by(self.app_module.VendorPurchase.id.asc())
+                .all()
+            ]
+            self.assertIn("PB-000001", purchase_nos)
+            self.assertIn("PB-00001", purchase_nos)
+            self.assertIn("PB-00002", purchase_nos)
 
     def test_vendor_form_renders_auto_code_purchase_builder_for_manual_medicine_entry(self):
         with self.app.app_context():
@@ -1680,6 +1854,70 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Internal Note", response.data)
         self.assertIn(b"Doctor sample adjustment", response.data)
+
+    def test_reports_page_defaults_to_cutover_window_but_keeps_older_history_accessible(self):
+        with self.app.app_context():
+            self._seed_invoice(
+                customer="Legacy Report Patient",
+                mobile="9000000021",
+                total=120.0,
+                created_at=datetime(2026, 6, 30, 12, 0, 0),
+            )
+            _patient, current_invoice = self._seed_invoice(
+                customer="Current Report Patient",
+                mobile="9000000022",
+                total=180.0,
+                created_at=datetime(2026, 7, 2, 12, 0, 0),
+            )
+            current_invoice_no = current_invoice.invoice_no
+
+        self.login()
+        response = self.client.get("/reports")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('value="2026-07-01"', html)
+        self.assertIn(current_invoice_no, html)
+        self.assertNotIn("Legacy Report Patient", html)
+
+        legacy_response = self.client.post(
+            "/reports",
+            data={
+                "report_type": "custom",
+                "from_date": "2026-06-01",
+                "to_date": "2026-06-30",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertIn(b"Legacy Report Patient", legacy_response.data)
+
+    def test_invoice_list_defaults_to_cutover_window_but_allows_older_history_filters(self):
+        with self.app.app_context():
+            self._seed_invoice(
+                customer="Legacy Invoice Patient",
+                mobile="9000000031",
+                total=95.0,
+                created_at=datetime(2026, 6, 30, 9, 0, 0),
+            )
+            _patient, current_invoice = self._seed_invoice(
+                customer="Current Invoice Patient",
+                mobile="9000000032",
+                total=205.0,
+                created_at=datetime(2026, 7, 2, 9, 0, 0),
+            )
+            current_invoice_no = current_invoice.invoice_no
+
+        self.login()
+        response = self.client.get("/invoices")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('value="2026-07-01"', html)
+        self.assertIn(current_invoice_no, html)
+        self.assertNotIn("Legacy Invoice Patient", html)
+
+        legacy_response = self.client.get("/invoices?from=2026-06-01&to=2026-06-30")
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertIn(b"Legacy Invoice Patient", legacy_response.data)
 
     def test_full_reports_export_medicines_sheet_includes_purchase_rate(self):
         with self.app.app_context():
