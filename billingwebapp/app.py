@@ -8283,6 +8283,65 @@ def edit_vendor_purchase_item(item_id):
     item = VendorPurchaseItem.query.get_or_404(item_id)
     purchase = VendorPurchase.query.get(item.purchase_id)
     vendor = Vendor.query.get(item.vendor_id)
+    redirect_url = f"/vendor/purchase/{item.purchase_id}?mode=edit"
+    async_mode = is_async_request()
+
+    def item_payload(row_item, med_row, sold_units):
+        pack_type = (getattr(row_item, "pack_type", "") or "").strip()
+        pack_qty = getattr(row_item, "pack_qty", None)
+        if pack_type and pack_qty:
+            pack_display = f"{pack_type} of {pack_qty}"
+        elif pack_type:
+            pack_display = pack_type
+        elif pack_qty:
+            pack_display = str(pack_qty)
+        else:
+            pack_display = "-"
+        return {
+            "id": row_item.id,
+            "medicine_name": row_item.medicine_name,
+            "medicine_code": normalize_medicine_code(getattr(row_item, "medicine_code", "")),
+            "barcode": getattr(row_item, "barcode", "") or "",
+            "composition": getattr(row_item, "composition", "") or "",
+            "company": getattr(row_item, "company", "") or "",
+            "distributor_name": getattr(row_item, "distributor_name", "") or "",
+            "pack_type": pack_type,
+            "pack_qty": pack_qty,
+            "pack_display": pack_display,
+            "batch": row_item.batch,
+            "expiry": row_item.expiry,
+            "qty": to_int(row_item.qty),
+            "free_qty": to_int(row_item.free_qty),
+            "remaining_qty": to_int(getattr(row_item, "remaining_qty", 0)),
+            "sold_qty": sold_units,
+            "purchase_rate": to_float(row_item.purchase_rate),
+            "mrp": to_float(row_item.mrp),
+            "gst_percent": to_float(row_item.gst_percent),
+            "discount_percent": to_float(row_item.discount_percent),
+            "total_value": to_float(getattr(row_item, "total_value", 0)),
+            "medicine_master_qty": to_int(getattr(med_row, "qty", 0)) if med_row else None,
+        }
+
+    def totals_payload(purchase_row):
+        if not purchase_row:
+            return {
+                "subtotal": 0.0,
+                "gst_total": 0.0,
+                "discount_total": 0.0,
+                "total_amount": 0.0,
+            }
+        return {
+            "subtotal": round(to_float(getattr(purchase_row, "subtotal", 0)), 2),
+            "gst_total": round(to_float(getattr(purchase_row, "gst_total", 0)), 2),
+            "discount_total": round(to_float(getattr(purchase_row, "discount_total", 0)), 2),
+            "total_amount": round(to_float(getattr(purchase_row, "total_amount", 0)), 2),
+        }
+
+    def error_response(message):
+        if async_mode:
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message, "danger")
+        return redirect(request.url)
 
     med = Medicine.query.get(item.medicine_id) if item.medicine_id else None
     if not med:
@@ -8313,22 +8372,17 @@ def edit_vendor_purchase_item(item_id):
         discount_percent = to_float(request.form.get("discount_percent"))
 
         if not name:
-            flash("Medicine name is required", "danger")
-            return redirect(request.url)
+            return error_response("Medicine name is required")
         if not batch or not expiry:
-            flash("Batch and expiry are required", "danger")
-            return redirect(request.url)
+            return error_response("Batch and expiry are required")
         if qty <= 0:
-            flash("Quantity must be greater than 0", "danger")
-            return redirect(request.url)
+            return error_response("Quantity must be greater than 0")
         if pack_qty_raw and (pack_qty is None or pack_qty < 1):
-            flash("Pack quantity must be at least 1", "danger")
-            return redirect(request.url)
+            return error_response("Pack quantity must be at least 1")
 
         new_total_qty = qty + free_qty
         if new_total_qty < sold_qty:
-            flash(f"Cannot reduce below sold quantity ({sold_qty})", "danger")
-            return redirect(request.url)
+            return error_response(f"Cannot reduce below sold quantity ({sold_qty})")
 
         old_base = to_float(item.qty) * to_float(item.purchase_rate)
         old_discount = old_base * to_float(item.discount_percent) / 100
@@ -8347,8 +8401,7 @@ def edit_vendor_purchase_item(item_id):
 
         if med:
             if med.qty + diff_total_qty < 0:
-                flash("Not enough stock to reduce this purchase quantity", "danger")
-                return redirect(request.url)
+                return error_response("Not enough stock to reduce this purchase quantity")
             med.qty = med.qty + diff_total_qty
             med.name = name
             med.batch = batch
@@ -8411,8 +8464,19 @@ def edit_vendor_purchase_item(item_id):
 
         build_scoped_medicine_code_sync([name])
         db.session.commit()
+        if async_mode:
+            refreshed_item = VendorPurchaseItem.query.get(item.id)
+            refreshed_med = Medicine.query.get(refreshed_item.medicine_id) if refreshed_item and refreshed_item.medicine_id else med
+            refreshed_sold_qty = (to_int(refreshed_item.qty) + to_int(refreshed_item.free_qty) - to_int(refreshed_item.remaining_qty)) if refreshed_item else sold_qty
+            return jsonify({
+                "ok": True,
+                "message": "Purchase item updated successfully",
+                "item": item_payload(refreshed_item, refreshed_med, refreshed_sold_qty),
+                "purchase_totals": totals_payload(purchase),
+                "purchase_item_count": VendorPurchaseItem.query.filter_by(purchase_id=item.purchase_id).count(),
+            }), 200
         flash("Purchase item updated successfully", "success")
-        return redirect(f"/vendor/edit/{item.vendor_id}")
+        return redirect(redirect_url)
 
     resolved_barcode = (getattr(item, "barcode", "") or (getattr(med, "barcode", "") if med else "") or "")
     resolved_medicine_code = normalize_medicine_code(
@@ -8437,40 +8501,41 @@ def delete_vendor_purchase_item(item_id):
     purchase = VendorPurchase.query.get(item.purchase_id)
     vendor = Vendor.query.get(item.vendor_id)
     redirect_url = f"/vendor/purchase/{item.purchase_id}?mode=edit"
+    async_mode = is_async_request()
+
+    def delete_error(message):
+        if async_mode:
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message, "danger")
+        return redirect(redirect_url)
 
     purchase_item_count = VendorPurchaseItem.query.filter_by(purchase_id=item.purchase_id).count()
     if purchase_item_count <= 1:
-        flash("This is the last item in the bill. Delete the full bill instead.", "danger")
-        return redirect(redirect_url)
+        return delete_error("This is the last item in the bill. Delete the full bill instead.")
 
     linked_note_alloc = VendorNoteAllocation.query.filter_by(purchase_item_id=item.id).first()
     if linked_note_alloc:
-        flash("Cannot delete this item because vendor note entries are linked to it.", "danger")
-        return redirect(redirect_url)
+        return delete_error("Cannot delete this item because vendor note entries are linked to it.")
 
     linked_alloc = SalesAllocation.query.filter_by(purchase_item_id=item.id).first()
     if linked_alloc:
-        flash("Cannot delete this item because invoice/return transactions are linked.", "danger")
-        return redirect(redirect_url)
+        return delete_error("Cannot delete this item because invoice/return transactions are linked.")
 
     med = Medicine.query.get(item.medicine_id) if item.medicine_id else None
     if not med:
         med = find_medicine_by_name_batch(item.medicine_name, item.batch)
     if not med:
-        flash(f"Cannot delete item. Medicine missing: {item.medicine_name} ({item.batch})", "danger")
-        return redirect(redirect_url)
+        return delete_error(f"Cannot delete item. Medicine missing: {item.medicine_name} ({item.batch})")
 
     old_total_qty = to_int(item.qty) + to_int(item.free_qty)
     sold_qty = old_total_qty - to_int(item.remaining_qty)
     if sold_qty < 0:
         sold_qty = 0
     if sold_qty > 0:
-        flash(f"Cannot delete this item because {sold_qty} unit(s) are already sold/used.", "danger")
-        return redirect(redirect_url)
+        return delete_error(f"Cannot delete this item because {sold_qty} unit(s) are already sold/used.")
 
     if to_int(med.qty) < old_total_qty:
-        flash("Not enough stock available to remove this purchase item safely.", "danger")
-        return redirect(redirect_url)
+        return delete_error("Not enough stock available to remove this purchase item safely.")
 
     old_base = to_float(item.qty) * to_float(item.purchase_rate)
     old_discount = old_base * to_float(item.discount_percent) / 100
@@ -8509,6 +8574,19 @@ def delete_vendor_purchase_item(item_id):
 
     db.session.delete(item)
     db.session.commit()
+    if async_mode:
+        return jsonify({
+            "ok": True,
+            "message": "Purchase item deleted successfully. Stock and totals updated.",
+            "deleted_item_id": item_id,
+            "purchase_totals": {
+                "subtotal": round(to_float(getattr(purchase, "subtotal", 0)), 2) if purchase else 0.0,
+                "gst_total": round(to_float(getattr(purchase, "gst_total", 0)), 2) if purchase else 0.0,
+                "discount_total": round(to_float(getattr(purchase, "discount_total", 0)), 2) if purchase else 0.0,
+                "total_amount": round(to_float(getattr(purchase, "total_amount", 0)), 2) if purchase else 0.0,
+            },
+            "purchase_item_count": VendorPurchaseItem.query.filter_by(purchase_id=item.purchase_id).count(),
+        }), 200
     flash("Purchase item deleted successfully. Stock and totals updated.", "success")
     return redirect(redirect_url)
 

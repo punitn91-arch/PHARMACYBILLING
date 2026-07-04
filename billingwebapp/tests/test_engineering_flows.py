@@ -1141,6 +1141,226 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(float(vendor.total_purchases), 80.0)
             self.assertEqual(delete_history.qty_change, -5)
 
+    def test_vendor_purchase_item_edit_returns_json_and_stays_on_same_page(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(
+                name="Edit Item Vendor",
+                is_active=True,
+                total_purchases=50.0,
+                payment_status="Paid",
+            )
+            self.db.session.add(vendor)
+            self.db.session.flush()
+
+            medicine = self.app_module.Medicine(
+                name="EDIT ITEM TAB",
+                medicine_code="EDIT001",
+                batch="E1",
+                expiry="2027-12-31",
+                mrp=12.0,
+                qty=5,
+                discount_percent=0,
+                is_active=True,
+            )
+            self.db.session.add(medicine)
+            self.db.session.flush()
+
+            purchase = self.app_module.VendorPurchase(
+                vendor_id=vendor.id,
+                purchase_no="PB-EDIT-001",
+                invoice_no="SUP-EDIT-001",
+                purchase_date=datetime.utcnow(),
+                payment_mode="CASH",
+                payment_status="Paid",
+                paid_amount=50.0,
+                subtotal=50.0,
+                gst_total=0.0,
+                discount_total=0.0,
+                total_amount=50.0,
+            )
+            self.db.session.add(purchase)
+            self.db.session.flush()
+
+            item = self.app_module.VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=medicine.id,
+                medicine_name=medicine.name,
+                medicine_code=medicine.medicine_code,
+                batch=medicine.batch,
+                expiry=medicine.expiry,
+                qty=5,
+                free_qty=0,
+                remaining_qty=5,
+                purchase_rate=10.0,
+                mrp=medicine.mrp,
+                gst_percent=0.0,
+                discount_percent=0.0,
+                total_value=50.0,
+            )
+            self.db.session.add(item)
+            self.db.session.commit()
+            item_id = item.id
+            medicine_id = medicine.id
+            purchase_id = purchase.id
+
+        self.login()
+        response = self.client.post(
+            f"/vendor/purchase-item/edit/{item_id}",
+            data={
+                "medicine_name": "EDIT ITEM TAB UPDATED",
+                "medicine_code": "EDIT001",
+                "barcode": "",
+                "composition": "",
+                "company": "",
+                "distributor_name": "",
+                "pack_type": "Strip",
+                "pack_qty": "10",
+                "batch": "E2",
+                "expiry": "12/2027",
+                "qty": "7",
+                "free_qty": "1",
+                "purchase_rate": "10",
+                "mrp": "12",
+                "gst_percent": "0",
+                "discount_percent": "0",
+            },
+            headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "Purchase item updated successfully")
+        self.assertEqual(payload["item"]["medicine_name"], "EDIT ITEM TAB UPDATED")
+        self.assertEqual(payload["item"]["batch"], "E2")
+        self.assertEqual(payload["item"]["qty"], 7)
+        self.assertEqual(payload["item"]["free_qty"], 1)
+        self.assertEqual(payload["purchase_item_count"], 1)
+        self.assertEqual(float(payload["purchase_totals"]["total_amount"]), 70.0)
+
+        with self.app.app_context():
+            purchase = self.app_module.VendorPurchase.query.get(purchase_id)
+            medicine = self.app_module.Medicine.query.get(medicine_id)
+            item = self.app_module.VendorPurchaseItem.query.get(item_id)
+            self.assertEqual(item.medicine_name, "EDIT ITEM TAB UPDATED")
+            self.assertEqual(item.batch, "E2")
+            self.assertEqual(item.qty, 7)
+            self.assertEqual(item.free_qty, 1)
+            self.assertEqual(item.remaining_qty, 8)
+            self.assertEqual(medicine.name, "EDIT ITEM TAB UPDATED")
+            self.assertEqual(medicine.batch, "E2")
+            self.assertEqual(medicine.qty, 8)
+            self.assertEqual(float(purchase.total_amount), 70.0)
+
+    def test_vendor_purchase_item_delete_returns_json_and_stays_on_same_page(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(
+                name="Delete Ajax Vendor",
+                is_active=True,
+                total_purchases=130.0,
+                payment_status="Paid",
+            )
+            self.db.session.add(vendor)
+            self.db.session.flush()
+
+            medicine_a = self.app_module.Medicine(
+                name="AJAX ITEM A TAB",
+                medicine_code="AJA001",
+                batch="AA1",
+                expiry="2027-12-31",
+                mrp=12.0,
+                qty=5,
+                discount_percent=0,
+                is_active=True,
+            )
+            medicine_b = self.app_module.Medicine(
+                name="AJAX ITEM B TAB",
+                medicine_code="AJB001",
+                batch="BB1",
+                expiry="2027-12-31",
+                mrp=25.0,
+                qty=4,
+                discount_percent=0,
+                is_active=True,
+            )
+            self.db.session.add_all([medicine_a, medicine_b])
+            self.db.session.flush()
+
+            purchase = self.app_module.VendorPurchase(
+                vendor_id=vendor.id,
+                purchase_no="PB-AJAX-001",
+                invoice_no="SUP-AJAX-001",
+                purchase_date=datetime.utcnow(),
+                payment_mode="CASH",
+                payment_status="Paid",
+                paid_amount=130.0,
+                subtotal=130.0,
+                gst_total=0.0,
+                discount_total=0.0,
+                total_amount=130.0,
+            )
+            self.db.session.add(purchase)
+            self.db.session.flush()
+
+            item_a = self.app_module.VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=medicine_a.id,
+                medicine_name=medicine_a.name,
+                medicine_code=medicine_a.medicine_code,
+                batch=medicine_a.batch,
+                expiry=medicine_a.expiry,
+                qty=5,
+                free_qty=0,
+                remaining_qty=5,
+                purchase_rate=10.0,
+                mrp=medicine_a.mrp,
+                gst_percent=0.0,
+                discount_percent=0.0,
+                total_value=50.0,
+            )
+            item_b = self.app_module.VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=medicine_b.id,
+                medicine_name=medicine_b.name,
+                medicine_code=medicine_b.medicine_code,
+                batch=medicine_b.batch,
+                expiry=medicine_b.expiry,
+                qty=4,
+                free_qty=0,
+                remaining_qty=4,
+                purchase_rate=20.0,
+                mrp=medicine_b.mrp,
+                gst_percent=0.0,
+                discount_percent=0.0,
+                total_value=80.0,
+            )
+            self.db.session.add_all([item_a, item_b])
+            self.db.session.commit()
+            item_a_id = item_a.id
+            purchase_id = purchase.id
+            medicine_a_id = medicine_a.id
+
+        self.login()
+        response = self.client.post(
+            f"/vendor/purchase-item/delete/{item_a_id}",
+            headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["deleted_item_id"], item_a_id)
+        self.assertEqual(payload["purchase_item_count"], 1)
+        self.assertEqual(float(payload["purchase_totals"]["total_amount"]), 80.0)
+
+        with self.app.app_context():
+            remaining_items = self.app_module.VendorPurchaseItem.query.filter_by(purchase_id=purchase_id).all()
+            medicine_a = self.app_module.Medicine.query.get(medicine_a_id)
+            self.assertEqual(len(remaining_items), 1)
+            self.assertEqual(remaining_items[0].medicine_name, "AJAX ITEM B TAB")
+            self.assertEqual(medicine_a.qty, 0)
+
     def test_vendor_form_hides_address_bank_and_payment_sections_but_preserves_existing_values(self):
         with self.app.app_context():
             vendor = self.app_module.Vendor(

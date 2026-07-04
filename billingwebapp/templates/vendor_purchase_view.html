@@ -102,6 +102,108 @@ td {
 .item-row-actions form {
     margin: 0;
 }
+
+.purchase-item-feedback {
+    display: none;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.purchase-item-feedback.show {
+    display: block;
+}
+
+.purchase-item-feedback.success {
+    background: #edf9f1;
+    border: 1px solid #cae8d2;
+    color: #1f6b3b;
+}
+
+.purchase-item-feedback.error {
+    background: #fff1f1;
+    border: 1px solid #f1cccc;
+    color: #b23030;
+}
+
+.purchase-item-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(12, 23, 39, 0.52);
+}
+
+.purchase-item-modal.show {
+    display: flex;
+}
+
+.purchase-item-modal-card {
+    width: min(1040px, 100%);
+    max-height: 92vh;
+    overflow: auto;
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 30px 60px rgba(20, 40, 75, 0.24);
+    padding: 22px;
+}
+
+.purchase-item-modal-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.purchase-item-modal-head h3 {
+    margin: 0;
+}
+
+.purchase-item-modal-close {
+    border: 0;
+    background: #eef3fb;
+    color: #203047;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.purchase-item-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.purchase-item-grid .full {
+    grid-column: 1 / -1;
+}
+
+.purchase-item-modal-note {
+    margin-top: 10px;
+    color: #5f728a;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+@media (max-width: 900px) {
+    .purchase-item-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .purchase-item-grid {
+        grid-template-columns: 1fr;
+    }
+}
 </style>
 
 <div class="card">
@@ -160,9 +262,10 @@ td {
 
 <div class="card" style="margin-top:16px;">
     <h3>Medicines in This Bill</h3>
+    <div id="purchaseItemFeedback" class="purchase-item-feedback" role="status" aria-live="polite"></div>
     {% if items and items|length > 0 %}
     <div class="table-wrap">
-    <table>
+    <table id="purchaseItemsTable">
         <tr>
             <th>Medicine</th>
             <th>Code</th>
@@ -182,12 +285,12 @@ td {
             {% endif %}
         </tr>
         {% for it in items %}
-        <tr>
-            <td>{{ it.medicine_name }}</td>
-            <td>{{ it.medicine_code or '-' }}</td>
-            <td>{{ it.barcode or '-' }}</td>
-            <td>{{ it.batch }}</td>
-            <td>
+        <tr id="purchase-item-row-{{ it.id }}">
+            <td class="cell-medicine">{{ it.medicine_name }}</td>
+            <td class="cell-code">{{ it.medicine_code or '-' }}</td>
+            <td class="cell-barcode">{{ it.barcode or '-' }}</td>
+            <td class="cell-batch">{{ it.batch }}</td>
+            <td class="cell-pack">
                 {% if it.pack_type and it.pack_qty %}
                     {{ it.pack_type }} of {{ it.pack_qty }}
                 {% elif it.pack_type %}
@@ -198,20 +301,43 @@ td {
                     -
                 {% endif %}
             </td>
-            <td>{{ it.expiry }}</td>
-            <td>{{ it.qty }}</td>
-            <td>{{ it.free_qty }}</td>
-            <td>{{ it.purchase_rate }}</td>
-            <td>{{ it.mrp }}</td>
-            <td>{{ it.gst_percent }}</td>
-            <td>{{ it.discount_percent }}</td>
-            <td>{{ it.total_value }}</td>
+            <td class="cell-expiry">{{ it.expiry }}</td>
+            <td class="cell-qty">{{ it.qty }}</td>
+            <td class="cell-free">{{ it.free_qty }}</td>
+            <td class="cell-purchase-rate">{{ it.purchase_rate }}</td>
+            <td class="cell-mrp">{{ it.mrp }}</td>
+            <td class="cell-gst">{{ it.gst_percent }}</td>
+            <td class="cell-discount">{{ it.discount_percent }}</td>
+            <td class="cell-total">{{ it.total_value }}</td>
             {% if mode in ["edit", "return"] %}
             <td>
                 <div class="item-row-actions">
-                    <a class="btn btn-sm" href="/vendor/purchase-item/edit/{{ it.id }}">Edit Item</a>
+                    <a
+                        class="btn btn-sm js-edit-purchase-item"
+                        href="/vendor/purchase-item/edit/{{ it.id }}"
+                        data-item-id="{{ it.id }}"
+                        data-medicine-name="{{ it.medicine_name }}"
+                        data-medicine-code="{{ it.medicine_code or '' }}"
+                        data-barcode="{{ it.barcode or '' }}"
+                        data-composition="{{ it.composition or '' }}"
+                        data-company="{{ it.company or '' }}"
+                        data-distributor-name="{{ it.distributor_name or '' }}"
+                        data-pack-type="{{ it.pack_type or '' }}"
+                        data-pack-qty="{{ it.pack_qty or '' }}"
+                        data-batch="{{ it.batch }}"
+                        data-expiry="{{ it.expiry }}"
+                        data-qty="{{ it.qty }}"
+                        data-free-qty="{{ it.free_qty }}"
+                        data-purchase-rate="{{ it.purchase_rate }}"
+                        data-mrp="{{ it.mrp }}"
+                        data-gst-percent="{{ it.gst_percent }}"
+                        data-discount-percent="{{ it.discount_percent }}"
+                        data-total-value="{{ it.total_value }}"
+                        data-sold-qty="{{ ((it.qty or 0) + (it.free_qty or 0) - (it.remaining_qty or 0)) }}"
+                        data-remaining-qty="{{ it.remaining_qty or 0 }}"
+                    >Edit Item</a>
                     {% if mode == "edit" and items|length > 1 %}
-                    <form method="POST" action="/vendor/purchase-item/delete/{{ it.id }}" onsubmit="return confirm('Delete this item from the bill?')">
+                    <form class="js-delete-purchase-item-form" method="POST" action="/vendor/purchase-item/delete/{{ it.id }}" onsubmit="return confirm('Delete this item from the bill?')">
                         <button class="btn btn-sm btn-danger" type="submit">Delete Item</button>
                     </form>
                     {% endif %}
@@ -227,10 +353,366 @@ td {
     {% endif %}
 
     <div class="totals">
-        Subtotal: {{ purchase.subtotal or 0 }} |
-        GST: {{ purchase.gst_total or 0 }} |
-        Discount: {{ purchase.discount_total or 0 }} |
-        Total: {{ purchase.total_amount or 0 }}
+        Subtotal: <span id="purchaseSubtotal">{{ purchase.subtotal or 0 }}</span> |
+        GST: <span id="purchaseGst">{{ purchase.gst_total or 0 }}</span> |
+        Discount: <span id="purchaseDiscount">{{ purchase.discount_total or 0 }}</span> |
+        Total: <span id="purchaseTotal">{{ purchase.total_amount or 0 }}</span>
     </div>
 </div>
+
+{% if mode == "edit" %}
+<div id="purchaseItemModal" class="purchase-item-modal" aria-hidden="true">
+    <div class="purchase-item-modal-card">
+        <div class="purchase-item-modal-head">
+            <div>
+                <h3>Edit Purchase Item</h3>
+                <div class="note">Stock and bill totals update automatically after save.</div>
+            </div>
+            <button type="button" class="purchase-item-modal-close" id="closePurchaseItemModal" aria-label="Close">&times;</button>
+        </div>
+        <form id="inlinePurchaseItemForm">
+            <input type="hidden" name="item_id">
+            <div class="purchase-item-grid">
+                <div>
+                    <label>Medicine Name</label>
+                    <input type="text" name="medicine_name" required>
+                </div>
+                <div>
+                    <label>Medicine Code</label>
+                    <input type="text" name="medicine_code" readonly>
+                </div>
+                <div>
+                    <label>Barcode</label>
+                    <input type="text" name="barcode">
+                </div>
+                <div>
+                    <label>Composition</label>
+                    <input type="text" name="composition">
+                </div>
+                <div>
+                    <label>Company</label>
+                    <input type="text" name="company">
+                </div>
+                <div>
+                    <label>Distributor</label>
+                    <input type="text" name="distributor_name">
+                </div>
+                <div>
+                    <label>Pack</label>
+                    <select name="pack_type" id="inlinePackType">
+                        <option value="">Select</option>
+                        <option>Strip</option>
+                        <option>Box</option>
+                        <option>Bottle</option>
+                        <option>Sachet</option>
+                        <option>Tube</option>
+                        <option>Vial</option>
+                        <option>Unit</option>
+                    </select>
+                </div>
+                <div>
+                    <label id="inlinePackQtyLabel">Units per Pack</label>
+                    <input type="number" name="pack_qty" min="1" step="1">
+                </div>
+                <div>
+                    <label>Batch</label>
+                    <input type="text" name="batch" required>
+                </div>
+                <div>
+                    <label>Expiry (MM/YYYY)</label>
+                    <input type="text" name="expiry" required placeholder="MM/YYYY">
+                </div>
+                <div>
+                    <label>Qty</label>
+                    <input type="number" name="qty" min="0">
+                </div>
+                <div>
+                    <label>Free</label>
+                    <input type="number" name="free_qty" min="0">
+                </div>
+                <div>
+                    <label>Purchase Rate</label>
+                    <input type="number" step="any" inputmode="decimal" name="purchase_rate">
+                </div>
+                <div>
+                    <label>MRP</label>
+                    <input type="number" step="any" inputmode="decimal" name="mrp">
+                </div>
+                <div>
+                    <label>GST %</label>
+                    <input type="number" step="any" inputmode="decimal" name="gst_percent">
+                </div>
+                <div>
+                    <label>Disc %</label>
+                    <input type="number" step="any" inputmode="decimal" name="discount_percent">
+                </div>
+                <div>
+                    <label>Total</label>
+                    <input type="number" step="any" inputmode="decimal" name="total_value" readonly>
+                </div>
+            </div>
+            <div class="purchase-item-modal-note" id="inlinePurchaseItemMeta">Sold Qty: 0 | Remaining Qty: 0</div>
+            <div class="actions">
+                <button class="btn" type="submit" id="saveInlinePurchaseItem">Update</button>
+                <button class="btn btn-secondary" type="button" id="cancelInlinePurchaseItem">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+(function () {
+    const feedback = document.getElementById("purchaseItemFeedback");
+    const modal = document.getElementById("purchaseItemModal");
+    const form = document.getElementById("inlinePurchaseItemForm");
+    const closeBtn = document.getElementById("closePurchaseItemModal");
+    const cancelBtn = document.getElementById("cancelInlinePurchaseItem");
+    const saveBtn = document.getElementById("saveInlinePurchaseItem");
+    const packTypeSelect = document.getElementById("inlinePackType");
+    const packQtyLabel = document.getElementById("inlinePackQtyLabel");
+    const itemMeta = document.getElementById("inlinePurchaseItemMeta");
+    let activeEditTrigger = null;
+
+    function showFeedback(message, type) {
+        if (!feedback) return;
+        feedback.textContent = message || "";
+        feedback.className = "purchase-item-feedback show " + (type === "error" ? "error" : "success");
+        if (typeof showToast === "function" && message) {
+            showToast(message, type === "error" ? "danger" : "success");
+        }
+    }
+
+    function clearFeedback() {
+        if (!feedback) return;
+        feedback.textContent = "";
+        feedback.className = "purchase-item-feedback";
+    }
+
+    function updatePackQtyLabel() {
+        if (!packQtyLabel || !packTypeSelect) return;
+        packQtyLabel.textContent = ((packTypeSelect.value || "").toLowerCase() === "strip")
+            ? "Tablets per Strip"
+            : "Units per Pack";
+    }
+
+    function parseNumber(value) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : 0;
+    }
+
+    function formatMoney(value) {
+        const num = parseNumber(value);
+        return num.toFixed(2).replace(/\.00$/, ".0").replace(/(\.\d*[1-9])0$/, "$1");
+    }
+
+    function formatDisplay(value) {
+        if (value === null || value === undefined || value === "") return "-";
+        return String(value);
+    }
+
+    function updateInlineTotal() {
+        if (!form) return;
+        const qty = parseNumber(form.elements.qty.value);
+        const rate = parseNumber(form.elements.purchase_rate.value);
+        const gst = parseNumber(form.elements.gst_percent.value);
+        const disc = parseNumber(form.elements.discount_percent.value);
+        const base = qty * rate;
+        const discAmt = base * disc / 100;
+        const taxable = base - discAmt;
+        const gstAmt = taxable * gst / 100;
+        form.elements.total_value.value = String(taxable + gstAmt);
+    }
+
+    function openModal(trigger) {
+        activeEditTrigger = trigger;
+        form.elements.item_id.value = trigger.dataset.itemId || "";
+        form.elements.medicine_name.value = trigger.dataset.medicineName || "";
+        form.elements.medicine_code.value = trigger.dataset.medicineCode || "";
+        form.elements.barcode.value = trigger.dataset.barcode || "";
+        form.elements.composition.value = trigger.dataset.composition || "";
+        form.elements.company.value = trigger.dataset.company || "";
+        form.elements.distributor_name.value = trigger.dataset.distributorName || "";
+        form.elements.pack_type.value = trigger.dataset.packType || "";
+        form.elements.pack_qty.value = trigger.dataset.packQty || "";
+        form.elements.batch.value = trigger.dataset.batch || "";
+        form.elements.expiry.value = trigger.dataset.expiry || "";
+        form.elements.qty.value = trigger.dataset.qty || 0;
+        form.elements.free_qty.value = trigger.dataset.freeQty || 0;
+        form.elements.purchase_rate.value = trigger.dataset.purchaseRate || 0;
+        form.elements.mrp.value = trigger.dataset.mrp || 0;
+        form.elements.gst_percent.value = trigger.dataset.gstPercent || 0;
+        form.elements.discount_percent.value = trigger.dataset.discountPercent || 0;
+        form.elements.total_value.value = trigger.dataset.totalValue || 0;
+        itemMeta.textContent = `Sold Qty: ${trigger.dataset.soldQty || 0} | Remaining Qty: ${trigger.dataset.remainingQty || 0}`;
+        updatePackQtyLabel();
+        updateInlineTotal();
+        modal.classList.add("show");
+        modal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeModal() {
+        if (!modal) return;
+        modal.classList.remove("show");
+        modal.setAttribute("aria-hidden", "true");
+        activeEditTrigger = null;
+    }
+
+    function updateTotals(totals) {
+        if (!totals) return;
+        const subtotal = document.getElementById("purchaseSubtotal");
+        const gst = document.getElementById("purchaseGst");
+        const discount = document.getElementById("purchaseDiscount");
+        const total = document.getElementById("purchaseTotal");
+        if (subtotal) subtotal.textContent = formatMoney(totals.subtotal);
+        if (gst) gst.textContent = formatMoney(totals.gst_total);
+        if (discount) discount.textContent = formatMoney(totals.discount_total);
+        if (total) total.textContent = formatMoney(totals.total_amount);
+    }
+
+    function updateRow(item) {
+        const row = document.getElementById(`purchase-item-row-${item.id}`);
+        if (!row || !activeEditTrigger) return;
+        row.querySelector(".cell-medicine").textContent = formatDisplay(item.medicine_name);
+        row.querySelector(".cell-code").textContent = formatDisplay(item.medicine_code);
+        row.querySelector(".cell-barcode").textContent = formatDisplay(item.barcode);
+        row.querySelector(".cell-batch").textContent = formatDisplay(item.batch);
+        row.querySelector(".cell-pack").textContent = formatDisplay(item.pack_display);
+        row.querySelector(".cell-expiry").textContent = formatDisplay(item.expiry);
+        row.querySelector(".cell-qty").textContent = formatDisplay(item.qty);
+        row.querySelector(".cell-free").textContent = formatDisplay(item.free_qty);
+        row.querySelector(".cell-purchase-rate").textContent = formatDisplay(item.purchase_rate);
+        row.querySelector(".cell-mrp").textContent = formatDisplay(item.mrp);
+        row.querySelector(".cell-gst").textContent = formatDisplay(item.gst_percent);
+        row.querySelector(".cell-discount").textContent = formatDisplay(item.discount_percent);
+        row.querySelector(".cell-total").textContent = formatDisplay(item.total_value);
+
+        activeEditTrigger.dataset.medicineName = item.medicine_name || "";
+        activeEditTrigger.dataset.medicineCode = item.medicine_code || "";
+        activeEditTrigger.dataset.barcode = item.barcode || "";
+        activeEditTrigger.dataset.composition = item.composition || "";
+        activeEditTrigger.dataset.company = item.company || "";
+        activeEditTrigger.dataset.distributorName = item.distributor_name || "";
+        activeEditTrigger.dataset.packType = item.pack_type || "";
+        activeEditTrigger.dataset.packQty = item.pack_qty || "";
+        activeEditTrigger.dataset.batch = item.batch || "";
+        activeEditTrigger.dataset.expiry = item.expiry || "";
+        activeEditTrigger.dataset.qty = item.qty || 0;
+        activeEditTrigger.dataset.freeQty = item.free_qty || 0;
+        activeEditTrigger.dataset.purchaseRate = item.purchase_rate || 0;
+        activeEditTrigger.dataset.mrp = item.mrp || 0;
+        activeEditTrigger.dataset.gstPercent = item.gst_percent || 0;
+        activeEditTrigger.dataset.discountPercent = item.discount_percent || 0;
+        activeEditTrigger.dataset.totalValue = item.total_value || 0;
+        activeEditTrigger.dataset.soldQty = item.sold_qty || 0;
+        activeEditTrigger.dataset.remainingQty = item.remaining_qty || 0;
+    }
+
+    function syncDeleteButtons(itemCount) {
+        const forms = document.querySelectorAll(".js-delete-purchase-item-form");
+        forms.forEach((deleteForm) => {
+            deleteForm.style.display = itemCount > 1 ? "" : "none";
+        });
+    }
+
+    document.querySelectorAll(".js-edit-purchase-item").forEach((trigger) => {
+        trigger.addEventListener("click", (event) => {
+            event.preventDefault();
+            clearFeedback();
+            openModal(trigger);
+        });
+    });
+
+    document.querySelectorAll(".js-delete-purchase-item-form").forEach((deleteForm) => {
+        deleteForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            if (!window.confirm("Delete this item from the bill?")) return;
+            clearFeedback();
+            const submitBtn = deleteForm.querySelector("button");
+            if (submitBtn) submitBtn.disabled = true;
+            try {
+                const response = await fetch(deleteForm.action, {
+                    method: "POST",
+                    body: new FormData(deleteForm),
+                    headers: {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json"
+                    },
+                    credentials: "same-origin"
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                    throw new Error(payload.message || "Unable to delete this item right now.");
+                }
+                const row = deleteForm.closest("tr");
+                if (row) row.remove();
+                updateTotals(payload.purchase_totals);
+                syncDeleteButtons(payload.purchase_item_count || 0);
+                showFeedback(payload.message, "success");
+            } catch (error) {
+                showFeedback(error.message || "Unable to delete this item right now.", "error");
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        });
+    });
+
+    form.addEventListener("input", (event) => {
+        if (event.target && event.target.name === "pack_type") {
+            updatePackQtyLabel();
+        }
+        updateInlineTotal();
+    });
+
+    form.addEventListener("change", (event) => {
+        if (event.target && event.target.name === "pack_type") {
+            updatePackQtyLabel();
+        }
+    });
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!activeEditTrigger) return;
+        clearFeedback();
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Updating...";
+        try {
+            const itemId = form.elements.item_id.value;
+            const response = await fetch(`/vendor/purchase-item/edit/${itemId}`, {
+                method: "POST",
+                body: new FormData(form),
+                headers: {
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Accept": "application/json"
+                },
+                credentials: "same-origin"
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+                throw new Error(payload.message || "Unable to update this item right now.");
+            }
+            updateRow(payload.item);
+            updateTotals(payload.purchase_totals);
+            syncDeleteButtons(payload.purchase_item_count || 0);
+            closeModal();
+            showFeedback(payload.message, "success");
+        } catch (error) {
+            showFeedback(error.message || "Unable to update this item right now.", "error");
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = "Update";
+        }
+    });
+
+    closeBtn.addEventListener("click", closeModal);
+    cancelBtn.addEventListener("click", closeModal);
+    modal.addEventListener("click", (event) => {
+        if (event.target === modal) closeModal();
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && modal.classList.contains("show")) {
+            closeModal();
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}
