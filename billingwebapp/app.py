@@ -8428,6 +8428,90 @@ def edit_vendor_purchase_item(item_id):
         resolved_medicine_code=resolved_medicine_code
     )
 
+
+@app.route("/vendor/purchase-item/delete/<int:item_id>", methods=["POST"])
+@login_required
+@inventory_access_required
+def delete_vendor_purchase_item(item_id):
+    item = VendorPurchaseItem.query.get_or_404(item_id)
+    purchase = VendorPurchase.query.get(item.purchase_id)
+    vendor = Vendor.query.get(item.vendor_id)
+    redirect_url = f"/vendor/purchase/{item.purchase_id}?mode=edit"
+
+    purchase_item_count = VendorPurchaseItem.query.filter_by(purchase_id=item.purchase_id).count()
+    if purchase_item_count <= 1:
+        flash("This is the last item in the bill. Delete the full bill instead.", "danger")
+        return redirect(redirect_url)
+
+    linked_note_alloc = VendorNoteAllocation.query.filter_by(purchase_item_id=item.id).first()
+    if linked_note_alloc:
+        flash("Cannot delete this item because vendor note entries are linked to it.", "danger")
+        return redirect(redirect_url)
+
+    linked_alloc = SalesAllocation.query.filter_by(purchase_item_id=item.id).first()
+    if linked_alloc:
+        flash("Cannot delete this item because invoice/return transactions are linked.", "danger")
+        return redirect(redirect_url)
+
+    med = Medicine.query.get(item.medicine_id) if item.medicine_id else None
+    if not med:
+        med = find_medicine_by_name_batch(item.medicine_name, item.batch)
+    if not med:
+        flash(f"Cannot delete item. Medicine missing: {item.medicine_name} ({item.batch})", "danger")
+        return redirect(redirect_url)
+
+    old_total_qty = to_int(item.qty) + to_int(item.free_qty)
+    sold_qty = old_total_qty - to_int(item.remaining_qty)
+    if sold_qty < 0:
+        sold_qty = 0
+    if sold_qty > 0:
+        flash(f"Cannot delete this item because {sold_qty} unit(s) are already sold/used.", "danger")
+        return redirect(redirect_url)
+
+    if to_int(med.qty) < old_total_qty:
+        flash("Not enough stock available to remove this purchase item safely.", "danger")
+        return redirect(redirect_url)
+
+    old_base = to_float(item.qty) * to_float(item.purchase_rate)
+    old_discount = old_base * to_float(item.discount_percent) / 100
+    old_taxable = old_base - old_discount
+    old_gst = old_taxable * to_float(item.gst_percent) / 100
+    old_total = old_taxable + old_gst
+
+    old_med_qty = to_int(med.qty)
+    med.qty = old_med_qty - old_total_qty
+    db.session.add(StockHistory(
+        medicine_id=med.id,
+        medicine_name=med.name,
+        batch=med.batch,
+        action="PURCHASE_ITEM_DELETE",
+        stock_before=old_med_qty,
+        qty_change=-old_total_qty,
+        stock_after=med.qty,
+        user=session.get("username"),
+        remark=f"Purchase item {item.id} deleted from {purchase.purchase_no if purchase and purchase.purchase_no else item.purchase_id}",
+        ref_table="vendor_purchase",
+        ref_id=item.purchase_id
+    ))
+
+    if purchase:
+        purchase.subtotal = max((purchase.subtotal or 0) - old_taxable, 0)
+        purchase.gst_total = max((purchase.gst_total or 0) - old_gst, 0)
+        purchase.discount_total = max((purchase.discount_total or 0) - old_discount, 0)
+        purchase.total_amount = max((purchase.total_amount or 0) - old_total, 0)
+
+    if vendor:
+        vendor.total_purchases = max((vendor.total_purchases or 0) - old_total, 0)
+        if purchase and (purchase.payment_status or "").lower() in ("unpaid", "partial"):
+            vendor.outstanding_balance = max((vendor.outstanding_balance or 0) - old_total, 0)
+            if (vendor.outstanding_balance or 0) <= 0:
+                vendor.payment_status = "Paid"
+
+    db.session.delete(item)
+    db.session.commit()
+    flash("Purchase item deleted successfully. Stock and totals updated.", "success")
+    return redirect(redirect_url)
+
 @app.route("/api/vendor-purchases/<int:purchase_id>/items", methods=["GET"])
 @login_required
 @vendor_note_access_required(api=True)

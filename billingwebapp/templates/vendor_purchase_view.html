@@ -91,6 +91,17 @@ td {
     text-align: right;
     font-weight: 700;
 }
+
+.item-row-actions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.item-row-actions form {
+    margin: 0;
+}
 </style>
 
 <div class="card">
@@ -196,7 +207,16 @@ td {
             <td>{{ it.discount_percent }}</td>
             <td>{{ it.total_value }}</td>
             {% if mode in ["edit", "return"] %}
-            <td><a class="btn btn-sm" href="/vendor/purchase-item/edit/{{ it.id }}">Edit Item</a></td>
+            <td>
+                <div class="item-row-actions">
+                    <a class="btn btn-sm" href="/vendor/purchase-item/edit/{{ it.id }}">Edit Item</a>
+                    {% if mode == "edit" and items|length > 1 %}
+                    <form method="POST" action="/vendor/purchase-item/delete/{{ it.id }}" onsubmit="return confirm('Delete this item from the bill?')">
+                        <button class="btn btn-sm btn-danger" type="submit">Delete Item</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </td>
             {% endif %}
         </tr>
         {% endfor %}

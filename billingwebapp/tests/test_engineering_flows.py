@@ -1021,6 +1021,126 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn(f'/vendor/purchase/{purchase_id}?mode=return'.encode(), response.data)
         self.assertIn(f'/vendor/purchase/delete/{purchase_id}'.encode(), response.data)
 
+    def test_vendor_purchase_edit_mode_allows_deleting_unsold_item_and_updates_stock(self):
+        with self.app.app_context():
+            vendor = self.app_module.Vendor(
+                name="Delete Item Vendor",
+                is_active=True,
+                total_purchases=130.0,
+                payment_status="Paid",
+            )
+            self.db.session.add(vendor)
+            self.db.session.flush()
+
+            medicine_a = self.app_module.Medicine(
+                name="ITEM A TAB",
+                medicine_code="ITEMA001",
+                batch="A1",
+                expiry="2027-12-31",
+                mrp=12.0,
+                qty=5,
+                discount_percent=0,
+                is_active=True,
+            )
+            medicine_b = self.app_module.Medicine(
+                name="ITEM B TAB",
+                medicine_code="ITEMB001",
+                batch="B1",
+                expiry="2027-12-31",
+                mrp=25.0,
+                qty=4,
+                discount_percent=0,
+                is_active=True,
+            )
+            self.db.session.add_all([medicine_a, medicine_b])
+            self.db.session.flush()
+
+            purchase = self.app_module.VendorPurchase(
+                vendor_id=vendor.id,
+                purchase_no="PB-DEL-001",
+                invoice_no="SUP-DEL-001",
+                purchase_date=datetime.utcnow(),
+                payment_mode="CASH",
+                payment_status="Paid",
+                paid_amount=130.0,
+                subtotal=130.0,
+                gst_total=0.0,
+                discount_total=0.0,
+                total_amount=130.0,
+                created_by="admin",
+            )
+            self.db.session.add(purchase)
+            self.db.session.flush()
+
+            item_a = self.app_module.VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=medicine_a.id,
+                medicine_name=medicine_a.name,
+                medicine_code=medicine_a.medicine_code,
+                batch=medicine_a.batch,
+                expiry=medicine_a.expiry,
+                qty=5,
+                free_qty=0,
+                remaining_qty=5,
+                purchase_rate=10.0,
+                mrp=medicine_a.mrp,
+                gst_percent=0.0,
+                discount_percent=0.0,
+                total_value=50.0,
+            )
+            item_b = self.app_module.VendorPurchaseItem(
+                purchase_id=purchase.id,
+                vendor_id=vendor.id,
+                medicine_id=medicine_b.id,
+                medicine_name=medicine_b.name,
+                medicine_code=medicine_b.medicine_code,
+                batch=medicine_b.batch,
+                expiry=medicine_b.expiry,
+                qty=4,
+                free_qty=0,
+                remaining_qty=4,
+                purchase_rate=20.0,
+                mrp=medicine_b.mrp,
+                gst_percent=0.0,
+                discount_percent=0.0,
+                total_value=80.0,
+            )
+            self.db.session.add_all([item_a, item_b])
+            self.db.session.commit()
+            purchase_id = purchase.id
+            item_a_id = item_a.id
+            medicine_a_id = medicine_a.id
+            vendor_id = vendor.id
+
+        self.login()
+        response = self.client.get(f"/vendor/purchase/{purchase_id}?mode=edit")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f'/vendor/purchase-item/delete/{item_a_id}'.encode(), response.data)
+        self.assertIn(b"Delete Item", response.data)
+
+        response = self.client.post(
+            f"/vendor/purchase-item/delete/{item_a_id}",
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"/vendor/purchase/{purchase_id}?mode=edit", response.headers["Location"])
+
+        with self.app.app_context():
+            remaining_items = self.app_module.VendorPurchaseItem.query.filter_by(purchase_id=purchase_id).all()
+            medicine_a = self.app_module.Medicine.query.get(medicine_a_id)
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            purchase = self.app_module.VendorPurchase.query.get(purchase_id)
+            delete_history = self.app_module.StockHistory.query.filter_by(action="PURCHASE_ITEM_DELETE").one()
+
+            self.assertEqual(len(remaining_items), 1)
+            self.assertEqual(remaining_items[0].medicine_name, "ITEM B TAB")
+            self.assertEqual(medicine_a.qty, 0)
+            self.assertEqual(float(purchase.total_amount), 80.0)
+            self.assertEqual(float(purchase.subtotal), 80.0)
+            self.assertEqual(float(vendor.total_purchases), 80.0)
+            self.assertEqual(delete_history.qty_change, -5)
+
     def test_vendor_form_hides_address_bank_and_payment_sections_but_preserves_existing_values(self):
         with self.app.app_context():
             vendor = self.app_module.Vendor(
