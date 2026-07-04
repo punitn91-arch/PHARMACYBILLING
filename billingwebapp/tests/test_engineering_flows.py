@@ -559,7 +559,7 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn("08ABCDE1234F1Z5", html)
         self.assertIn("CREDIT", html)
 
-    def test_stock_sale_preview_matches_dashboard_purchase_layer_value_and_syncs_qty_deltas(self):
+    def test_stock_sale_preview_uses_medicine_qty_and_clears_stale_purchase_layer_surplus(self):
         with self.app.app_context():
             _vendor, _purchase, medicine = self._seed_vendor_purchase_stack(
                 total_qty=10,
@@ -572,24 +572,13 @@ class EngineeringFlowTests(unittest.TestCase):
             self.db.session.commit()
 
             preview = self.app_module.build_stock_sale_preview(50)
-            dashboard_value = (
-                self.db.session.query(
-                    self.app_module.db.func.coalesce(
-                        self.app_module.db.func.sum(
-                            self.app_module.db.func.coalesce(self.app_module.VendorPurchaseItem.remaining_qty, 0) *
-                            self.app_module.db.func.coalesce(self.app_module.VendorPurchaseItem.purchase_rate, 0)
-                        ),
-                        0,
-                    )
-                ).scalar()
-                or 0
-            )
-
-            self.assertEqual(preview["estimated_sale_value"], round(dashboard_value, 2))
+            self.assertEqual(preview["estimated_sale_value"], 86.0)
             self.assertEqual(preview["line_count"], 2)
-            self.assertEqual(preview["total_qty"], 10)
-            self.assertEqual(preview["sync_mismatch_count"], 1)
-            self.assertEqual(preview["sync_total_delta"], 2)
+            self.assertEqual(preview["total_qty"], 8)
+            self.assertEqual(preview["sync_mismatch_count"], 0)
+            self.assertEqual(preview["sync_total_delta"], 0)
+            self.assertEqual(preview["ignored_layer_qty"], 2)
+            self.assertEqual(preview["ignored_layer_count"], 1)
 
         self.login()
         response = self.client.post(
@@ -609,10 +598,39 @@ class EngineeringFlowTests(unittest.TestCase):
             medicine = self.app_module.Medicine.query.filter_by(name="PARACETAMOL 650", batch="B123").one()
             adjustment_history = self.app_module.StockHistory.query.filter(
                 self.app_module.StockHistory.remark.like("Stock sale sync%")
-            ).one()
-            self.assertEqual(medicine.qty, 10)
-            self.assertEqual(adjustment_history.stock_before, 8)
-            self.assertEqual(adjustment_history.stock_after, 10)
+            ).all()
+            total_remaining = sum(
+                item.remaining_qty
+                for item in self.app_module.VendorPurchaseItem.query.filter_by(
+                    medicine_name="PARACETAMOL 650",
+                    batch="B123",
+                ).all()
+            )
+            reentry_purchase = self.app_module.VendorPurchase.query.order_by(
+                self.app_module.VendorPurchase.id.desc()
+            ).first()
+            reentry_quantities = sorted(
+                item.remaining_qty
+                for item in self.app_module.VendorPurchaseItem.query.filter_by(
+                    purchase_id=reentry_purchase.id
+                ).all()
+            )
+            self.assertEqual(medicine.qty, 8)
+            self.assertEqual(adjustment_history, [])
+            self.assertEqual(total_remaining, 8)
+            self.assertEqual(reentry_quantities, [3, 5])
+
+    def test_stock_sale_preview_ignores_zero_qty_medicine_even_if_old_purchase_layer_exists(self):
+        with self.app.app_context():
+            _vendor, _purchase, medicine = self._seed_vendor_purchase_stack(total_qty=10)
+            medicine.qty = 0
+            self.db.session.commit()
+
+            preview = self.app_module.build_stock_sale_preview(50)
+            self.assertEqual(preview["line_count"], 0)
+            self.assertEqual(preview["total_qty"], 0)
+            self.assertEqual(preview["ignored_layer_qty"], 10)
+            self.assertEqual(preview["ignored_layer_count"], 1)
 
     def test_stock_sale_is_admin_only_even_for_staff_with_purchase_access(self):
         with self.app.app_context():

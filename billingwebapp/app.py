@@ -1332,6 +1332,42 @@ def sync_medicine_qty_to_stock_sale_layers(rows, actor_username, operation_ref):
     return touched_names
 
 
+def reset_stock_sale_purchase_layers(rows):
+    medicine_ids = {row.get("medicine_id") for row in rows if row.get("medicine_id")}
+    fallback_keys = {
+        (
+            normalize_medicine_name(row.get("name", "")).casefold(),
+            (row.get("batch", "") or "").strip().casefold(),
+        )
+        for row in rows
+        if normalize_medicine_name(row.get("name", "")) and (row.get("batch", "") or "").strip()
+    }
+    if not medicine_ids and not fallback_keys:
+        return []
+
+    purchase_items = VendorPurchaseItem.query.filter(
+        db.func.coalesce(VendorPurchaseItem.remaining_qty, 0) > 0
+    ).order_by(
+        VendorPurchaseItem.created_at.asc(),
+        VendorPurchaseItem.id.asc(),
+    ).all()
+
+    cleared_items = []
+    for item in purchase_items:
+        item_medicine_id = getattr(item, "medicine_id", None)
+        item_key = (
+            normalize_medicine_name(getattr(item, "medicine_name", "")).casefold(),
+            (getattr(item, "batch", "") or "").strip().casefold(),
+        )
+        if item_medicine_id not in medicine_ids and item_key not in fallback_keys:
+            continue
+        if max(to_int_safe(getattr(item, "remaining_qty", 0), 0), 0) <= 0:
+            continue
+        item.remaining_qty = 0
+        cleared_items.append(item)
+    return cleared_items
+
+
 def build_stock_sale_preview(lines_per_invoice=STOCK_SALE_DEFAULT_LINES_PER_INVOICE):
     chunk_size = normalize_stock_sale_lines_per_invoice(lines_per_invoice)
     purchase_items = VendorPurchaseItem.query.filter(
@@ -1367,7 +1403,9 @@ def build_stock_sale_preview(lines_per_invoice=STOCK_SALE_DEFAULT_LINES_PER_INVO
     estimated_sale_value = 0.0
     estimated_reentry_total = 0.0
     expired_count = 0
-    expected_qty_by_medicine_id = {}
+    allocated_qty_by_medicine_id = {}
+    ignored_layer_count = 0
+    ignored_layer_qty = 0
 
     for purchase_item in purchase_items:
         med, source = resolve_stock_sale_medicine_for_purchase_item(
@@ -1375,9 +1413,34 @@ def build_stock_sale_preview(lines_per_invoice=STOCK_SALE_DEFAULT_LINES_PER_INVO
             medicines_for_lookup,
             medicine_by_name_batch,
         )
-        qty = max(to_int_safe(getattr(purchase_item, "remaining_qty", 0), 0), 0)
+        available_qty = max(to_int_safe(getattr(purchase_item, "remaining_qty", 0), 0), 0)
+        if available_qty <= 0:
+            continue
+        if not med:
+            ignored_layer_count += 1
+            ignored_layer_qty += available_qty
+            continue
+
+        current_medicine_qty = max(to_int_safe(getattr(med, "qty", 0), 0), 0)
+        if current_medicine_qty <= 0:
+            ignored_layer_count += 1
+            ignored_layer_qty += available_qty
+            continue
+
+        already_allocated = allocated_qty_by_medicine_id.get(med.id, 0)
+        remaining_to_cycle = current_medicine_qty - already_allocated
+        if remaining_to_cycle <= 0:
+            ignored_layer_count += 1
+            ignored_layer_qty += available_qty
+            continue
+
+        qty = min(available_qty, remaining_to_cycle)
         if qty <= 0:
             continue
+        if qty < available_qty:
+            ignored_layer_count += 1
+            ignored_layer_qty += available_qty - qty
+
         raw_purchase_rate = to_float_safe(getattr(purchase_item, "purchase_rate", 0), 0)
         discount_percent = to_float_safe(getattr(purchase_item, "discount_percent", 0), 0)
         gst_percent = to_float_safe(getattr(purchase_item, "gst_percent", 0), 0)
@@ -1428,53 +1491,52 @@ def build_stock_sale_preview(lines_per_invoice=STOCK_SALE_DEFAULT_LINES_PER_INVO
         total_qty += qty
         estimated_sale_value += base_amount
         estimated_reentry_total += reentry_total
-        if med and getattr(med, "id", None):
-            expected_qty_by_medicine_id[med.id] = expected_qty_by_medicine_id.get(med.id, 0) + qty
-        if raw_purchase_rate <= 0 or not med:
+        allocated_qty_by_medicine_id[med.id] = allocated_qty_by_medicine_id.get(med.id, 0) + qty
+        if raw_purchase_rate <= 0:
             row["is_unresolved"] = True
             unresolved_rows.append(row)
         else:
             sale_rows.append(row)
 
     orphan_count = 0
-    sync_mismatch_count = 0
-    sync_total_delta = 0
     for med in positive_medicines:
         current_qty = max(to_int_safe(getattr(med, "qty", 0), 0), 0)
-        expected_qty = expected_qty_by_medicine_id.get(med.id)
-        if expected_qty is None:
-            orphan_row = {
-                "purchase_item_id": None,
-                "medicine_id": med.id,
-                "medicine_code": normalize_medicine_code(getattr(med, "medicine_code", "")),
-                "name": normalize_medicine_name(getattr(med, "name", "")),
-                "batch": (getattr(med, "batch", "") or "").strip(),
-                "expiry": (getattr(med, "expiry", "") or "").strip(),
-                "qty": current_qty,
-                "purchase_rate": 0.0,
-                "purchase_rate_raw": 0.0,
-                "sale_value": 0.0,
-                "reentry_total": 0.0,
-                "mrp": to_float_safe(getattr(med, "mrp", 0), 0),
-                "barcode": (getattr(med, "barcode", "") or "").strip(),
-                "composition": (getattr(med, "composition", "") or "").strip(),
-                "company": (getattr(med, "company", "") or "").strip(),
-                "pack_type": (getattr(med, "pack_type", "") or "").strip(),
-                "pack_qty": getattr(med, "pack_qty", None),
-                "gst_percent": 0.0,
-                "discount_percent": 0.0,
-                "source": "missing_purchase_layer",
-                "source_label": "No purchase layer",
-                "is_expired": False,
-                "is_unresolved": True,
-            }
-            rows.append(orphan_row)
-            unresolved_rows.append(orphan_row)
-            orphan_count += 1
+        allocated_qty = allocated_qty_by_medicine_id.get(med.id, 0)
+        if allocated_qty >= current_qty:
             continue
-        if current_qty != expected_qty:
-            sync_mismatch_count += 1
-            sync_total_delta += expected_qty - current_qty
+
+        missing_qty = current_qty - allocated_qty
+        source = "missing_purchase_layer" if allocated_qty == 0 else "partial_purchase_layer"
+        source_label = "No purchase layer" if allocated_qty == 0 else "Layer shortfall"
+        unresolved_row = {
+            "purchase_item_id": None,
+            "medicine_id": med.id,
+            "medicine_code": normalize_medicine_code(getattr(med, "medicine_code", "")),
+            "name": normalize_medicine_name(getattr(med, "name", "")),
+            "batch": (getattr(med, "batch", "") or "").strip(),
+            "expiry": (getattr(med, "expiry", "") or "").strip(),
+            "qty": missing_qty,
+            "purchase_rate": 0.0,
+            "purchase_rate_raw": 0.0,
+            "sale_value": 0.0,
+            "reentry_total": 0.0,
+            "mrp": to_float_safe(getattr(med, "mrp", 0), 0),
+            "barcode": (getattr(med, "barcode", "") or "").strip(),
+            "composition": (getattr(med, "composition", "") or "").strip(),
+            "company": (getattr(med, "company", "") or "").strip(),
+            "pack_type": (getattr(med, "pack_type", "") or "").strip(),
+            "pack_qty": getattr(med, "pack_qty", None),
+            "gst_percent": 0.0,
+            "discount_percent": 0.0,
+            "source": source,
+            "source_label": source_label,
+            "is_expired": False,
+            "is_unresolved": True,
+        }
+        rows.append(unresolved_row)
+        unresolved_rows.append(unresolved_row)
+        if allocated_qty == 0:
+            orphan_count += 1
 
     rows.sort(key=lambda row: (
         row.get("is_unresolved", False),
@@ -1494,9 +1556,11 @@ def build_stock_sale_preview(lines_per_invoice=STOCK_SALE_DEFAULT_LINES_PER_INVO
         "unresolved_count": len(unresolved_rows),
         "unresolved_rows": unresolved_rows,
         "orphan_count": orphan_count,
-        "sync_mismatch_count": sync_mismatch_count,
-        "sync_total_delta": sync_total_delta,
-        "sync_total_delta_display": f"{sync_total_delta:+d}",
+        "sync_mismatch_count": 0,
+        "sync_total_delta": 0,
+        "sync_total_delta_display": "+0",
+        "ignored_layer_count": ignored_layer_count,
+        "ignored_layer_qty": ignored_layer_qty,
         "lines_per_invoice": chunk_size,
         "invoice_chunk_count": math.ceil(len(sale_rows) / chunk_size) if sale_rows else 0,
         "reentry_vendor_name": STOCK_SALE_REENTRY_VENDOR_NAME,
@@ -1568,8 +1632,6 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
     stock_sale_note = build_stock_sale_internal_note(operation_ref, internal_note)
 
     try:
-        touched_names.extend(sync_medicine_qty_to_stock_sale_layers(preview["sale_rows"], actor_username, operation_ref))
-
         for chunk_rows in chunk_sequence(preview["sale_rows"], chunk_size):
             created_at = datetime.utcnow()
             invoice = Invoice(
@@ -1676,6 +1738,8 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
             apply_invoice_print_profile(invoice, invoice_print_date)
             created_invoices.append(invoice)
             assign_invoice_number(invoice, invoice_print_date)
+
+        reset_stock_sale_purchase_layers(preview["sale_rows"])
 
         purchase_created_at = datetime.utcnow()
         purchase = VendorPurchase(

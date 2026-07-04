@@ -225,7 +225,7 @@
         <div class="stock-sale-pill">
             <small>Stock Lines</small>
             <strong>{{ preview.line_count }}</strong>
-            <span>Purchase-layer rows ready for stock sale</span>
+            <span>Current stock rows ready for stock sale</span>
         </div>
         <div class="stock-sale-pill">
             <small>Total Qty</small>
@@ -257,19 +257,21 @@
     {% if preview.unresolved_count > 0 %}
     <section class="stock-sale-callout">
         <strong>{{ preview.unresolved_count }} row(s) are not ready for exact stock sale.</strong>
-        Kuch stock rows active purchase layer ya linked medicine record se sync nahi hain. Inko fix karo, tabhi dashboard aur stock sale value exact aligned rahegi.
+        Kuch stock rows ke liye current `Medicine.qty` ke against enough purchase-layer history available nahi hai.
+        In rows ko fix karo, tabhi stock sale exact rate mapping ke saath chalega.
         Neeche preview table me un rows par mismatch status dikh raha hai.
     </section>
-    {% elif preview.sync_mismatch_count > 0 %}
+    {% elif preview.ignored_layer_count > 0 %}
     <section class="stock-sale-callout safe">
-        Dashboard aur Stock Sale ab same purchase-layer value use kar rahe hain. Confirm karne par
-        <strong>{{ preview.sync_mismatch_count }}</strong> medicine row(s) ki `Medicine.qty` auto-sync hogi
-        purchase-layer quantity ke saath (net delta <strong>{{ preview.sync_total_delta_display }}</strong> units),
-        phir sale/re-entry workflow chalega.
+        Stock Sale ab `Medicine.qty` ko primary stock maanta hai. Purchase-layer side par
+        <strong>{{ preview.ignored_layer_count }}</strong> stale row(s) me extra
+        <strong>{{ preview.ignored_layer_qty }}</strong> unit(s) mile jo current stock se zyada the.
+        Confirm karne par operation sirf visible stock cycle karega aur matching old purchase-layer balance ko reset karke
+        fresh re-entry banayega.
     </section>
     {% else %}
     <section class="stock-sale-callout safe">
-        Purchase-layer history resolved for all visible stock rows. Confirm karne par stock sale invoice(s) aur auto re-entry purchase ek hi workflow me ban jayenge.
+        Current stock aur purchase-layer history visible rows ke liye aligned hai. Confirm karne par stock sale invoice(s) aur auto re-entry purchase ek hi workflow me ban jayenge.
     </section>
     {% endif %}
 
