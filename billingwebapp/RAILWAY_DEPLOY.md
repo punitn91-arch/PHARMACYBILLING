@@ -46,12 +46,25 @@ configure these before sharing them with patients:
 # Exact HTTPS origin printed inside the reception QR code.
 PUBLIC_BOOKING_BASE_URL=https://your-clinic-domain.example
 
-# Real OTP delivery. Development mode only writes a code to server logs.
-PUBLIC_PORTAL_OTP_MODE=twilio_whatsapp
-TWILIO_ACCOUNT_SID=<real-account-sid>
-TWILIO_AUTH_TOKEN=<real-auth-token>
-TWILIO_WHATSAPP_FROM=whatsapp:+<approved-sender>
+# Real OTP delivery by normal SMS through MSG91 (not WhatsApp).
+PUBLIC_PORTAL_OTP_MODE=msg91_sms
+MSG91_AUTH_KEY=<your-msg91-auth-key>
+MSG91_TEMPLATE_ID=<your-approved-msg91-flow-template-id>
+
+# The variable name inside the MSG91 template.  For ##otp##, keep this as otp.
+MSG91_OTP_VARIABLE=otp
+
+# Only set this when the MSG91 Flow is configured as "FromAPI".
+# MSG91_SENDER_ID=<your-approved-sender-id>
 ```
+
+To enable SMS OTP, create an Indian transactional SMS Flow in MSG91 and map
+its DLT-approved template.  For example, if the template contains
+`##otp##`, the app sends the generated six-digit code in that variable.  The
+template's brand/sender and wording must be approved in MSG91; do not put an
+OTP code, Auth Key, or any real secret in Git or in a chat message.  Add the
+four values above in Railway **Variables**, then redeploy the service.  Both
+the appointment and lab-report portals use the same SMS OTP configuration.
 
 `APP_PRIVATE_STORAGE_ROOT` must be on the persistent volume and must **not**
 be served by a web/static route. Lab-report PDFs are stored there and are

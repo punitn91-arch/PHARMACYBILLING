@@ -8,8 +8,10 @@ be enabled without weakening local development or test behaviour.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
+import re
 import urllib.parse
 import urllib.request
 
@@ -28,11 +30,96 @@ def _flag_enabled(value):
     return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def _twilio_recipient(mobile):
+def _indian_mobile_with_country_code(mobile):
     digits = "".join(ch for ch in str(mobile or "") if ch.isdigit())
     if len(digits) == 10:
         digits = f"91{digits}"
-    return f"whatsapp:+{digits}" if digits else ""
+    if len(digits) != 12 or not digits.startswith("91"):
+        return ""
+    return digits
+
+
+def _twilio_recipient(mobile):
+    recipient = _indian_mobile_with_country_code(mobile)
+    return f"whatsapp:+{recipient}" if recipient else ""
+
+
+def _msg91_sms_config():
+    """Read the MSG91 Flow credentials without ever logging secret values."""
+    authkey = (os.environ.get("MSG91_AUTH_KEY") or os.environ.get("MSG91_AUTHKEY") or "").strip()
+    template_id = (os.environ.get("MSG91_TEMPLATE_ID") or os.environ.get("MSG91_FLOW_ID") or "").strip()
+    variable_name = (os.environ.get("MSG91_OTP_VARIABLE") or "otp").strip()
+    sender_id = (os.environ.get("MSG91_SENDER_ID") or "").strip()
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", variable_name or ""):
+        variable_name = "otp"
+    if (
+        not authkey
+        or not template_id
+        or authkey.lower().startswith(("your_", "replace_", "msg91_"))
+        or template_id.lower().startswith(("your_", "replace_", "template_", "flow_"))
+    ):
+        return None
+    return {
+        "authkey": authkey,
+        "template_id": template_id,
+        "otp_variable": variable_name,
+        "sender_id": sender_id,
+    }
+
+
+def _send_msg91_sms(*, mobile, code):
+    """Submit an OTP to MSG91's approved SMS Flow template.
+
+    Indian SMS rules require the exact DLT-approved template to be created in
+    MSG91 first.  The variable name below must match that MSG91 template, for
+    example ``##otp##`` in the template maps to ``MSG91_OTP_VARIABLE=otp``.
+    """
+    config = _msg91_sms_config()
+    recipient = _indian_mobile_with_country_code(mobile)
+    if not config or not recipient:
+        return False, "SMS OTP delivery is not configured yet. Please contact the clinic."
+
+    recipient_data = {
+        "mobiles": recipient,
+        config["otp_variable"]: str(code),
+    }
+    payload = {
+        "template_id": config["template_id"],
+        "short_url": "0",
+        "recipients": [recipient_data],
+    }
+    # A sender is normally linked to the approved MSG91 template.  Include it
+    # only for customers whose template was explicitly configured as FromAPI.
+    if config["sender_id"]:
+        payload["sender"] = config["sender_id"]
+
+    request = urllib.request.Request(
+        "https://control.msg91.com/api/v5/flow",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "accept": "application/json",
+            "authkey": config["authkey"],
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # nosec B310 - fixed MSG91 endpoint
+            status = int(getattr(response, "status", 200))
+            raw_body = response.read().decode("utf-8", errors="replace")
+            if not 200 <= status < 300:
+                return False, "Unable to send the verification SMS right now. Please try again later."
+            try:
+                body = json.loads(raw_body) if raw_body else {}
+            except (TypeError, ValueError):
+                body = {}
+            if isinstance(body, dict) and str(body.get("type") or "").strip().lower() == "error":
+                LOGGER.warning("MSG91 rejected public portal OTP for %s", mask_mobile(mobile))
+                return False, "Unable to send the verification SMS right now. Please try again later."
+            return True, ""
+    except Exception:
+        LOGGER.exception("Unable to deliver public portal OTP through MSG91")
+    return False, "Unable to send the verification SMS right now. Please try again later."
 
 
 def send_portal_otp(*, mobile, code, purpose, is_production=False, testing=False):
@@ -53,8 +140,12 @@ def send_portal_otp(*, mobile, code, purpose, is_production=False, testing=False
         show_code = bool(testing or _flag_enabled(os.environ.get("PUBLIC_PORTAL_SHOW_DEV_OTP")))
         return True, code if show_code else "", ""
 
+    if mode in {"msg91", "msg91_sms", "sms"}:
+        sent, error_message = _send_msg91_sms(mobile=mobile, code=code)
+        return sent, "", error_message
+
     if mode != "twilio_whatsapp":
-        return False, "", "OTP delivery is not configured yet. Please contact the clinic."
+        return False, "", "SMS OTP delivery is not configured yet. Please contact the clinic."
 
     account_sid = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
     auth_token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()

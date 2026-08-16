@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -373,6 +374,92 @@ class PublicPatientPortalTests(unittest.TestCase):
         queue_response = self.client.get("/appointment-booking/priority-requests")
         self.assertEqual(queue_response.status_code, 200)
         self.assertIn(b"Priority appointment requests", queue_response.data)
+
+    def test_msg91_sms_otp_uses_the_approved_flow_template_without_a_live_request(self):
+        """The real SMS mode must submit the DLT/MSG91 template payload, not WhatsApp."""
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self):
+                return b'{"type":"success","message":"queued"}'
+
+        delivery_module = importlib.import_module(self.app_module.send_portal_otp.__module__)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PUBLIC_PORTAL_OTP_MODE": "msg91_sms",
+                    "MSG91_AUTH_KEY": "test-auth-key",
+                    "MSG91_TEMPLATE_ID": "approved-flow-template-id",
+                    "MSG91_OTP_VARIABLE": "verification_code",
+                    "MSG91_SENDER_ID": "ENDOCN",
+                },
+                clear=False,
+            ),
+            patch.object(delivery_module.urllib.request, "urlopen", return_value=FakeResponse()) as urlopen,
+        ):
+            sent, development_code, error_message = self.app_module.send_portal_otp(
+                mobile="+91 98765 43210",
+                code="123456",
+                purpose="Public Appointment",
+                is_production=True,
+            )
+
+        self.assertTrue(sent)
+        self.assertEqual(development_code, "")
+        self.assertEqual(error_message, "")
+        urlopen.assert_called_once()
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://control.msg91.com/api/v5/flow")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Authkey"), "test-auth-key")
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {
+                "template_id": "approved-flow-template-id",
+                "short_url": "0",
+                "sender": "ENDOCN",
+                "recipients": [
+                    {"mobiles": "919876543210", "verification_code": "123456"},
+                ],
+            },
+        )
+
+    def test_msg91_sms_otp_never_attempts_delivery_without_required_config(self):
+        delivery_module = importlib.import_module(self.app_module.send_portal_otp.__module__)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PUBLIC_PORTAL_OTP_MODE": "msg91_sms",
+                    "MSG91_AUTH_KEY": "",
+                    "MSG91_AUTHKEY": "",
+                    "MSG91_TEMPLATE_ID": "",
+                    "MSG91_FLOW_ID": "",
+                },
+                clear=False,
+            ),
+            patch.object(delivery_module.urllib.request, "urlopen") as urlopen,
+        ):
+            sent, development_code, error_message = self.app_module.send_portal_otp(
+                mobile="9876543210",
+                code="123456",
+                purpose="Public Appointment",
+                is_production=True,
+            )
+
+        self.assertFalse(sent)
+        self.assertEqual(development_code, "")
+        self.assertEqual(error_message, "SMS OTP delivery is not configured yet. Please contact the clinic.")
+        urlopen.assert_not_called()
 
     def test_staff_uploaded_private_pdf_is_available_only_after_matching_mobile_otp(self):
         order_id = self._create_lab_order()
