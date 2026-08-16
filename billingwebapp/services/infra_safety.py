@@ -28,6 +28,7 @@ try:
         Patient,
         PortalOtpChallenge,
         PublicAppointmentBooking,
+        PublicAppointmentDayLock,
         Return,
         ReturnItem,
         SalesAllocation,
@@ -59,6 +60,7 @@ except ImportError:  # pragma: no cover - script/local fallback
         Patient,
         PortalOtpChallenge,
         PublicAppointmentBooking,
+        PublicAppointmentDayLock,
         Return,
         ReturnItem,
         SalesAllocation,
@@ -82,6 +84,9 @@ BACKUP_MODEL_ORDER = [
     Vendor,
     # Independent singleton used by the public appointment portal.
     AppointmentBookingSettings,
+    # Per-date capacity serialization rows are safe to preserve with their
+    # booking state; they contain no patient details.
+    PublicAppointmentDayLock,
     HoldBill,
     Invoice,
     LabTest,
@@ -136,6 +141,10 @@ HEAVY_QUERY_INDEXES = [
         "public_appointment_booking",
         ["status", "reservation_expires_at"],
     ),
+    # The model creates this as a unique index on new databases. Keeping it in
+    # the runtime list also repairs older deployments after the FCFS lock table
+    # is introduced.
+    ("ix_public_appointment_day_lock_appointment_date", "public_appointment_day_lock", ["appointment_date"]),
     ("ix_return_bill_invoice_created", "return_bill", ["invoice_id", "created_at"]),
     ("ix_return_item_return_id", "return_item", ["return_id"]),
     ("ix_return_item_invoice_item_id", "return_item", ["invoice_item_id"]),

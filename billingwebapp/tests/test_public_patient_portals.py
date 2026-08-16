@@ -156,8 +156,6 @@ class PublicPatientPortalTests(unittest.TestCase):
     def test_normal_qr_booking_requires_otp_creates_appointment_and_stops_at_15(self):
         target_date = self.app_module.clinic_now().date() + timedelta(days=1)
         first_slot = datetime.combine(target_date, time(10, 0))
-        requested_slot = (first_slot + timedelta(minutes=20 * 14)).time()
-        rejected_slot = (first_slot + timedelta(minutes=20 * 15)).time()
 
         with self.app.app_context():
             settings = self.app_module.AppointmentBookingSettings(
@@ -166,8 +164,10 @@ class PublicPatientPortalTests(unittest.TestCase):
                 priority_daily_limit=2,
                 normal_fee=600,
                 priority_fee=1000,
-                opening_time="10:00",
+                opening_time="17:30",
                 slot_minutes=20,
+                arrival_window_start="17:30",
+                arrival_window_end="19:45",
                 max_days_ahead=14,
                 booking_cutoff_minutes=0,
             )
@@ -194,12 +194,23 @@ class PublicPatientPortalTests(unittest.TestCase):
                 )
             self.db.session.commit()
 
+        page_response = self.client.get(f"/book-appointment?date={target_date.isoformat()}")
+        self.assertEqual(page_response.status_code, 200)
+        self.assertIn(b"5:30 PM", page_response.data)
+        self.assertIn(b"7:45 PM", page_response.data)
+        self.assertIn(b"first-come, first-served", page_response.data)
+        self.assertIn(b"sticky-clinic-intro", page_response.data)
+        self.assertIn(b"position: sticky", page_response.data)
+        self.assertNotIn(b'name="appointment_time"', page_response.data)
+
         booking_payload = {
             "patient_name": "Asha Sharma",
             "mobile": "9876543210",
             "gender": "FEMALE",
             "appointment_date": target_date.isoformat(),
-            "appointment_time": requested_slot.strftime("%H:%M"),
+            # A browser cannot choose a time.  This hostile legacy value must
+            # be ignored in favour of the server's FCFS compatibility marker.
+            "appointment_time": "09:00",
             "booking_type": "NORMAL",
             "symptoms": "Routine consultation",
         }
@@ -231,15 +242,52 @@ class PublicPatientPortalTests(unittest.TestCase):
             self.assertIsNotNone(booking.otp_verified_at)
             self.assertIsNotNone(appointment)
             self.assertEqual(appointment.created_by, "PUBLIC_QR")
-            self.assertEqual(appointment.token_no, 15)
+            self.assertIsNone(appointment.token_no)
+            self.assertEqual(booking.appointment_time, time(17, 30))
+            self.assertEqual(appointment.appointment_time, time(17, 30))
             self.assertEqual(appointment.appointment_date, target_date)
             self.assertEqual(self.app_module.Appointment.query.filter_by(appointment_date=target_date).count(), 15)
+            appointment_id = appointment.id
+
+            # A public confirmation is a capacity reservation, not a place on
+            # the live token board before reception records the arrival.
+            queue_snapshot = self.app_module.build_live_queue_snapshot(target_date)
+            reserved_row = next(
+                item for item in queue_snapshot["lanes"]["scheduled"]
+                if item["id"] == appointment_id
+            )
+            self.assertTrue(reserved_row["unarrived_public_reservation"])
+            self.assertFalse(reserved_row["token_assigned"])
+            self.assertNotEqual(
+                (queue_snapshot["current_serving"] or {}).get("id"),
+                appointment_id,
+            )
+
+        # The queue token belongs to reception, so it is issued only when the
+        # patient is marked as arrived—not when OTP confirmation succeeds.
+        self._login_admin()
+        check_in_response = self.client.post(
+            f"/appointments/{appointment_id}/status",
+            data={"status": "WAITING"},
+            follow_redirects=False,
+        )
+        self.assertEqual(check_in_response.status_code, 302)
+        with self.app.app_context():
+            appointment = self.db.session.get(self.app_module.Appointment, appointment_id)
+            self.assertEqual(appointment.token_no, 15)
+            queue_snapshot = self.app_module.build_live_queue_snapshot(target_date)
+            queued_row = next(
+                item for item in queue_snapshot["lanes"]["waiting"]
+                if item["id"] == appointment_id
+            )
+            self.assertTrue(queued_row["token_assigned"])
+            self.assertEqual(queued_row["token_no"], 15)
 
         rejected_payload = dict(booking_payload)
         rejected_payload.update({
             "patient_name": "Sixteenth Patient",
             "mobile": "9876543211",
-            "appointment_time": rejected_slot.strftime("%H:%M"),
+            "appointment_time": "23:59",
         })
         rejected_response = self.client.post(
             "/book-appointment",
@@ -257,7 +305,6 @@ class PublicPatientPortalTests(unittest.TestCase):
     def test_priority_request_needs_staff_verified_payment_before_confirmation(self):
         target_date = self.app_module.clinic_now().date() + timedelta(days=1)
         first_slot = datetime.combine(target_date, time(10, 0))
-        priority_slot = (first_slot + timedelta(minutes=20 * 15)).time()
         with self.app.app_context():
             settings = self.app_module.AppointmentBookingSettings(
                 booking_enabled=True,
@@ -265,8 +312,10 @@ class PublicPatientPortalTests(unittest.TestCase):
                 priority_daily_limit=2,
                 normal_fee=600,
                 priority_fee=1000,
-                opening_time="10:00",
+                opening_time="17:30",
                 slot_minutes=20,
+                arrival_window_start="17:30",
+                arrival_window_end="19:45",
                 max_days_ahead=14,
                 booking_cutoff_minutes=0,
             )
@@ -297,7 +346,7 @@ class PublicPatientPortalTests(unittest.TestCase):
             "mobile": "9876543212",
             "gender": "OTHER",
             "appointment_date": target_date.isoformat(),
-            "appointment_time": priority_slot.strftime("%H:%M"),
+            "appointment_time": "08:00",
             "booking_type": "PRIORITY",
             "symptoms": "Needs same-day review",
         }
@@ -330,6 +379,8 @@ class PublicPatientPortalTests(unittest.TestCase):
             self.assertEqual(booking.payment_provider, "MANUAL_VERIFIED")
             self.assertEqual(appointment.payment_status, "PAID")
             self.assertEqual(appointment.payment_mode, "UPI")
+            self.assertIsNone(appointment.token_no)
+            self.assertEqual(appointment.appointment_time, time(17, 30))
 
     def test_admin_can_render_a_patient_safe_booking_qr(self):
         self._login_admin()
@@ -349,6 +400,8 @@ class PublicPatientPortalTests(unittest.TestCase):
         settings_response = self.client.get("/appointment-booking/settings")
         self.assertEqual(settings_response.status_code, 200)
         self.assertIn(b"Regular daily capacity", settings_response.data)
+        self.assertIn(b"Clinic visit window starts", settings_response.data)
+        self.assertNotIn(b"First slot", settings_response.data)
 
         save_response = self.client.post(
             "/appointment-booking/settings",
@@ -358,8 +411,8 @@ class PublicPatientPortalTests(unittest.TestCase):
                 "priority_daily_limit": "2",
                 "normal_fee": "600",
                 "priority_fee": "1000",
-                "opening_time": "10:00",
-                "slot_minutes": "20",
+                "arrival_window_start": "17:30",
+                "arrival_window_end": "19:45",
                 "max_days_ahead": "14",
                 "booking_cutoff_minutes": "30",
             },
@@ -370,6 +423,8 @@ class PublicPatientPortalTests(unittest.TestCase):
             settings = self.app_module.AppointmentBookingSettings.query.one()
             self.assertEqual(settings.normal_daily_limit, 15)
             self.assertEqual(settings.priority_fee, 1000)
+            self.assertEqual(settings.arrival_window_start, "17:30")
+            self.assertEqual(settings.arrival_window_end, "19:45")
 
         queue_response = self.client.get("/appointment-booking/priority-requests")
         self.assertEqual(queue_response.status_code, 200)

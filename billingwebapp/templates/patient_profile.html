@@ -626,7 +626,7 @@
                         <div class="timeline-meta">{{ item.subtitle }}</div>
                     </div>
                     <div class="muted">
-                        {{ item.occurred_at.strftime('%d-%m-%Y %I:%M %p') if item.occurred_at else '-' }}
+                        {{ item.occurred_label or (item.occurred_at.strftime('%d-%m-%Y %I:%M %p') if item.occurred_at else '-') }}
                     </div>
                 </div>
                 <div class="timeline-meta">Amount: Rs {{ "%.2f"|format(item.amount or 0) }}</div>

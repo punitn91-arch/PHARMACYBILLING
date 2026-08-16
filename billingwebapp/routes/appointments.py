@@ -21,6 +21,8 @@ def render_appointments_page(
     build_live_queue_snapshot,
     build_appointment_calendar_days,
     clinic_now,
+    arrival_window_start=None,
+    arrival_window_end=None,
 ):
     context = build_appointments_page_context(
         request_args,
@@ -31,6 +33,10 @@ def render_appointments_page(
         clinic_now=clinic_now,
     )
     context["all_statuses"] = all_statuses
+    # Public QR appointments are FCFS. These are display values (for example
+    # ``5:30 PM``), not the legacy compatibility time stored on the row.
+    context["arrival_window_start"] = arrival_window_start
+    context["arrival_window_end"] = arrival_window_end
     return render_template("appointments.html", **context)
 
 

@@ -44,16 +44,16 @@
 {% set patient_name = confirmed.patient_name|default(confirmed.name|default(pending.patient_name|default(pending.name|default('Patient')))) %}
 {% set booking_no = confirmed.appointment_no|default(confirmed.booking_no|default(confirmed.booking_ref|default(pending.appointment_no|default(pending.booking_no|default(pending.booking_ref|default(pending.reference_no|default(''))))))) %}
 {% set appointment_date = confirmed.appointment_date|default(pending.appointment_date|default('')) %}
-{% set appointment_time = confirmed.appointment_time|default(pending.appointment_time|default('')) %}
 {% set appointment_type = confirmed.booking_type|default(confirmed.appointment_type|default(pending.booking_type|default(pending.appointment_type|default('NORMAL')))) %}
-{% set token_no = confirmed.token_no|default('') %}
 {% set booking_amount = confirmed.amount|default(pending.amount|default(none)) %}
+{% set arrival_window_start_display = arrival_window_start|default(appointment_arrival_window_start|default(pending.arrival_window_start_display|default(pending.arrival_window_start|default(pending.arrival_start|default('5:30 PM', true), true), true), true), true) %}
+{% set arrival_window_end_display = arrival_window_end|default(appointment_arrival_window_end|default(pending.arrival_window_end_display|default(pending.arrival_window_end|default(pending.arrival_end|default('7:45 PM', true), true), true), true), true) %}
 <main>
     <section class="card" aria-labelledby="confirmation-title">
         <div class="hero">
             <div class="check" aria-hidden="true">✓</div>
             <h1 id="confirmation-title">{% if has_appointment %}Appointment confirmed{% else %}Appointment request received{% endif %}</h1>
-            <p>{% if has_appointment %}Thank you, {{ patient_name }}. Please keep this confirmation available when you visit the clinic.{% else %}Thank you, {{ patient_name }}. Your request has been received and will be confirmed once the remaining booking step is complete.{% endif %}</p>
+            <p>{% if has_appointment %}Thank you, {{ patient_name }}. Keep this confirmation available when you visit the clinic.{% else %}Thank you, {{ patient_name }}. Your request has been received and will be confirmed once the remaining booking step is complete.{% endif %}</p>
         </div>
         <div class="content">
             {% if booking_no %}<p class="reference">Booking reference<strong>{{ booking_no }}</strong></p>{% endif %}
@@ -61,18 +61,17 @@
                 <div class="detail"><dt>Patient</dt><dd>{{ patient_name }}</dd></div>
                 <div class="detail"><dt>Booking type</dt><dd>{% if appointment_type|upper == 'PRIORITY' %}Priority same-day{% else %}Regular appointment{% endif %}</dd></div>
                 <div class="detail"><dt>Date</dt><dd>{{ appointment_date or 'To be confirmed' }}</dd></div>
-                <div class="detail"><dt>Time</dt><dd>{{ appointment_time or 'To be confirmed' }}</dd></div>
-                {% if token_no is not none and token_no != '' %}<div class="detail"><dt>Token number</dt><dd>#{{ token_no }}</dd></div>{% endif %}
+                <div class="detail"><dt>Clinic visit window</dt><dd>{{ arrival_window_start_display }} – {{ arrival_window_end_display }}</dd></div>
                 {% if booking_amount is not none and booking_amount != '' %}<div class="detail"><dt>Amount</dt><dd>₹{{ booking_amount }}</dd></div>{% endif %}
                 {% if confirmed.mobile|default(pending.mobile|default('')) %}<div class="detail"><dt>Mobile</dt><dd>{{ confirmed.mobile|default(pending.mobile|default('')) }}</dd></div>{% endif %}
             </dl>
 
             {% if has_appointment %}
             <div class="status">● Your appointment is confirmed</div>
-            <p class="notice">Please arrive a few minutes before your consultation time. The clinic may contact you if any schedule change is needed.</p>
+            <p class="notice">Please arrive between <strong>{{ arrival_window_start_display }}</strong> and <strong>{{ arrival_window_end_display }}</strong>. Consultation is first-come, first-served; your token will be issued at the reception counter based on arrival.</p>
             {% else %}
             <div class="status pending">● Awaiting final confirmation</div>
-            <p class="notice">If this is a priority appointment, its payment must be verified before it is confirmed. For a medical emergency, please contact emergency services or visit the nearest emergency hospital.</p>
+            <p class="notice">Please plan to arrive between <strong>{{ arrival_window_start_display }}</strong> and <strong>{{ arrival_window_end_display }}</strong>. If this is a priority appointment, its payment must be verified before it is confirmed. For a medical emergency, please contact emergency services or visit the nearest emergency hospital.</p>
             {% endif %}
 
             <div class="actions"><a class="button" href="/book-appointment">Book another appointment</a></div>

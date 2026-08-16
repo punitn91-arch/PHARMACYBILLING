@@ -17,14 +17,17 @@
     .settings-field label { color: #425b75; font-size: 11px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }.settings-field small { color: #74889b; font-size: 11px; line-height: 1.45; }
     .settings-field input { width: 100%; min-height: 42px; border: 1px solid #c3d4e3; border-radius: 8px; padding: 9px 10px; color: #1f405d; font: inherit; outline: none; }.settings-field input:focus { border-color: #1264c9; box-shadow: 0 0 0 3px rgba(18,100,201,.12); }
     .settings-toggle { display: flex; align-items: center; gap: 10px; min-height: 45px; border: 1px solid #c9d9e6; border-radius: 9px; background: #fbfdff; padding: 0 12px; color: #25445e; font-size: 13px; font-weight: 700; }.settings-toggle input { width: 17px; height: 17px; margin: 0; }
+    .arrival-window-info { grid-column: 1 / -1; border: 1px solid #bde5de; border-radius: 10px; background: #f0fbf9; padding: 12px 13px; color: #315b67; font-size: 12px; line-height: 1.55; }.arrival-window-info strong { color: #0f766e; }
     .settings-actions { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 21px; padding-top: 17px; border-top: 1px solid #e1ebf3; }.settings-button { display: inline-flex; min-height: 41px; align-items: center; justify-content: center; border: 1px solid #0e57aa; border-radius: 8px; background: #1264c9; color: #fff; padding: 0 15px; font-size: 13px; font-weight: 800; cursor: pointer; text-decoration: none; }.settings-link { color: #1d5e9d; font-size: 12px; font-weight: 800; text-decoration: none; }.settings-note { color: #6b8093; font-size: 11px; line-height: 1.45; }
     @media (max-width: 620px) { .settings-grid { grid-template-columns: 1fr; }.settings-actions { align-items: stretch; flex-direction: column-reverse; }.settings-button { width: 100%; } }
 </style>
 
 <main class="booking-settings-page">
+    {% set arrival_window_start_value = settings.arrival_window_start|default(settings.arrival_start|default('17:30', true), true) %}
+    {% set arrival_window_end_value = settings.arrival_window_end|default(settings.arrival_end|default('19:45', true), true) %}
     <p class="settings-eyebrow">Admin control</p>
     <h1 class="settings-title">Online appointment settings</h1>
-    <p class="settings-copy">The regular limit defaults to 15 patients. Change these settings only when clinic hours or capacity change; the public page checks the values again on every booking.</p>
+    <p class="settings-copy">The regular limit defaults to 15 patients. Online patients choose a date, arrive during the clinic visit window, and receive their token at reception in arrival order.</p>
     <section class="settings-card">
         <div class="settings-status"><strong>Public QR booking</strong><span class="settings-badge {% if settings.booking_enabled %}on{% else %}off{% endif %}">{% if settings.booking_enabled %}Open{% else %}Closed{% endif %}</span></div>
         <form class="settings-form" method="post">
@@ -34,8 +37,9 @@
                 <div class="settings-field"><label for="priorityDailyLimit">Priority daily capacity</label><input id="priorityDailyLimit" name="priority_daily_limit" type="number" min="0" max="20" required value="{{ settings.priority_daily_limit }}"><small>Shown only after regular capacity is full.</small></div>
                 <div class="settings-field"><label for="normalFee">Regular consultation amount (₹)</label><input id="normalFee" name="normal_fee" type="number" min="0" step="0.01" required value="{{ settings.normal_fee }}"></div>
                 <div class="settings-field"><label for="priorityFee">Priority amount (₹)</label><input id="priorityFee" name="priority_fee" type="number" min="0" step="0.01" required value="{{ settings.priority_fee }}"><small>Default: ₹1,000. Payment must be verified before appointment confirmation.</small></div>
-                <div class="settings-field"><label for="openingTime">First slot</label><input id="openingTime" name="opening_time" type="time" required value="{{ settings.opening_time }}"></div>
-                <div class="settings-field"><label for="slotMinutes">Slot duration (minutes)</label><input id="slotMinutes" name="slot_minutes" type="number" min="5" max="180" required value="{{ settings.slot_minutes }}"></div>
+                <div class="arrival-window-info"><strong>First-come, first-served visits</strong><br>Patients are not shown individual timings. They see this arrival window and receive a token only when they reach the reception counter.</div>
+                <div class="settings-field"><label for="arrivalWindowStart">Clinic visit window starts</label><input id="arrivalWindowStart" name="arrival_window_start" type="time" required value="{{ arrival_window_start_value }}"><small>Default: 05:30 PM.</small></div>
+                <div class="settings-field"><label for="arrivalWindowEnd">Clinic visit window ends</label><input id="arrivalWindowEnd" name="arrival_window_end" type="time" required value="{{ arrival_window_end_value }}"><small>Default: 07:45 PM.</small></div>
                 <div class="settings-field"><label for="maxDaysAhead">Advance booking days</label><input id="maxDaysAhead" name="max_days_ahead" type="number" min="0" max="90" required value="{{ settings.max_days_ahead }}"></div>
                 <div class="settings-field"><label for="cutoffMinutes">Same-day cutoff (minutes)</label><input id="cutoffMinutes" name="booking_cutoff_minutes" type="number" min="0" max="240" required value="{{ settings.booking_cutoff_minutes }}"></div>
             </div>

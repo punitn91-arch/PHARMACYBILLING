@@ -156,7 +156,7 @@
                     <tr>
                         <th>Date</th>
                         <th>Appointment ID</th>
-                        <th>Time</th>
+                        <th>Visit / Time</th>
                         <th>Patient</th>
                         <th>Mobile</th>
                         <th>Doctor</th>
@@ -168,10 +168,24 @@
                 </thead>
                 <tbody>
                     {% for a in appointments %}
+                    {% set is_public_fcfs = (a.created_by|default('')|upper) == 'PUBLIC_QR' %}
                     <tr>
                         <td>{{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</td>
                         <td>{{ a.appointment_no or '-' }}</td>
-                        <td>{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}</td>
+                        <td>
+                            {% if is_public_fcfs %}
+                            Arrival window: {{ public_arrival_window_label|default('5:30 PM to 7:45 PM', true) }}<br>
+                            <span class="muted">
+                                {% if a.token_no is not none and a.token_no != '' %}
+                                Reception token #{{ a.token_no }}
+                                {% else %}
+                                First-come, first-served · token at counter
+                                {% endif %}
+                            </span>
+                            {% else %}
+                            {{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}
+                            {% endif %}
+                        </td>
                         <td>{{ a.patient_name or '-' }}</td>
                         <td>{{ a.mobile or '-' }}</td>
                         <td>{{ a.doctor_name or '-' }}</td>

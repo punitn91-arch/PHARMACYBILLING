@@ -411,8 +411,14 @@ class AppointmentBookingSettings(db.Model):
     priority_daily_limit = db.Column(db.Integer, nullable=False, default=2)
     normal_fee = db.Column(db.Float, nullable=False, default=600)
     priority_fee = db.Column(db.Float, nullable=False, default=1000)
-    opening_time = db.Column(db.String(5), nullable=False, default="10:00")
+    # ``opening_time`` and ``slot_minutes`` are retained for older staff
+    # settings records.  The public portal is now first-come, first-served;
+    # its patient-facing arrival window is deliberately separate from staff
+    # appointment times.
+    opening_time = db.Column(db.String(5), nullable=False, default="17:30")
     slot_minutes = db.Column(db.Integer, nullable=False, default=20)
+    arrival_window_start = db.Column(db.String(5), nullable=False, default="17:30")
+    arrival_window_end = db.Column(db.String(5), nullable=False, default="19:45")
     max_days_ahead = db.Column(db.Integer, nullable=False, default=14)
     booking_cutoff_minutes = db.Column(db.Integer, nullable=False, default=30)
     updated_by = db.Column(db.String(50))
@@ -445,6 +451,23 @@ class PublicAppointmentBooking(db.Model):
     payment_verified_at = db.Column(db.DateTime, index=True)
     source_ip = db.Column(db.String(80))
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PublicAppointmentDayLock(db.Model):
+    """One durable row per visit date used to serialize public capacity changes.
+
+    The row is not a counter or a patient record.  It lets PostgreSQL lock a
+    deterministic record while public reservations are created/confirmed,
+    preventing two simultaneous OTP requests from consuming the same final
+    capacity place.  SQLite still serializes writes safely for local use.
+    """
+
+    __tablename__ = "public_appointment_day_lock"
+
+    id = db.Column(db.Integer, primary_key=True)
+    appointment_date = db.Column(db.Date, nullable=False, unique=True, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

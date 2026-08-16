@@ -35,16 +35,24 @@
             font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             line-height: 1.5;
         }
-        .shell { width: min(100% - 28px, 960px); margin: 0 auto; padding: 28px 0 48px; }
+        .shell { width: min(100% - 28px, 960px); margin: 0 auto; padding: 0 0 48px; }
+        .sticky-clinic-intro {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            padding: 20px 0 14px;
+            background: var(--page);
+            box-shadow: 0 14px 20px -22px rgba(26, 54, 93, .72);
+        }
         .masthead {
             display: flex;
             align-items: center;
             gap: 14px;
-            margin-bottom: 22px;
+            margin-bottom: 12px;
         }
         .appointment-doctor-banner {
             overflow: hidden;
-            margin: 0 0 22px;
+            margin: 0;
             border: 1px solid var(--line);
             border-radius: 20px;
             background: #fff;
@@ -53,7 +61,10 @@
         .appointment-doctor-banner img {
             display: block;
             width: 100%;
-            height: auto;
+            max-height: min(34svh, 330px);
+            margin: 0 auto;
+            object-fit: contain;
+            object-position: center;
         }
         .mark {
             width: 48px;
@@ -70,7 +81,7 @@
         }
         .eyebrow { margin: 0 0 2px; color: var(--brand); font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
         h1 { margin: 0; font-size: clamp(21px, 4vw, 30px); letter-spacing: -.04em; line-height: 1.15; }
-        .intro { max-width: 720px; margin: 0 0 22px; color: var(--muted); font-size: 14px; }
+        .intro { max-width: 720px; margin: 22px 0; color: var(--muted); font-size: 14px; }
         .flash-list { display: grid; gap: 9px; margin: 0 0 18px; padding: 0; list-style: none; }
         .flash { border: 1px solid #fecaca; border-radius: 12px; background: var(--danger-soft); color: var(--danger); padding: 11px 13px; font-size: 13px; font-weight: 600; }
         .flash.success { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
@@ -119,28 +130,11 @@
         .meter.priority strong { color: var(--warning); }
         .meter.full strong { color: var(--danger); }
         .meter small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
-        .slot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 9px; }
-        .slot { position: relative; }
-        .slot input { position: absolute; opacity: 0; pointer-events: none; }
-        .slot label {
-            display: grid;
-            min-height: 44px;
-            place-items: center;
-            margin: 0;
-            border: 1px solid #bdd6e4;
-            border-radius: 10px;
-            background: #fff;
-            color: #28465c;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 800;
-            text-align: center;
-            transition: .15s ease;
-        }
-        .slot input:checked + label { border-color: var(--brand); background: var(--brand); color: #fff; box-shadow: 0 5px 13px rgba(15,118,110,.19); }
-        .slot input:focus-visible + label { outline: 3px solid rgba(15, 118, 110, .20); outline-offset: 2px; }
-        .slot.unavailable label { border-color: #e4eaf0; background: #f8fafc; color: #94a3b8; cursor: not-allowed; text-decoration: line-through; }
         .empty { margin: 0; border: 1px dashed #cad8e5; border-radius: 12px; background: #f8fafc; color: var(--muted); padding: 13px; font-size: 13px; }
+        .arrival-window { margin: 17px 0; border: 1px solid #9adbd3; border-radius: 16px; background: linear-gradient(135deg, #e8faf7, #fbfffe); padding: 17px; }
+        .arrival-window-label { display: block; color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
+        .arrival-window > strong { display: block; margin-top: 4px; color: #124f4b; font-size: clamp(21px, 4vw, 28px); letter-spacing: -.04em; line-height: 1.15; }
+        .arrival-window p { max-width: 660px; margin: 9px 0 0; color: #36586b; font-size: 12px; line-height: 1.6; }
         .type-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
         .type-option { position: relative; }
         .type-option input { position: absolute; opacity: 0; pointer-events: none; }
@@ -174,14 +168,15 @@
         .submit:focus-visible { outline: 3px solid rgba(15,118,110,.25); outline-offset: 3px; }
         .footer { margin-top: 17px; color: #718096; font-size: 11px; text-align: center; }
         @media (max-width: 600px) {
-            .shell { width: min(100% - 20px, 960px); padding-top: 17px; }
-            .masthead { margin-bottom: 17px; }
-            .appointment-doctor-banner { margin-bottom: 17px; border-radius: 15px; }
+            .shell { width: min(100% - 20px, 960px); }
+            .sticky-clinic-intro { padding: max(12px, env(safe-area-inset-top)) 0 11px; }
+            .masthead { margin-bottom: 9px; }
+            .appointment-doctor-banner { border-radius: 15px; }
+            .appointment-doctor-banner img { max-height: min(29svh, 190px); }
             .mark { width: 42px; height: 42px; border-radius: 13px; }
             .card-head, .booking-form { padding: 17px; }
             .field { grid-column: 1 / -1; }
             .availability, .type-options { grid-template-columns: 1fr; }
-            .slot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .date-picker { grid-template-columns: 1fr; }
             .actions { align-items: stretch; flex-direction: column-reverse; }
             .submit { width: 100%; }
@@ -196,27 +191,30 @@
 {% set priority_fee = public_settings.priority_fee|default(public_settings.priority_fee_amount|default(1000)) %}
 {% set normal_fee = public_settings.normal_fee|default(0) %}
 {% set current_availability = availability|default({}, true) %}
-{% set normal_remaining = current_availability.normal_remaining|default(current_availability.regular_remaining|default(current_availability.normal_slots_remaining|default(0))) %}
-{% set priority_remaining = current_availability.priority_remaining|default(current_availability.priority_slots_remaining|default(0)) %}
+{% set normal_remaining = current_availability.normal_remaining|default(current_availability.regular_remaining|default(0)) %}
+{% set priority_remaining = current_availability.priority_remaining|default(0) %}
 {% set normal_full = current_availability.normal_full|default((normal_remaining|int) <= 0) %}
 {% set priority_full = current_availability.priority_full|default(not current_availability.priority_available|default((priority_remaining|int) > 0)) %}
 {% set priority_selectable = normal_full and not priority_full %}
-{% set slot_options = current_availability.slots|default(current_availability.available_slots|default([], true), true) %}
+{% set arrival_window_start_display = arrival_window_start|default(appointment_arrival_window_start|default(public_settings.arrival_window_start_display|default(public_settings.arrival_window_start|default(public_settings.arrival_start|default(public_settings.visit_window_start|default('5:30 PM', true), true), true), true), true), true) %}
+{% set arrival_window_end_display = arrival_window_end|default(appointment_arrival_window_end|default(public_settings.arrival_window_end_display|default(public_settings.arrival_window_end|default(public_settings.arrival_end|default(public_settings.visit_window_end|default('7:45 PM', true), true), true), true), true), true) %}
 {% set saved_type = form_data.booking_type|default(form_data.appointment_type|default('NORMAL')) if form_data else 'NORMAL' %}
 <main class="shell">
-    <header class="masthead">
-        <div class="mark" aria-hidden="true">+</div>
-        <div>
-            <p class="eyebrow">Online appointment</p>
-            <h1>{{ public_settings.clinic_name|default(public_settings.business_name|default('Clinic Appointment Booking')) }}</h1>
-        </div>
-    </header>
+    <div class="sticky-clinic-intro">
+        <header class="masthead">
+            <div class="mark" aria-hidden="true">+</div>
+            <div>
+                <p class="eyebrow">Online appointment</p>
+                <h1>{{ public_settings.clinic_name|default(public_settings.business_name|default('Clinic Appointment Booking')) }}</h1>
+            </div>
+        </header>
 
-    <figure class="appointment-doctor-banner">
-        <img src="{{ url_for('static', filename='doctor-appointment-banner.png') }}" alt="Dr. Abhishek Prakash — Diabetologist and Endocrinologist" width="1983" height="793" fetchpriority="high" decoding="async">
-    </figure>
+        <figure class="appointment-doctor-banner">
+            <img src="{{ url_for('static', filename='doctor-appointment-banner.png') }}" alt="Dr. Abhishek Prakash — Diabetologist and Endocrinologist" width="1983" height="793" fetchpriority="high" decoding="async">
+        </figure>
+    </div>
 
-    <p class="intro">Choose an available slot and submit your details. We will verify your mobile number with a one-time password before confirming the booking.</p>
+    <p class="intro">Choose an available date and submit your details. We will verify your mobile number with a one-time password before confirming the booking.</p>
 
     {% if not booking_is_enabled %}
     <p class="empty" role="status">Online appointment booking is currently unavailable. Please contact the clinic directly.</p>
@@ -235,7 +233,7 @@
     <section class="booking-card" aria-labelledby="booking-title">
         <div class="card-head">
             <h2 id="booking-title">Request an appointment</h2>
-            <p>All fields marked required are needed to reserve your preferred consultation slot.</p>
+            <p>All fields marked required are needed to reserve one place in the clinic’s daily queue.</p>
             <form class="date-picker" method="get" action="/book-appointment">
                 <div>
                     <label for="availability_date">Check availability for date</label>
@@ -255,7 +253,7 @@
                         {% endfor %}
                     </select>
                 </div>
-                <button type="submit">Check slots</button>
+                <button type="submit">Check availability</button>
             </form>
         </div>
 
@@ -286,15 +284,21 @@
             </section>
 
             <section class="section" aria-labelledby="schedule-title">
-                <h3 class="section-title" id="schedule-title"><span class="step">2</span> Select date and time</h3>
+                <h3 class="section-title" id="schedule-title"><span class="step">2</span> Visit date and arrival window</h3>
                 <input name="appointment_date" type="hidden" value="{{ selected_date|default(form_data.appointment_date|default('') if form_data else '') }}">
                 <div class="fields">
                     <div class="field full">
-                        <label>Selected appointment date</label>
-                        <p class="empty">{{ selected_date|default(form_data.appointment_date|default('') if form_data else '') or 'Choose a date above to view available appointment times.' }}</p>
-                        <p class="hint">Use “Check slots” above to change the date. Availability is checked again securely when you submit the form.</p>
+                        <label>Selected visit date</label>
+                        <p class="empty">{{ selected_date|default(form_data.appointment_date|default('') if form_data else '') or 'Choose a date above to view availability.' }}</p>
+                        <p class="hint">Use “Check availability” above to change the date. Capacity is checked again securely when you submit the form.</p>
                     </div>
                 </div>
+
+                <aside class="arrival-window" aria-labelledby="arrival-window-title">
+                    <span class="arrival-window-label" id="arrival-window-title">Clinic visit window</span>
+                    <strong>{{ arrival_window_start_display }} – {{ arrival_window_end_display }}</strong>
+                    <p>Please arrive during this window. Consultation is on a <strong>first-come, first-served</strong> basis, and your token will be issued at the reception counter after you arrive.</p>
+                </aside>
 
                 <div class="availability" aria-label="Selected date availability">
                     <div class="meter {% if normal_full %}full{% endif %}">
@@ -309,30 +313,8 @@
                     </div>
                 </div>
 
-                {% if current_availability.message %}<p class="empty">{{ current_availability.message }}</p>{% endif %}
-
-                <label>Available time slot</label>
-                {% if slot_options %}
-                <div class="slot-grid" role="radiogroup" aria-label="Available appointment time slots">
-                    {% for slot in slot_options %}
-                        {% if slot is mapping %}
-                            {% set slot_value = slot.value|default(slot.time|default(slot.label|default(''))) %}
-                            {% set slot_label = slot.label|default(slot.display|default(slot_value)) %}
-                            {% set slot_open = slot.available|default(slot.is_available|default(true)) %}
-                        {% else %}
-                            {% set slot_value = slot %}
-                            {% set slot_label = slot %}
-                            {% set slot_open = true %}
-                        {% endif %}
-                        {% set saved_slot = form_data.appointment_time|default(form_data.slot|default('')) if form_data else '' %}
-                        <div class="slot {% if not slot_open %}unavailable{% endif %}">
-                            <input id="slot-{{ loop.index }}" name="appointment_time" type="radio" value="{{ slot_value }}" {% if (saved_slot|string) == (slot_value|string) %}checked{% endif %} {% if not slot_open %}disabled{% endif %} required>
-                            <label for="slot-{{ loop.index }}">{{ slot_label }}</label>
-                        </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="empty">No time slots are available for the selected date. Please choose another date.</p>
+                {% if normal_full and priority_full %}
+                <p class="empty">Appointments are full for this date. Please choose another available date.</p>
                 {% endif %}
             </section>
 
@@ -346,7 +328,7 @@
                             {% if normal_full %}
                             <p>Today's regular appointment capacity is full. Please choose another date or, if available, the priority option.</p>
                             {% else %}
-                            <p>Reserve an available consultation slot in today's regular queue{% if normal_fee|float > 0 %} for ₹{{ normal_fee }}{% endif %}. The clinic will confirm it after mobile OTP verification.</p>
+                            <p>Reserve one place in today’s regular queue{% if normal_fee|float > 0 %} for ₹{{ normal_fee }}{% endif %}. Arrive between {{ arrival_window_start_display }} and {{ arrival_window_end_display }}; the token is issued at reception.</p>
                             {% endif %}
                         </label>
                     </div>
@@ -355,11 +337,11 @@
                         <label for="type-priority">
                             <span class="type-heading">Priority same-day request <span class="tag priority">₹{{ priority_fee }}</span></span>
                             {% if not normal_full %}
-                            <p>Priority booking opens only after today's regular appointment capacity is full. Please select a regular appointment while slots remain.</p>
+                            <p>Priority booking opens only after today's regular appointment capacity is full. Please select a regular appointment while capacity remains.</p>
                             {% elif priority_full %}
                             <p>Priority capacity is full for this date. Please select another available date.</p>
                             {% else %}
-                            <p>Regular appointments are full. A limited priority consultation request is available for ₹{{ priority_fee }}; payment is verified before confirmation.</p>
+                            <p>Regular appointments are full. A limited priority request is available for ₹{{ priority_fee }}; payment is verified before confirmation. The reception counter issues the token after arrival.</p>
                             {% endif %}
                         </label>
                     </div>
@@ -383,7 +365,7 @@
             </div>
         </form>
     </section>
-    <p class="footer">Please arrive a few minutes before your confirmed consultation time.</p>
+    <p class="footer">Please arrive between {{ arrival_window_start_display }} and {{ arrival_window_end_display }}. Consultation order and token are decided at reception based on arrival.</p>
 </main>
 </body>
 </html>

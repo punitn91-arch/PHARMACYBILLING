@@ -177,6 +177,8 @@
 >{{ label }}</a>
 {%- endmacro %}
 
+{% set public_arrival_window_start = arrival_window_start|default(appointment_arrival_window_start|default('5:30 PM', true), true) %}
+{% set public_arrival_window_end = arrival_window_end|default(appointment_arrival_window_end|default('7:45 PM', true), true) %}
 <div class="appointments-ui pb-12 font-sans text-slate-900">
 {% if not list_only %}
 <section class="mb-8 flex flex-col items-start justify-between gap-4 2xl:flex-row 2xl:items-center">
@@ -406,7 +408,7 @@
             <thead>
                 <tr>
                     <th class="px-4 py-3">Appointment ID</th>
-                    <th class="px-4 py-3">Time</th>
+                    <th class="px-4 py-3">Visit / Time</th>
                     <th class="px-4 py-3">Patient Name</th>
                     <th class="px-4 py-3">Mobile Number</th>
                     <th class="px-4 py-3">Payment Mode</th>
@@ -422,12 +424,30 @@
                 {% set row_status = (a.status or 'BOOKED')|upper %}
                 {% set pay_status = (a.payment_status or ('PAID' if (a.payment_mode or '')|upper == 'PAID' else 'UNPAID'))|upper %}
                 {% set has_mobile = ((a.mobile or '')|trim) != '' %}
+                {% set is_public_fcfs = (a.created_by|default('')|upper) == 'PUBLIC_QR' %}
+                {% set public_token_assigned = is_public_fcfs and a.token_no is not none and a.token_no != '' %}
                 <tr class="transition duration-150 appointment-row" data-appointment-id="{{ a.id }}">
                     <td class="px-4 py-4 text-sm font-semibold text-slate-900">
                         {{ a.appointment_no }}
+                        {% if is_public_fcfs and not public_token_assigned %}
+                        <p class="mt-1 text-xs font-medium text-teal-700">Arrival window · Token at counter | {{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</p>
+                        {% else %}
                         <p class="mt-1 text-xs font-medium text-slate-500">Token {{ a.token_no or '-' }} | {{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</p>
+                        {% endif %}
                     </td>
-                    <td class="px-4 py-4 text-sm text-slate-700">{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}</td>
+                    <td class="px-4 py-4 text-sm text-slate-700">
+                        {% if is_public_fcfs %}
+                        <span class="block text-xs font-semibold text-teal-800">Arrival window</span>
+                        <span class="mt-1 block text-xs text-slate-600">{{ public_arrival_window_start }} – {{ public_arrival_window_end }}</span>
+                        {% if public_token_assigned %}
+                        <span class="mt-1 block text-[11px] font-medium text-teal-700">Reception token #{{ a.token_no }}</span>
+                        {% else %}
+                        <span class="mt-1 block text-[11px] font-medium text-teal-700">Token at counter</span>
+                        {% endif %}
+                        {% else %}
+                        {{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '-' }}
+                        {% endif %}
+                    </td>
                     <td class="px-4 py-4 text-sm">
                         {% if a.patient_id %}
                         <a href="{{ url_for('patient_profile', patient_id=a.patient_id) }}" class="font-semibold text-brand hover:underline">{{ a.patient_name }}</a>
@@ -451,7 +471,11 @@
                                 data-wa-patient="{{ a.patient_name or '' }}"
                                 data-wa-token="{{ a.token_no or '' }}"
                                 data-wa-date="{{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '' }}"
-                                data-wa-time="{{ a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '' }}"
+                                data-wa-time="{{ '' if is_public_fcfs else (a.appointment_time.strftime('%I:%M %p') if a.appointment_time else '') }}"
+                                data-wa-fcfs="{{ 'true' if is_public_fcfs else 'false' }}"
+                                data-wa-token-assigned="{{ 'true' if public_token_assigned else 'false' }}"
+                                data-wa-arrival-start="{{ public_arrival_window_start if is_public_fcfs else '' }}"
+                                data-wa-arrival-end="{{ public_arrival_window_end if is_public_fcfs else '' }}"
                                 onclick="openAppointmentWhatsapp(this)"
                                 title="{{ 'Send WhatsApp message' if has_mobile else 'Mobile number not available' }}"
                                 {% if not has_mobile %}disabled{% endif %}
@@ -624,17 +648,36 @@ function openAppointmentWhatsapp(button) {
     const token = (button.dataset.waToken || '-').trim();
     const apptDate = (button.dataset.waDate || '-').trim();
     const apptTime = (button.dataset.waTime || '-').trim();
+    const isFirstComeFirstServed = button.dataset.waFcfs === 'true';
+    const receptionTokenAssigned = button.dataset.waTokenAssigned === 'true';
+    const arrivalStart = (button.dataset.waArrivalStart || '5:30 PM').trim();
+    const arrivalEnd = (button.dataset.waArrivalEnd || '7:45 PM').trim();
 
     const lines = [
         `Hello ${patient},`,
         'Here are your appointment details:',
-        `Token No: ${token}`,
         `Date: ${apptDate}`,
-        `Time: ${apptTime}`,
-        'Clinic: THE ENDO CLINIC'
     ];
 
-    lines.push('', 'Please arrive at the clinic on time. Thank you.');
+    if (isFirstComeFirstServed) {
+        lines.push(
+            `Arrival window: ${arrivalStart} - ${arrivalEnd}`,
+            receptionTokenAssigned
+                ? `Token No: ${token}`
+                : 'Token: Issued at the reception counter on arrival.',
+            'Clinic: THE ENDO CLINIC',
+            '',
+            'Consultation is first-come, first-served. Thank you.'
+        );
+    } else {
+        lines.push(
+            `Token No: ${token}`,
+            `Time: ${apptTime}`,
+            'Clinic: THE ENDO CLINIC',
+            '',
+            'Please arrive at the clinic on time. Thank you.'
+        );
+    }
     const message = lines.join('\n');
     const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');

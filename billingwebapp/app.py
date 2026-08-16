@@ -51,6 +51,7 @@ try:
         PortalOtpChallenge,
         AppointmentBookingSettings,
         PublicAppointmentBooking,
+        PublicAppointmentDayLock,
         Vendor,
         VendorPurchase,
         VendorPurchaseItem,
@@ -109,6 +110,7 @@ except ImportError:  # pragma: no cover - script/local fallback
         PortalOtpChallenge,
         AppointmentBookingSettings,
         PublicAppointmentBooking,
+        PublicAppointmentDayLock,
         Vendor,
         VendorPurchase,
         VendorPurchaseItem,
@@ -5318,6 +5320,11 @@ with app.app_context():
         ensure_column("appointment", "is_deleted", "BOOLEAN DEFAULT FALSE")
         ensure_column("appointment", "deleted_at", "TIMESTAMP")
         ensure_column("appointment", "deleted_by", "TEXT")
+        # Public QR appointments are first-come, first-served.  These fields
+        # are intentionally independent from the legacy per-slot settings so
+        # existing staff-created appointments continue to keep their own time.
+        ensure_column("appointment_booking_settings", "arrival_window_start", "TEXT DEFAULT '17:30'")
+        ensure_column("appointment_booking_settings", "arrival_window_end", "TEXT DEFAULT '19:45'")
         ensure_column("hold_bill", "customer", "TEXT")
         ensure_column("hold_bill", "mobile", "TEXT")
         ensure_column("hold_bill", "doctor", "TEXT")
@@ -5463,6 +5470,10 @@ with app.app_context():
             appointments_without_token = Appointment.query.filter(
                 Appointment.token_no.is_(None),
                 Appointment.deleted_at.is_(None),
+                # Public QR confirmations deliberately do not receive a
+                # token until the patient reaches reception.  Do not turn a
+                # server restart into an implicit token-issuance event.
+                or_(Appointment.created_by.is_(None), Appointment.created_by != "PUBLIC_QR"),
             ).order_by(
                 Appointment.appointment_date.asc(),
                 Appointment.appointment_time.asc(),
@@ -10736,19 +10747,34 @@ def patient_profile(patient_id):
     )[:20]
 
     timeline = []
+    public_arrival_context = public_appointment_display_context()
     for appt in appointments[:12]:
+        visit_display = appointment_visit_display_context(appt, public_arrival_context)
         occurred_at = None
         if appt.appointment_date:
             occurred_at = datetime.combine(
                 appt.appointment_date,
-                appt.appointment_time or time.min
+                # Do not turn the FCFS compatibility marker into a patient
+                # timeline timestamp.  Date ordering remains intact while
+                # the UI below shows the configured arrival window instead.
+                time.min if visit_display["is_public_fcfs"] else (appt.appointment_time or time.min)
             )
         timeline.append({
             "type": "Appointment",
             "title": (appt.appointment_no or f"Appointment #{appt.id}").strip(),
-            "subtitle": f"Token {appt.token_no or '-'} · {(appt.status or 'BOOKED').replace('_', ' ').title()}",
+            "subtitle": (
+                f"{visit_display['visit_label']} · {visit_display['token_label']} · "
+                f"{(appt.status or 'BOOKED').replace('_', ' ').title()}"
+                if visit_display["is_public_fcfs"]
+                else f"Token {appt.token_no or '-'} · {(appt.status or 'BOOKED').replace('_', ' ').title()}"
+            ),
             "amount": round(to_float_safe(appt.consultation_fee, 0), 2),
             "occurred_at": occurred_at,
+            "occurred_label": (
+                appt.appointment_date.strftime("%d-%m-%Y")
+                if visit_display["is_public_fcfs"] and appt.appointment_date
+                else ""
+            ),
             "href": url_for("edit_appointment", id=appt.id)
         })
 
@@ -10759,6 +10785,7 @@ def patient_profile(patient_id):
             "subtitle": f"{(invoice.payment_mode or 'CASH').strip().upper()} · {(invoice.mobile or patient.mobile or '-').strip() or '-'}",
             "amount": round(to_float_safe(invoice.total, 0), 2),
             "occurred_at": invoice.created_at,
+            "occurred_label": "",
             "href": url_for("view_invoice", id=invoice.id)
         })
 
@@ -11121,6 +11148,8 @@ def audit_logs():
 @app.route("/appointments")
 @login_required
 def appointments():
+    public_settings = get_public_appointment_booking_settings()
+    arrival_window = public_appointment_arrival_window_context(public_settings)
     return render_appointments_page(
         request.args,
         all_statuses=APPOINTMENT_STATUSES,
@@ -11129,6 +11158,8 @@ def appointments():
         build_live_queue_snapshot=build_live_queue_snapshot,
         build_appointment_calendar_days=build_appointment_calendar_days,
         clinic_now=clinic_now,
+        arrival_window_start=arrival_window["arrival_window_start"],
+        arrival_window_end=arrival_window["arrival_window_end"],
     )
 
 @app.route("/appointments/queue/live")
@@ -11215,6 +11246,7 @@ def build_appointment_summary(appointments):
 
 def build_live_queue_snapshot(target_date):
     selected_date = target_date or clinic_now().date()
+    arrival_context = public_appointment_display_context()
     appointments = active_appointment_query().filter(
         Appointment.appointment_date == selected_date
     ).order_by(
@@ -11234,6 +11266,13 @@ def build_live_queue_snapshot(target_date):
 
     for appt in appointments:
         status = (appt.status or "BOOKED").strip().upper()
+        visit_display = appointment_visit_display_context(appt, arrival_context)
+        # An online FCFS booking reserves clinic capacity, not a queue place.
+        # It must stay off the active token board until reception gives it an
+        # actual token, even if a legacy/status update left it as BOOKED.
+        unarrived_public_reservation = (
+            visit_display["is_public_fcfs"] and not visit_display["token_assigned"]
+        )
         item = {
             "id": appt.id,
             "appointment_no": appt.appointment_no,
@@ -11245,24 +11284,33 @@ def build_live_queue_snapshot(target_date):
             "status": status,
             "payment_status": (appt.payment_status or "UNPAID").strip().upper(),
             "payment_mode": (appt.payment_mode or "CASH").strip().upper(),
-            "consultation_fee": round(to_float_safe(appt.consultation_fee, 0), 2)
+            "consultation_fee": round(to_float_safe(appt.consultation_fee, 0), 2),
+            "is_public_fcfs": visit_display["is_public_fcfs"],
+            "token_assigned": visit_display["token_assigned"],
+            "unarrived_public_reservation": unarrived_public_reservation,
+            "visit_label": visit_display["visit_label"],
+            "token_label": visit_display["token_label"],
         }
 
         if status == "BOOKED":
             lanes["scheduled"].append(item)
-            active_queue.append(item)
+            if not unarrived_public_reservation:
+                active_queue.append(item)
         elif status in {"WAITING", "CHECKED_IN"}:
             lanes["waiting"].append(item)
-            active_queue.append(item)
+            if not unarrived_public_reservation:
+                active_queue.append(item)
         elif status == "IN_CONSULTATION":
             lanes["consulting"].append(item)
-            active_queue.append(item)
+            if not unarrived_public_reservation:
+                active_queue.append(item)
         elif status == "COMPLETED":
             lanes["completed"].append(item)
         else:
             lanes["cancelled"].append(item)
 
-    current_serving = lanes["consulting"][0] if lanes["consulting"] else (active_queue[0] if active_queue else None)
+    active_consulting = [item for item in lanes["consulting"] if not item["unarrived_public_reservation"]]
+    current_serving = active_consulting[0] if active_consulting else (active_queue[0] if active_queue else None)
     next_tokens = [
         item["token_no"]
         for item in active_queue[:6]
@@ -11442,6 +11490,19 @@ def ensure_appointment_runtime_schema():
             "login_security_event": {"is_suspicious": False},
         },
         log_label="appointment",
+    )
+
+
+def ensure_public_appointment_runtime_schema():
+    """Additive compatibility upgrade for the FCFS public portal policy."""
+    return ensure_runtime_schema_requirements(
+        {
+            "appointment_booking_settings": [
+                ("arrival_window_start", "TEXT DEFAULT '17:30'"),
+                ("arrival_window_end", "TEXT DEFAULT '19:45'"),
+            ],
+        },
+        log_label="public appointment",
     )
 
 
@@ -12190,10 +12251,15 @@ PUBLIC_APPOINTMENT_RESERVATION_MINUTES = max(
     min(30, to_int_safe(os.environ.get("PUBLIC_APPOINTMENT_RESERVATION_MINUTES"), 10)),
 )
 PUBLIC_APPOINTMENT_ACTIVE_STATUSES = {"OTP_PENDING", "PAYMENT_PENDING", "BOOKED"}
+PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START = "17:30"
+PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END = "19:45"
 
 
 def get_public_appointment_booking_settings():
     """Return the singleton policy row, creating the safe 15-patient default."""
+    # Existing live databases can predate the arrival-window fields.  The
+    # runtime upgrade is additive and leaves staff appointment tables alone.
+    ensure_public_appointment_runtime_schema()
     settings = AppointmentBookingSettings.query.order_by(AppointmentBookingSettings.id.asc()).first()
     if settings:
         return settings
@@ -12203,8 +12269,10 @@ def get_public_appointment_booking_settings():
         priority_daily_limit=2,
         normal_fee=600,
         priority_fee=1000,
-        opening_time="10:00",
+        opening_time=PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START,
         slot_minutes=20,
+        arrival_window_start=PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START,
+        arrival_window_end=PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END,
         max_days_ahead=14,
         booking_cutoff_minutes=30,
     )
@@ -12235,30 +12303,123 @@ def public_appointment_settings_value(settings, field_name, default, *, minimum=
     return value
 
 
-def public_appointment_slot_values(settings, selected_date, taken_times=None):
-    """Build the visible bookable slots from the admin policy, not form data."""
-    normal_limit = public_appointment_settings_value(settings, "normal_daily_limit", 15, minimum=1, maximum=100)
-    priority_limit = public_appointment_settings_value(settings, "priority_daily_limit", 2, minimum=0, maximum=20)
-    slot_count = max(1, normal_limit + priority_limit)
-    slot_minutes = public_appointment_settings_value(settings, "slot_minutes", 20, minimum=5, maximum=180)
-    opening_time = parse_time_value(getattr(settings, "opening_time", "10:00")) or time(10, 0)
-    taken_values = set(taken_times or set())
-    now_local = clinic_now()
+def public_appointment_arrival_window(settings):
+    """Return a validated, clinic-controlled FCFS arrival window.
+
+    The public form never chooses an individual appointment time.  These two
+    values instead tell every online patient when to arrive at reception.
+    """
+    start = parse_time_value(
+        getattr(settings, "arrival_window_start", PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START)
+    ) or time(17, 30)
+    end = parse_time_value(
+        getattr(settings, "arrival_window_end", PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END)
+    ) or time(19, 45)
+    if end <= start:
+        start, end = time(17, 30), time(19, 45)
+    return start, end
+
+
+def public_appointment_arrival_window_context(settings):
+    """Presentation-safe values shared by public and staff appointment pages."""
+    start, end = public_appointment_arrival_window(settings)
+    start_label = start.strftime("%I:%M %p").lstrip("0")
+    end_label = end.strftime("%I:%M %p").lstrip("0")
+    return {
+        "arrival_window_start": start_label,
+        "arrival_window_end": end_label,
+        "arrival_window_start_value": start.strftime("%H:%M"),
+        "arrival_window_end_value": end.strftime("%H:%M"),
+        "arrival_window_label": f"{start_label} to {end_label}",
+    }
+
+
+def is_public_fcfs_appointment(appointment):
+    """Whether an Appointment came from the public first-come flow."""
+    return (getattr(appointment, "created_by", "") or "").strip().upper() == "PUBLIC_QR"
+
+
+def public_appointment_display_context(settings=None):
+    """Return FCFS copy for staff-facing pages without exposing a marker time.
+
+    Public QR rows retain a non-null ``appointment_time`` only because legacy
+    database columns require it.  This helper deliberately gives downstream
+    pages a safe, configured arrival window instead of ever rendering that
+    implementation marker as a personal appointment time.
+    """
+    fallback = {
+        "arrival_window_start": "5:30 PM",
+        "arrival_window_end": "7:45 PM",
+        "arrival_window_label": "5:30 PM to 7:45 PM",
+    }
+    try:
+        active_settings = settings if settings is not None else get_public_appointment_booking_settings()
+        context = public_appointment_arrival_window_context(active_settings)
+        return {
+            **fallback,
+            **{
+                key: value
+                for key, value in context.items()
+                if key in fallback and value
+            },
+        }
+    except (AttributeError, TypeError, ValueError, SQLAlchemyError):
+        # Reporting and the live queue must remain usable during a partial
+        # legacy-schema upgrade.  The fallback is the clinic's safe default.
+        return fallback
+
+
+def appointment_visit_display_context(appointment, arrival_context=None):
+    """Normalize schedule/token display for manual and public appointments."""
+    is_public_fcfs = is_public_fcfs_appointment(appointment)
+    token_no = getattr(appointment, "token_no", None)
+    token_assigned = token_no not in (None, "", " ")
+    if is_public_fcfs:
+        arrival_context = arrival_context or public_appointment_display_context()
+        return {
+            "is_public_fcfs": True,
+            "token_assigned": token_assigned,
+            "visit_label": f"Arrival window: {arrival_context['arrival_window_label']}",
+            "token_label": (
+                f"Reception token #{token_no}"
+                if token_assigned
+                else "Token issued at the reception counter on arrival"
+            ),
+        }
+    appointment_time = getattr(appointment, "appointment_time", None)
+    return {
+        "is_public_fcfs": False,
+        "token_assigned": token_assigned,
+        "visit_label": appointment_time.strftime("%I:%M %p") if appointment_time else "-",
+        "token_label": f"Token #{token_no}" if token_assigned else "No token assigned",
+    }
+
+
+def public_appointment_server_time_marker(settings):
+    """Non-null compatibility marker for legacy Appointment time columns.
+
+    It is deliberately selected by the server and is *not* a booked slot or
+    a token.  All FCFS public bookings for a date share the window-start
+    marker until reception issues a real token on arrival.
+    """
+    return public_appointment_arrival_window(settings)[0]
+
+
+def public_appointment_same_day_booking_closed(selected_date, settings, now=None):
+    if selected_date != (now or clinic_now()).date():
+        return False
+    current = now or clinic_now()
+    _start, window_end = public_appointment_arrival_window(settings)
     cutoff_minutes = public_appointment_settings_value(
         settings, "booking_cutoff_minutes", 30, minimum=0, maximum=240
     )
-    cutoff_time = (now_local + timedelta(minutes=cutoff_minutes)).time()
-    base_datetime = datetime.combine(selected_date, opening_time)
-    slots = []
-    for offset in range(slot_count):
-        slot_time = (base_datetime + timedelta(minutes=slot_minutes * offset)).time()
-        is_past_cutoff = selected_date == now_local.date() and slot_time <= cutoff_time
-        slots.append({
-            "value": slot_time.strftime("%H:%M"),
-            "label": slot_time.strftime("%I:%M %p").lstrip("0"),
-            "available": slot_time not in taken_values and not is_past_cutoff,
-        })
-    return slots
+    close_at = datetime.combine(selected_date, window_end) - timedelta(minutes=cutoff_minutes)
+    return current.replace(tzinfo=None) >= close_at
+
+
+def public_appointment_slot_values(_settings, _selected_date, _taken_times=None):
+    """Compatibility shim: public bookings no longer expose individual slots."""
+    return []
 
 
 def public_appointment_booking_is_active(booking, now=None):
@@ -12274,7 +12435,7 @@ def public_appointment_booking_is_active(booking, now=None):
 
 
 def get_public_appointment_availability(selected_date, settings=None, exclude_booking_id=None):
-    """Calculate quota and slots server-side so browser changes cannot oversell."""
+    """Calculate FCFS quota server-side so browser changes cannot oversell."""
     settings = settings or get_public_appointment_booking_settings()
     now = datetime.utcnow()
     normal_limit = public_appointment_settings_value(settings, "normal_daily_limit", 15, minimum=1, maximum=100)
@@ -12317,25 +12478,20 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
     normal_used = normal_confirmed_count + normal_pending_count
     normal_remaining = max(0, normal_limit - normal_used)
     priority_remaining = max(0, priority_limit - priority_count)
-    taken_times = {
-        appointment.appointment_time
-        for appointment in active_appointments
-        if appointment.appointment_time
-    }
-    taken_times.update(
-        booking.appointment_time for booking in active_public_bookings if booking.appointment_time
-    )
     normal_full = normal_remaining <= 0
     priority_full = priority_remaining <= 0
     priority_available = bool(normal_full and not priority_full)
+    same_day_booking_closed = public_appointment_same_day_booking_closed(selected_date, settings)
     message = ""
     if not getattr(settings, "booking_enabled", True):
         message = "Online appointment booking is currently unavailable."
+    elif same_day_booking_closed:
+        message = "Online booking for today is closed. Please choose another date."
     elif normal_full and priority_full:
         message = "Appointments are full for this date. Please choose another date."
     elif normal_full:
         message = "Regular appointments are full. A limited priority same-day option is available."
-    return {
+    availability = {
         "normal_remaining": normal_remaining,
         "priority_remaining": priority_remaining,
         "normal_full": normal_full,
@@ -12343,9 +12499,19 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
         "priority_available": priority_available,
         "normal_used": normal_used,
         "priority_used": priority_count,
-        "slots": public_appointment_slot_values(settings, selected_date, taken_times),
+        # Kept as an empty list for older callers.  Individual public slots
+        # are intentionally no longer generated or accepted.
+        "slots": [],
+        "same_day_booking_closed": same_day_booking_closed,
+        "booking_open": bool(
+            getattr(settings, "booking_enabled", True)
+            and not same_day_booking_closed
+            and (normal_remaining > 0 or priority_available)
+        ),
         "message": message,
     }
+    availability.update(public_appointment_arrival_window_context(settings))
+    return availability
 
 
 def public_appointment_form_data(source=None):
@@ -12356,7 +12522,9 @@ def public_appointment_form_data(source=None):
         "mobile": normalize_portal_mobile(read_value("mobile", "")),
         "gender": (read_value("gender", "") or "").strip().upper()[:10],
         "appointment_date": (read_value("appointment_date", "") or "").strip()[:10],
-        "appointment_time": (read_value("appointment_time", "") or "").strip()[:20],
+        # Ignore a legacy/malicious appointment_time form field.  The server
+        # supplies a non-null compatibility marker after validating capacity.
+        "appointment_time": "",
         "booking_type": (read_value("booking_type", "NORMAL") or "NORMAL").strip().upper()[:20],
         "symptoms": (read_value("symptoms", "") or "").strip()[:1000],
     }
@@ -12367,7 +12535,6 @@ def validate_public_appointment_request(form_data, settings, availability):
     mobile = form_data["mobile"]
     gender = form_data["gender"]
     appointment_date = parse_date(form_data["appointment_date"])
-    appointment_time = parse_time_value(form_data["appointment_time"])
     booking_type = form_data["booking_type"]
     today = clinic_now().date()
     max_days_ahead = public_appointment_settings_value(settings, "max_days_ahead", 14, minimum=0, maximum=90)
@@ -12382,29 +12549,20 @@ def validate_public_appointment_request(form_data, settings, availability):
         return None, "Please select a valid gender."
     if not appointment_date or appointment_date < today or appointment_date > today + timedelta(days=max_days_ahead):
         return None, "Please choose an available appointment date."
-    if not appointment_time:
-        return None, "Please choose an available appointment time."
     if booking_type not in {"NORMAL", "PRIORITY"}:
         return None, "Please choose a valid booking type."
-
-    slots_by_value = {slot["value"]: slot for slot in availability.get("slots", [])}
-    selected_slot = slots_by_value.get(appointment_time.strftime("%H:%M"))
-    if not selected_slot or not selected_slot.get("available"):
-        return None, "That appointment time is no longer available. Please choose another slot."
-    if booking_type == "NORMAL" and availability.get("normal_full"):
-        return None, "Regular appointments are full for this date. Please choose another date."
-    if booking_type == "PRIORITY":
-        if not availability.get("normal_full"):
-            return None, "Priority booking opens only after regular appointments are full."
-        if not availability.get("priority_available"):
-            return None, "Priority appointment capacity is full for this date."
+    if availability.get("same_day_booking_closed"):
+        return None, "Online booking for today is closed. Please choose another date."
+    capacity_error = public_appointment_capacity_error(booking_type, availability)
+    if capacity_error:
+        return None, capacity_error
 
     return {
         "patient_name": patient_name,
         "mobile": mobile,
         "gender": gender,
         "appointment_date": appointment_date,
-        "appointment_time": appointment_time,
+        "appointment_time": public_appointment_server_time_marker(settings),
         "booking_type": booking_type,
         "symptoms": form_data["symptoms"],
         "amount": round(
@@ -12417,14 +12575,81 @@ def validate_public_appointment_request(form_data, settings, availability):
     }, ""
 
 
-def create_public_appointment_reservation(payload):
+def public_appointment_capacity_error(booking_type, availability):
+    """Return a patient-safe capacity error for a public booking type."""
+    if booking_type == "NORMAL" and availability.get("normal_full"):
+        return "Regular appointments are full for this date. Please choose another date."
+    if booking_type == "PRIORITY":
+        if not availability.get("normal_full"):
+            return "Priority booking opens only after regular appointments are full."
+        if not availability.get("priority_available"):
+            return "Priority appointment capacity is full for this date."
+    return ""
+
+
+def ensure_public_appointment_day_lock(appointment_date):
+    """Persist a deterministic lock row before an FCFS capacity mutation."""
+    if not appointment_date:
+        return None
+    existing = PublicAppointmentDayLock.query.filter_by(appointment_date=appointment_date).first()
+    if existing:
+        return existing
+    try:
+        lock_row = PublicAppointmentDayLock(appointment_date=appointment_date)
+        db.session.add(lock_row)
+        db.session.commit()
+        return lock_row
+    except IntegrityError:
+        # Another request created the date row first.  Roll back this empty
+        # bootstrap transaction and fetch the shared lock row below.
+        db.session.rollback()
+        return PublicAppointmentDayLock.query.filter_by(appointment_date=appointment_date).first()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to initialize public appointment capacity lock")
+        return None
+
+
+def lock_public_appointment_capacity(appointment_date):
+    """Lock one visit date for the duration of a capacity-changing request."""
+    if not ensure_public_appointment_day_lock(appointment_date):
+        return None
+    try:
+        return PublicAppointmentDayLock.query.filter_by(
+            appointment_date=appointment_date
+        ).with_for_update().first()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to lock public appointment capacity for %s", appointment_date)
+        return None
+
+
+def create_public_appointment_reservation(payload, settings=None):
+    """Reserve one FCFS capacity place while OTP verification is pending."""
+    settings = settings or get_public_appointment_booking_settings()
+    if not lock_public_appointment_capacity(payload.get("appointment_date")):
+        return None, "Unable to reserve an appointment right now. Please try again."
+
+    # Recalculate *inside* the per-date lock; client-provided time data is
+    # ignored and a concurrent request cannot oversell the daily quota.
+    availability = get_public_appointment_availability(payload["appointment_date"], settings)
+    if availability.get("same_day_booking_closed"):
+        db.session.rollback()
+        return None, "Online booking for today is closed. Please choose another date."
+    capacity_error = public_appointment_capacity_error(payload["booking_type"], availability)
+    if capacity_error:
+        db.session.rollback()
+        return None, capacity_error
+
     booking = PublicAppointmentBooking(
         booking_ref=secrets.token_urlsafe(18),
         patient_name=payload["patient_name"],
         mobile=payload["mobile"],
         gender=payload["gender"],
         appointment_date=payload["appointment_date"],
-        appointment_time=payload["appointment_time"],
+        # Legacy columns are non-null.  This server-controlled marker means
+        # "arrival window begins"; it is not a promised time slot.
+        appointment_time=public_appointment_server_time_marker(settings),
         symptoms=payload["symptoms"],
         booking_type=payload["booking_type"],
         amount=payload["amount"],
@@ -12438,32 +12663,26 @@ def create_public_appointment_reservation(payload):
         return booking, ""
     except IntegrityError:
         db.session.rollback()
-        return None, "Unable to reserve that appointment. Please choose the slot again."
+        return None, "Unable to reserve the appointment. Please try again."
     except SQLAlchemyError:
         db.session.rollback()
         app.logger.exception("Unable to create public appointment reservation")
         return None, "Unable to start the appointment request right now. Please try again."
-
-
-def public_appointment_slot_is_available(availability, appointment_time):
-    selected_value = appointment_time.strftime("%H:%M") if appointment_time else ""
-    return any(
-        slot.get("value") == selected_value and slot.get("available")
-        for slot in availability.get("slots", [])
-    )
-
-
 def confirm_public_normal_appointment(booking, settings):
     """Create the clinic's real Appointment record after OTP, never before."""
+    if not lock_public_appointment_capacity(booking.appointment_date):
+        return None, "Unable to confirm the appointment right now. Please try again."
     availability = get_public_appointment_availability(
         booking.appointment_date,
         settings,
         exclude_booking_id=booking.id,
     )
-    if availability.get("normal_full"):
+    if availability.get("same_day_booking_closed"):
+        db.session.rollback()
+        return None, "Online booking for today is closed. Please choose another date."
+    if public_appointment_capacity_error("NORMAL", availability):
+        db.session.rollback()
         return None, "Regular appointment capacity was just filled. Please choose another date."
-    if not public_appointment_slot_is_available(availability, booking.appointment_time):
-        return None, "That appointment time was just booked. Please choose another slot."
 
     patient = Patient.query.filter_by(mobile=booking.mobile).first()
     if not patient:
@@ -12483,21 +12702,23 @@ def confirm_public_normal_appointment(booking, settings):
 
     appointment = Appointment(
         appointment_no=generate_appointment_no(),
-        token_no=get_next_daily_token(booking.appointment_date),
+        # The actual queue token is issued only when reception checks the
+        # patient in.  Public confirmation must not reserve a queue position.
+        token_no=None,
         patient_id=patient.id,
         patient_name=booking.patient_name,
         mobile=booking.mobile,
         gender=booking.gender,
         doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
         appointment_date=booking.appointment_date,
-        appointment_time=booking.appointment_time,
+        appointment_time=public_appointment_server_time_marker(settings),
         payment_mode="CASH",
         payment_status="UNPAID",
         doctor_discount=0,
         consultation_fee=booking.amount,
         status="BOOKED",
         symptoms=booking.symptoms,
-        notes="Booked through public QR appointment portal.",
+        notes="Booked through public QR portal. Token will be issued at reception on arrival.",
         created_by="PUBLIC_QR",
         is_deleted=False,
     )
@@ -12512,7 +12733,7 @@ def confirm_public_normal_appointment(booking, settings):
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        return None, "That appointment could not be confirmed. Please choose the slot again."
+        return None, "That appointment could not be confirmed. Please try again."
     except SQLAlchemyError:
         db.session.rollback()
         app.logger.exception("Unable to confirm public appointment %s", booking.booking_ref)
@@ -12548,15 +12769,20 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
     if not payment_reference or len(payment_reference) > 120:
         return None, "Enter a valid payment reference before confirming the priority appointment."
 
+    if not lock_public_appointment_capacity(booking.appointment_date):
+        return None, "Unable to confirm the priority appointment right now. Please try again."
+
     availability = get_public_appointment_availability(
         booking.appointment_date,
         settings,
         exclude_booking_id=booking.id,
     )
-    if availability.get("priority_remaining", 0) <= 0:
-        return None, "Priority capacity was just filled. Do not confirm this payment without a replacement slot."
-    if not public_appointment_slot_is_available(availability, booking.appointment_time):
-        return None, "That appointment time was just booked. Please agree a new slot with the patient first."
+    if availability.get("same_day_booking_closed"):
+        db.session.rollback()
+        return None, "Online booking for today is closed. Please choose another date."
+    if public_appointment_capacity_error("PRIORITY", availability):
+        db.session.rollback()
+        return None, "Priority capacity was just filled. Do not confirm this payment without a replacement booking."
 
     patient = Patient.query.filter_by(mobile=booking.mobile).first()
     if not patient:
@@ -12571,21 +12797,21 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
 
     appointment = Appointment(
         appointment_no=generate_appointment_no(),
-        token_no=get_next_daily_token(booking.appointment_date),
+        token_no=None,
         patient_id=patient.id,
         patient_name=booking.patient_name,
         mobile=booking.mobile,
         gender=booking.gender,
         doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
         appointment_date=booking.appointment_date,
-        appointment_time=booking.appointment_time,
+        appointment_time=public_appointment_server_time_marker(settings),
         payment_mode=payment_mode,
         payment_status="PAID",
         doctor_discount=0,
         consultation_fee=booking.amount,
         status="BOOKED",
         symptoms=booking.symptoms,
-        notes="Priority appointment booked through public QR portal.",
+        notes="Priority appointment booked through public QR portal. Token will be issued at reception on arrival.",
         created_by="PUBLIC_QR",
         is_deleted=False,
     )
@@ -12603,7 +12829,7 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        return None, "Unable to confirm the priority appointment. Please check the slot and try again."
+        return None, "Unable to confirm the priority appointment. Please try again."
     except SQLAlchemyError:
         db.session.rollback()
         app.logger.exception("Unable to finalize priority booking %s", booking.booking_ref)
@@ -12642,8 +12868,7 @@ def render_public_appointment_booking_form(*, form_data=None, selected_date=None
         candidate_availability = availability if candidate == selected else get_public_appointment_availability(candidate, settings)
         can_book = bool(
             getattr(settings, "booking_enabled", True)
-            and (candidate_availability.get("normal_remaining", 0) > 0 or candidate_availability.get("priority_remaining", 0) > 0)
-            and any(slot.get("available") for slot in candidate_availability.get("slots", []))
+            and candidate_availability.get("booking_open")
         )
         available_dates.append({
             "value": candidate.isoformat(),
@@ -12657,6 +12882,7 @@ def render_public_appointment_booking_form(*, form_data=None, selected_date=None
         selected_date=selected.isoformat(),
         available_dates=available_dates,
         form_data=form_data or {},
+        **public_appointment_arrival_window_context(settings),
     ), status_code
 
 
@@ -12679,7 +12905,7 @@ def public_appointment_booking():
             status_code=400,
         )
 
-    booking, error = create_public_appointment_reservation(payload)
+    booking, error = create_public_appointment_reservation(payload, settings)
     if error:
         flash(error, "danger")
         return render_public_appointment_booking_form(
@@ -12727,14 +12953,16 @@ def public_appointment_verify():
         if (booking.status or "").upper() == "OTP_PENDING":
             booking.status = "EXPIRED"
             db.session.commit()
-        flash("This appointment request has expired. Please choose a new slot.", "warning")
+        flash("This appointment request has expired. Please start a new booking request.", "warning")
         return redirect(url_for("public_appointment_booking"))
 
     if request.method == "GET":
+        settings = get_public_appointment_booking_settings()
         return render_template(
             "public_appointment_verify.html",
             booking=booking,
             masked_mobile=mask_mobile(booking.mobile),
+            **public_appointment_arrival_window_context(settings),
         )
 
     challenge, error = verify_portal_otp_challenge(
@@ -12744,14 +12972,15 @@ def public_appointment_verify():
         otp_code=request.form.get("otp_code"),
     )
     if error:
+        settings = get_public_appointment_booking_settings()
         flash(error, "danger")
         return render_template(
             "public_appointment_verify.html",
             booking=booking,
             masked_mobile=mask_mobile(booking.mobile),
+            **public_appointment_arrival_window_context(settings),
         ), 400
 
-    booking.otp_verified_at = challenge.verified_at or datetime.utcnow()
     settings = get_public_appointment_booking_settings()
     booking_type = (booking.booking_type or "NORMAL").upper()
     if booking_type == "NORMAL":
@@ -12767,27 +12996,28 @@ def public_appointment_verify():
             "public_appointment_confirmation.html",
             booking=booking,
             appointment=appointment,
+            **public_appointment_arrival_window_context(settings),
         )
 
+    if not lock_public_appointment_capacity(booking.appointment_date):
+        flash("Unable to confirm the priority request right now. Please try again.", "danger")
+        return redirect(url_for("public_appointment_booking"))
     availability = get_public_appointment_availability(
         booking.appointment_date,
         settings,
         exclude_booking_id=booking.id,
     )
-    if not availability.get("normal_full") or not availability.get("priority_available"):
+    capacity_error = public_appointment_capacity_error("PRIORITY", availability)
+    if availability.get("same_day_booking_closed") or capacity_error:
         booking.status = "EXPIRED"
         db.session.commit()
-        flash("Priority capacity is no longer available. Please choose another date.", "warning")
-        return redirect(url_for("public_appointment_booking"))
-    if not public_appointment_slot_is_available(availability, booking.appointment_time):
-        booking.status = "EXPIRED"
-        db.session.commit()
-        flash("That appointment time was just booked. Please choose another slot.", "warning")
+        flash(capacity_error or "Online booking for today is closed. Please choose another date.", "warning")
         return redirect(url_for("public_appointment_booking"))
 
     # A browser callback must never be treated as payment proof.  Until a
     # signed gateway webhook is configured, keep this as a visible staff
     # review/payment-pending request instead of creating a paid appointment.
+    booking.otp_verified_at = challenge.verified_at or datetime.utcnow()
     booking.status = "PAYMENT_PENDING"
     booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES)
     db.session.commit()
@@ -12805,7 +13035,12 @@ def public_appointment_verify():
         },
         extra={"source": "PUBLIC_QR", "payment_provider": "NOT_CONFIGURED"},
     )
-    return render_template("public_appointment_confirmation.html", booking=booking, appointment=None)
+    return render_template(
+        "public_appointment_confirmation.html",
+        booking=booking,
+        appointment=None,
+        **public_appointment_arrival_window_context(settings),
+    )
 
 
 @app.route("/book-appointment/confirmation")
@@ -12814,10 +13049,12 @@ def public_appointment_confirmation():
     if not booking:
         return redirect(url_for("public_appointment_booking"))
     appointment = Appointment.query.get(booking.appointment_id) if booking.appointment_id else None
+    settings = get_public_appointment_booking_settings()
     return render_template(
         "public_appointment_confirmation.html",
         booking=booking,
         appointment=appointment,
+        **public_appointment_arrival_window_context(settings),
     )
 
 
@@ -12886,7 +13123,6 @@ def get_active_priority_payment_requests():
         PublicAppointmentBooking.status == "PAYMENT_PENDING"
     ).order_by(
         PublicAppointmentBooking.appointment_date.asc(),
-        PublicAppointmentBooking.appointment_time.asc(),
         PublicAppointmentBooking.id.asc(),
     ).all()
     expired_any = False
@@ -12910,9 +13146,11 @@ def get_active_priority_payment_requests():
 @login_required
 @public_appointment_admin_required
 def public_appointment_priority_requests():
+    settings = get_public_appointment_booking_settings()
     return render_template(
         "appointment_priority_requests.html",
         pending_requests=get_active_priority_payment_requests(),
+        **public_appointment_arrival_window_context(settings),
     )
 
 
@@ -12948,18 +13186,32 @@ def public_appointment_booking_settings():
     if request.method == "POST":
         normal_daily_limit = to_int_safe(request.form.get("normal_daily_limit"), 0)
         priority_daily_limit = to_int_safe(request.form.get("priority_daily_limit"), -1)
-        slot_minutes = to_int_safe(request.form.get("slot_minutes"), 0)
+        # Slot settings are legacy-only. Keep their stored value when an
+        # updated FCFS settings form no longer sends the old input.
+        slot_minutes_raw = (request.form.get("slot_minutes") or "").strip()
+        slot_minutes = to_int_safe(
+            slot_minutes_raw,
+            public_appointment_settings_value(settings, "slot_minutes", 20, minimum=5, maximum=180),
+        )
         max_days_ahead = to_int_safe(request.form.get("max_days_ahead"), -1)
         booking_cutoff_minutes = to_int_safe(request.form.get("booking_cutoff_minutes"), -1)
         normal_fee = to_float_safe(request.form.get("normal_fee"), -1)
         priority_fee = to_float_safe(request.form.get("priority_fee"), -1)
-        opening_time = parse_time_value(request.form.get("opening_time"))
+        arrival_start = parse_time_value(
+            request.form.get("arrival_window_start")
+            or request.form.get("opening_time")
+            or getattr(settings, "arrival_window_start", PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START)
+        )
+        arrival_end = parse_time_value(
+            request.form.get("arrival_window_end")
+            or getattr(settings, "arrival_window_end", PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END)
+        )
 
         if not 1 <= normal_daily_limit <= 100:
             flash("Regular daily capacity must be between 1 and 100.", "danger")
         elif not 0 <= priority_daily_limit <= 20:
             flash("Priority daily capacity must be between 0 and 20.", "danger")
-        elif not 5 <= slot_minutes <= 180:
+        elif slot_minutes_raw and not 5 <= slot_minutes <= 180:
             flash("Slot duration must be between 5 and 180 minutes.", "danger")
         elif not 0 <= max_days_ahead <= 90:
             flash("Advance booking window must be between 0 and 90 days.", "danger")
@@ -12967,8 +13219,8 @@ def public_appointment_booking_settings():
             flash("Same-day cutoff must be between 0 and 240 minutes.", "danger")
         elif normal_fee < 0 or normal_fee > 100000 or priority_fee < 0 or priority_fee > 100000:
             flash("Please enter valid consultation amounts.", "danger")
-        elif not opening_time:
-            flash("Please enter a valid clinic opening time.", "danger")
+        elif not arrival_start or not arrival_end or arrival_end <= arrival_start:
+            flash("Arrival window end time must be after its start time.", "danger")
         else:
             before_snapshot = {
                 "booking_enabled": bool(settings.booking_enabled),
@@ -12978,6 +13230,8 @@ def public_appointment_booking_settings():
                 "priority_fee": settings.priority_fee,
                 "opening_time": settings.opening_time,
                 "slot_minutes": settings.slot_minutes,
+                "arrival_window_start": getattr(settings, "arrival_window_start", ""),
+                "arrival_window_end": getattr(settings, "arrival_window_end", ""),
                 "max_days_ahead": settings.max_days_ahead,
                 "booking_cutoff_minutes": settings.booking_cutoff_minutes,
             }
@@ -12986,8 +13240,12 @@ def public_appointment_booking_settings():
             settings.priority_daily_limit = priority_daily_limit
             settings.normal_fee = round(normal_fee, 2)
             settings.priority_fee = round(priority_fee, 2)
-            settings.opening_time = opening_time.strftime("%H:%M")
+            # Mirror the start only for legacy settings consumers. The public
+            # portal reads the explicit arrival window instead of slots.
+            settings.opening_time = arrival_start.strftime("%H:%M")
             settings.slot_minutes = slot_minutes
+            settings.arrival_window_start = arrival_start.strftime("%H:%M")
+            settings.arrival_window_end = arrival_end.strftime("%H:%M")
             settings.max_days_ahead = max_days_ahead
             settings.booking_cutoff_minutes = booking_cutoff_minutes
             settings.updated_by = session.get("username")
@@ -13007,6 +13265,8 @@ def public_appointment_booking_settings():
                         "priority_fee": settings.priority_fee,
                         "opening_time": settings.opening_time,
                         "slot_minutes": settings.slot_minutes,
+                        "arrival_window_start": settings.arrival_window_start,
+                        "arrival_window_end": settings.arrival_window_end,
                         "max_days_ahead": settings.max_days_ahead,
                         "booking_cutoff_minutes": settings.booking_cutoff_minutes,
                     },
@@ -13022,6 +13282,7 @@ def public_appointment_booking_settings():
         "appointment_booking_settings.html",
         settings=settings,
         pending_priority_count=len(get_active_priority_payment_requests()),
+        **public_appointment_arrival_window_context(settings),
     )
 
 @app.route("/appointments/add", methods=["GET", "POST"])
@@ -13216,7 +13477,12 @@ def edit_appointment(id):
             appointment.gender = validated["gender"]
             appointment.appointment_date = validated["appointment_date"]
             appointment.appointment_time = validated["appointment_time"]
-            if old_date != appointment.appointment_date or not appointment.token_no:
+            public_qr_unarrived = (
+                (appointment.created_by or "").strip().upper() == "PUBLIC_QR"
+                and not appointment.checked_in_at
+                and not appointment.token_no
+            )
+            if not public_qr_unarrived and (old_date != appointment.appointment_date or not appointment.token_no):
                 appointment.token_no = get_next_daily_token(
                     appointment.appointment_date,
                     exclude_appointment_id=appointment.id
@@ -13334,6 +13600,15 @@ def update_appointment_status(id):
     appointment.status = new_status
     if new_status in {"WAITING", "CHECKED_IN", "IN_CONSULTATION"}:
         appointment.checked_in_at = appointment.checked_in_at or now
+    # A public QR confirmation reserves only daily capacity.  Reception's
+    # arrival action is the moment a real queue token is issued, preserving
+    # first-come, first-served order at the counter.
+    if (
+        new_status in {"WAITING", "CHECKED_IN"}
+        and appointment.token_no is None
+        and (appointment.created_by or "").strip().upper() == "PUBLIC_QR"
+    ):
+        appointment.token_no = get_next_daily_token(appointment.appointment_date)
     if new_status == "COMPLETED":
         appointment.completed_at = now
         appointment.checked_in_at = appointment.checked_in_at or now
@@ -13920,35 +14195,41 @@ def export_excel():
         Appointment.appointment_time.desc(),
         Appointment.id.desc()
     ).all()
+    public_arrival_context = public_appointment_display_context()
     patients = Patient.query.order_by(Patient.updated_at.desc(), Patient.id.desc()).all()
     medicines = Medicine.query.order_by(Medicine.name.asc(), Medicine.batch.asc(), Medicine.id.asc()).all()
     medicine_purchase_rate_lookup = build_medicine_purchase_rate_lookup(medicines)
     returns = Return.query.order_by(Return.created_at.desc(), Return.id.desc()).all()
     return_items = ReturnItem.query.order_by(ReturnItem.id.asc()).all()
 
-    appointment_rows = [{
-        "Appointment ID": a.id,
-        "Appointment No": a.appointment_no,
-        "Token No": a.token_no,
-        "Patient ID": a.patient_id,
-        "Patient Name": a.patient_name,
-        "Mobile": a.mobile,
-        "Age": a.age,
-        "Gender": a.gender,
-        "Doctor": a.doctor_name,
-        "Appointment Date": a.appointment_date.strftime("%d-%m-%Y") if a.appointment_date else "",
-        "Appointment Time": a.appointment_time.strftime("%I:%M %p") if a.appointment_time else "",
-        "Payment Mode": a.payment_mode,
-        "Payment Status": a.payment_status,
-        "Doctor Discount": a.doctor_discount,
-        "Consultation Fee": a.consultation_fee,
-        "Status": a.status,
-        "Symptoms": a.symptoms,
-        "Previous Visit Notes": a.previous_visit_notes,
-        "Notes": a.notes,
-        "Created By": a.created_by,
-        "Created At": a.created_at.strftime("%d-%m-%Y %I:%M %p") if a.created_at else ""
-    } for a in appointments]
+    appointment_rows = []
+    for a in appointments:
+        visit_display = appointment_visit_display_context(a, public_arrival_context)
+        appointment_rows.append({
+            "Appointment ID": a.id,
+            "Appointment No": a.appointment_no,
+            "Token No": a.token_no,
+            "Token Status": visit_display["token_label"],
+            "Visit Type": "Public FCFS" if visit_display["is_public_fcfs"] else "Scheduled",
+            "Patient ID": a.patient_id,
+            "Patient Name": a.patient_name,
+            "Mobile": a.mobile,
+            "Age": a.age,
+            "Gender": a.gender,
+            "Doctor": a.doctor_name,
+            "Appointment Date": a.appointment_date.strftime("%d-%m-%Y") if a.appointment_date else "",
+            "Visit Time / Arrival Window": visit_display["visit_label"],
+            "Payment Mode": a.payment_mode,
+            "Payment Status": a.payment_status,
+            "Doctor Discount": a.doctor_discount,
+            "Consultation Fee": a.consultation_fee,
+            "Status": a.status,
+            "Symptoms": a.symptoms,
+            "Previous Visit Notes": a.previous_visit_notes,
+            "Notes": a.notes,
+            "Created By": a.created_by,
+            "Created At": a.created_at.strftime("%d-%m-%Y %I:%M %p") if a.created_at else ""
+        })
 
     patient_rows = [{
         "Patient ID": p.id,
@@ -14069,9 +14350,11 @@ def export_appointments_excel():
     appointments = payload["appointments"]
     report_type = payload["report_filters"]["appointment_report_type"]
     filter_label = payload["report_label"].replace(" ", "_")
+    public_arrival_context = public_appointment_display_context()
 
     rows = []
     for appt in appointments:
+        visit_display = appointment_visit_display_context(appt, public_arrival_context)
         consultation_fee = to_float_safe(appt.consultation_fee, 0)
         doctor_discount = to_float_safe(appt.doctor_discount, 0)
         net_fee = consultation_fee - doctor_discount
@@ -14084,8 +14367,10 @@ def export_appointments_excel():
         rows.append({
             "Appointment No": appt.appointment_no or "",
             "Token No": appt.token_no or "",
+            "Token Status": visit_display["token_label"],
+            "Visit Type": "Public FCFS" if visit_display["is_public_fcfs"] else "Scheduled",
             "Date": appt.appointment_date.strftime("%d-%m-%Y") if appt.appointment_date else "",
-            "Time": appt.appointment_time.strftime("%I:%M %p") if appt.appointment_time else "",
+            "Visit Time / Arrival Window": visit_display["visit_label"],
             "Patient Name": appt.patient_name or "",
             "Mobile": appt.mobile or "",
             "Gender": appt.gender or "",
@@ -14101,8 +14386,10 @@ def export_appointments_excel():
     columns = [
         "Appointment No",
         "Token No",
+        "Token Status",
+        "Visit Type",
         "Date",
-        "Time",
+        "Visit Time / Arrival Window",
         "Patient Name",
         "Mobile",
         "Gender",
@@ -14147,13 +14434,15 @@ def print_appointments_report():
     mode = (request.args.get("mode") or "print").strip().lower()
     if mode not in ("print", "pdf"):
         mode = "print"
+    public_arrival_context = public_appointment_display_context()
     return render_template(
         "appointment_report_print.html",
         appointments=appointments,
         report_label=payload["report_label"],
         total_net=total_net,
         mode=mode,
-        generated_at=datetime.now()
+        generated_at=datetime.now(),
+        public_arrival_window_label=public_arrival_context["arrival_window_label"],
     )
 @app.route("/users")
 @login_required

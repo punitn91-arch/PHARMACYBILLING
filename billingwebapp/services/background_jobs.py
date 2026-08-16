@@ -9,10 +9,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
-    from ..models import Appointment, Medicine
+    from ..models import Appointment, AppointmentBookingSettings, Medicine
     from .infra_safety import build_backup_snapshot
 except ImportError:  # pragma: no cover - script/local fallback
-    from models import Appointment, Medicine
+    from models import Appointment, AppointmentBookingSettings, Medicine
     from services.infra_safety import build_backup_snapshot
 
 
@@ -113,6 +113,16 @@ def _process_report_export_queue(app):
 
 def _write_whatsapp_reminder_outbox(app):
     tomorrow = datetime.utcnow().date() + timedelta(days=1)
+    settings = AppointmentBookingSettings.query.order_by(AppointmentBookingSettings.id.asc()).first()
+    arrival_start = (getattr(settings, "arrival_window_start", None) or "17:30").strip()
+    arrival_end = (getattr(settings, "arrival_window_end", None) or "19:45").strip()
+    try:
+        arrival_label = " to ".join(
+            datetime.strptime(value, "%H:%M").strftime("%I:%M %p").lstrip("0")
+            for value in (arrival_start, arrival_end)
+        )
+    except (TypeError, ValueError):
+        arrival_label = "5:30 PM to 7:45 PM"
     appointments = Appointment.query.filter(
         Appointment.appointment_date == tomorrow,
         Appointment.status != "CANCELLED",
@@ -122,14 +132,31 @@ def _write_whatsapp_reminder_outbox(app):
     for appointment in appointments:
         if not (appointment.mobile or "").strip():
             continue
-        reminder_rows.append({
+        is_public_fcfs = (appointment.created_by or "").strip().upper() == "PUBLIC_QR"
+        reminder = {
             "appointment_no": appointment.appointment_no,
             "patient_name": appointment.patient_name,
             "mobile": appointment.mobile,
             "appointment_date": appointment.appointment_date.isoformat() if appointment.appointment_date else "",
-            "appointment_time": appointment.appointment_time.strftime("%H:%M") if appointment.appointment_time else "",
             "doctor_name": appointment.doctor_name,
-        })
+            "is_first_come_first_served": is_public_fcfs,
+        }
+        if is_public_fcfs:
+            # The non-null time on a public record is only a compatibility
+            # marker, never a personal appointment slot.
+            reminder.update({
+                "appointment_time": "",
+                "arrival_window": arrival_label,
+                "arrival_instruction": (
+                    f"Please arrive between {arrival_label}. Consultation is "
+                    "first-come, first-served; token is issued at reception."
+                ),
+            })
+        else:
+            reminder["appointment_time"] = (
+                appointment.appointment_time.strftime("%H:%M") if appointment.appointment_time else ""
+            )
+        reminder_rows.append(reminder)
     outbox_dir = _ensure_dir(os.path.join(app.instance_path, "outbox"))
     target_path = os.path.join(outbox_dir, "whatsapp_reminders.json")
     with open(target_path, "w", encoding="utf-8") as handle:

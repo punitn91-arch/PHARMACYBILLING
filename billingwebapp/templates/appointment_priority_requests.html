@@ -27,20 +27,22 @@
 </style>
 
 <main class="priority-bookings-page">
+    {% set arrival_window_start_display = arrival_window_start|default(appointment_arrival_window_start|default('5:30 PM', true), true) %}
+    {% set arrival_window_end_display = arrival_window_end|default(appointment_arrival_window_end|default('7:45 PM', true), true) %}
     <p class="priority-eyebrow">Verified payment queue</p>
     <h1 class="priority-title">Priority appointment requests</h1>
-    <p class="priority-copy">These requests appear only after the patient has completed mobile OTP verification. Confirm a request only after independently checking the ₹{{ pending_requests[0].amount if pending_requests else 1000 }} payment in your payment gateway or UPI statement.</p>
+    <p class="priority-copy">These requests appear only after the patient has completed mobile OTP verification. Confirm a request only after independently checking the ₹{{ pending_requests[0].amount if pending_requests else 1000 }} payment in your payment gateway or UPI statement. All confirmed patients arrive during the clinic window and receive their token at reception.</p>
     <p class="priority-warning"><strong>Important:</strong> this screen does not accept a screenshot as payment proof. Enter the actual payment reference after you have verified it. A future signed payment-gateway webhook can complete this automatically.</p>
 
     <section class="priority-table-wrap">
         {% if pending_requests %}
         <table class="priority-table">
-            <thead><tr><th>Patient</th><th>Requested slot</th><th>Booking reference</th><th>Amount</th><th>Verify payment &amp; confirm</th></tr></thead>
+            <thead><tr><th>Patient</th><th>Visit date / arrival</th><th>Booking reference</th><th>Amount</th><th>Verify payment &amp; confirm</th></tr></thead>
             <tbody>
                 {% for booking in pending_requests %}
                 <tr>
                     <td><span class="priority-patient">{{ booking.patient_name }}</span><span class="priority-muted">{{ booking.mobile }}{% if booking.symptoms %} · {{ booking.symptoms }}{% endif %}</span></td>
-                    <td>{{ booking.appointment_date.strftime('%d %b %Y') if booking.appointment_date else '-' }}<span class="priority-muted">{{ booking.appointment_time.strftime('%I:%M %p') if booking.appointment_time else '-' }}</span></td>
+                    <td>{{ booking.appointment_date.strftime('%d %b %Y') if booking.appointment_date else '-' }}<span class="priority-muted">Arrival window: {{ arrival_window_start_display }} – {{ arrival_window_end_display }} · Token at counter</span></td>
                     <td><code>{{ booking.booking_ref }}</code></td>
                     <td><span class="priority-amount">₹{{ '%.2f'|format(booking.amount or 0) }}</span></td>
                     <td>

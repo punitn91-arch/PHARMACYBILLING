@@ -21,6 +21,8 @@
         .summary { display:grid; gap:5px; margin:23px 0; border:1px solid #cce9e5; border-radius:13px; background:#effaf8; padding:13px 14px; }
         .summary span { color:#597287; font-size:11px; font-weight:800; letter-spacing:.055em; text-transform:uppercase; }
         .summary strong { font-size:14px; }
+        .arrival-note { margin:-11px 0 23px; border-left:4px solid var(--brand); border-radius:0 10px 10px 0; background:#f0fbf9; color:#2e5964; padding:11px 12px; font-size:12px; line-height:1.55; }
+        .arrival-note strong { color:#155e59; }
         .flash-list { display:grid; gap:8px; margin:0 0 16px; padding:0; list-style:none; }
         .flash { border:1px solid #fecaca; border-radius:11px; background:#fff2f1; color:var(--danger); padding:10px 11px; font-size:12px; font-weight:700; }
         .flash.success { border-color:#a7f3d0; background:#ecfdf5; color:#047857; }
@@ -41,18 +43,22 @@
 {% set pending = booking|default({}, true) %}
 {% set pending_mobile = masked_mobile|default(pending.masked_mobile|default(pending.mobile|default(''))) %}
 {% set pending_name = pending.patient_name|default(pending.name|default('')) %}
+{% set arrival_window_start_display = arrival_window_start|default(appointment_arrival_window_start|default(pending.arrival_window_start_display|default(pending.arrival_window_start|default(pending.arrival_start|default('5:30 PM', true), true), true), true), true) %}
+{% set arrival_window_end_display = arrival_window_end|default(appointment_arrival_window_end|default(pending.arrival_window_end_display|default(pending.arrival_window_end|default(pending.arrival_end|default('7:45 PM', true), true), true), true), true) %}
 <main>
     <div class="brand"><span class="mark" aria-hidden="true">+</span> Secure appointment booking</div>
     <section class="card" aria-labelledby="verify-title">
         <h1 id="verify-title">Verify your mobile number</h1>
         <p class="lead">Enter the one-time password sent to <strong>{{ pending_mobile }}</strong> to continue with your appointment request.</p>
 
-        {% if pending_name or pending.appointment_date or pending.appointment_time %}
+        {% if pending_name or pending.appointment_date %}
         <div class="summary" aria-label="Appointment request summary">
             <span>Appointment request</span>
-            <strong>{% if pending_name %}{{ pending_name }}{% endif %}{% if pending.appointment_date %}{% if pending_name %} · {% endif %}{{ pending.appointment_date }}{% endif %}{% if pending.appointment_time %} · {{ pending.appointment_time }}{% endif %}</strong>
+            <strong>{% if pending_name %}{{ pending_name }}{% endif %}{% if pending.appointment_date %}{% if pending_name %} · {% endif %}{{ pending.appointment_date }}{% endif %}</strong>
         </div>
         {% endif %}
+
+        <p class="arrival-note"><strong>Clinic visit window: {{ arrival_window_start_display }} – {{ arrival_window_end_display }}</strong><br>Consultation is first-come, first-served. Your token will be issued at the reception counter when you arrive.</p>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}

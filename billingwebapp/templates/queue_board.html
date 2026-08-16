@@ -256,7 +256,7 @@
         <div class="queue-head">
             <div>
                 <h1 class="queue-title">Live Queue Board</h1>
-                <p class="queue-note">Live OPD token board for reception and doctor rooms. Changing the date will load the queue snapshot for that day.</p>
+                <p class="queue-note">Live OPD token board for reception and doctor rooms. Online FCFS reservations join this board only after reception issues their token.</p>
             </div>
             <div class="queue-actions">
                 <form method="get">
@@ -315,7 +315,7 @@
                     <strong>{{ queue_snapshot.board_stats.total }}</strong>
                 </div>
                 <div class="metric-card">
-                    <small>Active</small>
+                    <small>Active tokens</small>
                     <strong>{{ queue_snapshot.board_stats.active }}</strong>
                 </div>
                 <div class="metric-card">
@@ -336,7 +336,7 @@
 
     <section class="lanes-grid">
         {% set lane_defs = [
-            ('scheduled', 'Scheduled', 'Freshly booked patients'),
+            ('scheduled', 'Scheduled', 'Booked appointments and online FCFS reservations'),
             ('waiting', 'Waiting Area', 'Waiting or checked-in patients'),
             ('consulting', 'In Consultation', 'Patients currently with doctor'),
             ('completed', 'Completed', 'Closed consultations'),
@@ -353,8 +353,8 @@
                 {% for item in items %}
                 <div class="lane-item">
                     <div class="lane-item-head">
-                        <span class="lane-token">{{ item.token_no if item.token_no is not none else '-' }}</span>
-                        <span class="status-tag">{{ item.status.replace('_', ' ') }}</span>
+                        <span class="lane-token">{% if item.token_assigned %}{{ item.token_no }}{% elif item.is_public_fcfs %}Counter{% else %}-{% endif %}</span>
+                        <span class="status-tag">{{ 'RESERVED' if item.unarrived_public_reservation else item.status.replace('_', ' ') }}</span>
                     </div>
                     <div class="lane-patient">
                         {% if item.patient_id %}
@@ -364,7 +364,11 @@
                         {% endif %}
                     </div>
                     <div class="lane-meta">
+                        {% if item.is_public_fcfs %}
+                        {{ item.visit_label }} · {{ item.token_label }} · {{ item.payment_status.title() }}
+                        {% else %}
                         {{ item.appointment_time.strftime('%I:%M %p') if item.appointment_time else '-' }} · {{ item.payment_status.title() }} · {{ item.payment_mode }}
+                        {% endif %}
                     </div>
                     <div class="lane-meta">
                         <a class="lane-link" href="{{ url_for('edit_appointment', id=item.id) }}">Open appointment</a>
