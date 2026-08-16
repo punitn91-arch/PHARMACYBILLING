@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Priority Appointment Requests{% endblock %}
+
+{% block body %}
+<style>
+    .priority-bookings-page { max-width: 1180px; margin: 0 auto; color: #17324d; }
+    .priority-bookings-page *, .priority-bookings-page *::before, .priority-bookings-page *::after { box-sizing: border-box; }
+    .priority-eyebrow { margin: 0 0 5px; color: #b45309; font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    .priority-title { margin: 0; font-size: clamp(25px, 4vw, 34px); letter-spacing: -.035em; }
+    .priority-copy { max-width: 760px; margin: 8px 0 22px; color: #61758a; font-size: 14px; line-height: 1.55; }
+    .priority-warning { margin: 0 0 18px; border-left: 4px solid #c77716; border-radius: 0 10px 10px 0; background: #fff8eb; padding: 11px 13px; color: #805916; font-size: 12px; line-height: 1.55; }
+    .priority-table-wrap { overflow-x: auto; border: 1px solid #d8e5f0; border-radius: 16px; background: #fff; box-shadow: 0 12px 28px rgba(22, 58, 96, .07); }
+    .priority-table { width: 100%; border-collapse: collapse; min-width: 940px; }
+    .priority-table th { padding: 12px 14px; background: #f7fbff; color: #5a7189; font-size: 10px; font-weight: 800; letter-spacing: .07em; text-align: left; text-transform: uppercase; }
+    .priority-table td { border-top: 1px solid #e3edf5; padding: 13px 14px; color: #2b4864; font-size: 13px; vertical-align: top; }
+    .priority-patient { color: #183650; font-weight: 800; }
+    .priority-muted { display: block; margin-top: 3px; color: #75899c; font-size: 11px; }
+    .priority-amount { color: #a75408; font-size: 15px; font-weight: 800; white-space: nowrap; }
+    .priority-form { display: grid; grid-template-columns: 105px minmax(145px, 1fr) auto; gap: 7px; align-items: center; }
+    .priority-form select, .priority-form input { min-height: 35px; border: 1px solid #bfd1e0; border-radius: 7px; padding: 7px 8px; color: #24435f; font: inherit; font-size: 12px; outline: none; }
+    .priority-form input:focus, .priority-form select:focus { border-color: #1264c9; box-shadow: 0 0 0 3px rgba(18,100,201,.12); }
+    .priority-confirm { min-height: 35px; border: 1px solid #0d6d60; border-radius: 7px; background: #0f766e; color: #fff; padding: 0 10px; font-size: 11px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+    .priority-empty { padding: 54px 20px; color: #6d8194; text-align: center; }
+    .priority-empty strong { display: block; color: #203e59; font-size: 17px; }
+    .priority-empty p { margin: 7px 0 0; font-size: 13px; }
+    @media (max-width: 720px) { .priority-form { grid-template-columns: 1fr; } .priority-confirm { width: 100%; } }
+</style>
+
+<main class="priority-bookings-page">
+    <p class="priority-eyebrow">Verified payment queue</p>
+    <h1 class="priority-title">Priority appointment requests</h1>
+    <p class="priority-copy">These requests appear only after the patient has completed mobile OTP verification. Confirm a request only after independently checking the ₹{{ pending_requests[0].amount if pending_requests else 1000 }} payment in your payment gateway or UPI statement.</p>
+    <p class="priority-warning"><strong>Important:</strong> this screen does not accept a screenshot as payment proof. Enter the actual payment reference after you have verified it. A future signed payment-gateway webhook can complete this automatically.</p>
+
+    <section class="priority-table-wrap">
+        {% if pending_requests %}
+        <table class="priority-table">
+            <thead><tr><th>Patient</th><th>Requested slot</th><th>Booking reference</th><th>Amount</th><th>Verify payment &amp; confirm</th></tr></thead>
+            <tbody>
+                {% for booking in pending_requests %}
+                <tr>
+                    <td><span class="priority-patient">{{ booking.patient_name }}</span><span class="priority-muted">{{ booking.mobile }}{% if booking.symptoms %} · {{ booking.symptoms }}{% endif %}</span></td>
+                    <td>{{ booking.appointment_date.strftime('%d %b %Y') if booking.appointment_date else '-' }}<span class="priority-muted">{{ booking.appointment_time.strftime('%I:%M %p') if booking.appointment_time else '-' }}</span></td>
+                    <td><code>{{ booking.booking_ref }}</code></td>
+                    <td><span class="priority-amount">₹{{ '%.2f'|format(booking.amount or 0) }}</span></td>
+                    <td>
+                        <form class="priority-form" method="post" action="/appointment-booking/priority-requests/{{ booking.id }}/confirm" onsubmit="return confirm('Have you verified this payment in the actual payment provider?');">
+                            <select name="payment_mode" required aria-label="Payment method"><option value="UPI">UPI</option><option value="ONLINE">Online</option><option value="CARD">Card</option></select>
+                            <input name="payment_reference" maxlength="120" required placeholder="Gateway / UPI transaction reference" aria-label="Verified payment reference">
+                            <button class="priority-confirm" type="submit">Confirm booking</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="priority-empty"><strong>No priority payments awaiting verification</strong><p>New verified requests will appear here after regular capacity is full.</p></div>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ form_title or 'Lab Test' }}{% endblock %}
+
+{% block body %}
+<style>
+    .lab-test-form-page { --ink:#14243a; --muted:#65748a; --line:#dce5f0; --blue:#1264c9; --blue-dark:#0b4e9d; max-width:920px; margin:0 auto; color:var(--ink); }
+    .lab-test-form-page *, .lab-test-form-page *::before, .lab-test-form-page *::after { box-sizing:border-box; }
+    .lab-form-back { display:inline-flex; margin-bottom:16px; color:#286096; font-size:13px; font-weight:800; text-decoration:none; }
+    .lab-form-kicker { margin:0 0 4px; color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+    .lab-form-title { margin:0; font-size:clamp(24px,3vw,31px); letter-spacing:-.03em; }
+    .lab-form-copy { margin:7px 0 18px; color:var(--muted); font-size:14px; line-height:1.5; }
+    .lab-form-surface { overflow:hidden; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 10px 28px rgba(20,48,84,.06); }
+    .lab-form-section { padding:20px; border-bottom:1px solid var(--line); }
+    .lab-form-section:last-child { border-bottom:0; }
+    .lab-form-section-title { margin:0 0 4px; font-size:15px; }
+    .lab-form-section-note { margin:0 0 16px; color:var(--muted); font-size:12px; line-height:1.45; }
+    .lab-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:15px; }
+    .lab-form-field { display:grid; gap:6px; min-width:0; }
+    .lab-form-field.wide { grid-column:1 / -1; }
+    .lab-form-field label { color:#43546e; font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .lab-form-field .hint { color:var(--muted); font-size:11px; line-height:1.4; }
+    .lab-form-field input, .lab-form-field textarea { width:100%; min-height:40px; border:1px solid #c9d7e7; border-radius:8px; outline:none; padding:9px 10px; color:var(--ink); font:inherit; }
+    .lab-form-field textarea { min-height:94px; resize:vertical; }
+    .lab-form-field input:focus, .lab-form-field textarea:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(18,100,201,.12); }
+    .lab-rate-callout { display:flex; align-items:flex-start; gap:10px; margin-top:14px; border:1px solid #b8d5ef; border-radius:9px; background:#f1f8ff; padding:11px 12px; color:#285579; font-size:12px; line-height:1.45; }
+    .lab-rate-callout strong { color:#174c7c; }
+    .lab-form-actions { display:flex; justify-content:flex-end; gap:10px; padding:15px 20px; background:#f8fbfe; }
+    .lab-form-button { display:inline-flex; align-items:center; justify-content:center; min-height:41px; border:1px solid transparent; border-radius:8px; padding:0 16px; font-size:13px; font-weight:800; text-decoration:none; cursor:pointer; }
+    .lab-form-button.cancel { border-color:#c4d2e1; background:#fff; color:#39536f; }
+    .lab-form-button.save { border-color:var(--blue-dark); background:var(--blue); color:#fff; box-shadow:0 6px 14px rgba(18,100,201,.2); }
+    @media (max-width:620px) { .lab-form-section { padding:15px; } .lab-form-grid { grid-template-columns:1fr; } .lab-form-actions { padding:14px 15px; display:grid; grid-template-columns:1fr; } .lab-form-button { width:100%; } }
+</style>
+
+<main class="lab-test-form-page">
+    <a class="lab-form-back" href="/lab-tests">← Back to Lab Test Master</a>
+    <p class="lab-form-kicker">Laboratory configuration</p>
+    <h1 class="lab-form-title">{{ form_title or 'Lab Test' }}</h1>
+    <p class="lab-form-copy">Set the details that staff see during billing. The default rate is controlled here and becomes a historical snapshot once an order is saved.</p>
+
+    <form method="POST" class="lab-form-surface">
+        <section class="lab-form-section">
+            <h2 class="lab-form-section-title">Test identity</h2>
+            <p class="lab-form-section-note">Use a short, unique code so test search stays fast and unambiguous at the counter.</p>
+            <div class="lab-form-grid">
+                <div class="lab-form-field">
+                    <label for="labTestCode">Test code</label>
+                    <input id="labTestCode" name="test_code" type="text" maxlength="40" required value="{{ test.test_code if test else '' }}" placeholder="e.g. CBC-01" oninput="this.value=this.value.toUpperCase()">
+                    <span class="hint">Codes are stored in uppercase.</span>
+                </div>
+                <div class="lab-form-field">
+                    <label for="labTestName">Test name</label>
+                    <input id="labTestName" name="name" type="text" maxlength="150" required value="{{ test.name if test else '' }}" placeholder="e.g. Complete Blood Count">
+                </div>
+                <div class="lab-form-field">
+                    <label for="labTestCategory">Category</label>
+                    <input id="labTestCategory" name="category" type="text" maxlength="80" value="{{ test.category if test else '' }}" placeholder="e.g. Hematology">
+                </div>
+                <div class="lab-form-field">
+                    <label for="labSpecimenType">Specimen type</label>
+                    <input id="labSpecimenType" name="specimen_type" type="text" maxlength="80" value="{{ test.specimen_type if test else '' }}" placeholder="e.g. EDTA whole blood">
+                </div>
+            </div>
+        </section>
+
+        <section class="lab-form-section">
+            <h2 class="lab-form-section-title">Rate and preparation</h2>
+            <p class="lab-form-section-note">Keep the display rate current. Billing staff can select the test but cannot override this rate.</p>
+            <div class="lab-form-grid">
+                <div class="lab-form-field">
+                    <label for="labDefaultPrice">Default rate (₹)</label>
+                    <input id="labDefaultPrice" name="default_price" type="number" min="0" step="0.01" inputmode="decimal" required value="{{ '%.2f'|format((test.default_price or 0)|float) if test else '' }}" placeholder="0.00">
+                </div>
+                <div class="lab-form-field wide">
+                    <label for="labPreparation">Preparation / instructions</label>
+                    <textarea id="labPreparation" name="preparation" maxlength="500" placeholder="e.g. 8–12 hours fasting required">{{ test.preparation if test else '' }}</textarea>
+                    <span class="hint">This note is shown in the order line to help staff brief the patient.</span>
+                </div>
+            </div>
+            <div class="lab-rate-callout"><span aria-hidden="true">ⓘ</span><span><strong>Rate control:</strong> changing this rate affects future orders only. Existing orders retain their original saved rate.</span></div>
+        </section>
+
+        <div class="lab-form-actions">
+            <a class="lab-form-button cancel" href="/lab-tests">Cancel</a>
+            <button class="lab-form-button save" type="submit">{{ submit_label or 'Save Lab Test' }}</button>
+        </div>
+    </form>
+</main>
+{% endblock %}

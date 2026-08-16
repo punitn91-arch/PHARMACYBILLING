@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Appointment Booking QR{% endblock %}
+
+{% block body %}
+<style>
+    .appointment-qr-page { max-width: 760px; margin: 0 auto; color: #17324d; }
+    .appointment-qr-page *, .appointment-qr-page *::before, .appointment-qr-page *::after { box-sizing: border-box; }
+    .appointment-qr-eyebrow { margin: 0 0 5px; color: #1264c9; font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    .appointment-qr-title { margin: 0; font-size: clamp(25px, 4vw, 34px); letter-spacing: -.035em; }
+    .appointment-qr-intro { max-width: 640px; margin: 8px 0 21px; color: #5d7085; font-size: 14px; line-height: 1.55; }
+    .appointment-qr-card { display: grid; grid-template-columns: 245px minmax(0, 1fr); gap: 28px; align-items: center; border: 1px solid #d8e5f0; border-radius: 18px; background: #fff; padding: 25px; box-shadow: 0 13px 32px rgba(23, 60, 98, .08); }
+    .appointment-qr-image { display: grid; min-height: 215px; place-items: center; border: 1px solid #d8e5f0; border-radius: 13px; background: #fbfdff; padding: 12px; }
+    .appointment-qr-image img { display: block; width: min(100%, 205px); height: auto; image-rendering: pixelated; }
+    .appointment-qr-placeholder { margin: 0; color: #8a5b14; font-size: 12px; line-height: 1.5; text-align: center; }
+    .appointment-qr-copy h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+    .appointment-qr-copy p { margin: 9px 0 0; color: #61758a; font-size: 13px; line-height: 1.55; }
+    .appointment-qr-url { margin-top: 15px; border: 1px solid #cbddec; border-radius: 10px; background: #f6faff; padding: 10px 11px; color: #1a5f9e; font: 700 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .appointment-qr-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 17px; }
+    .appointment-qr-button { display: inline-flex; min-height: 39px; align-items: center; justify-content: center; border: 1px solid #1264c9; border-radius: 8px; background: #1264c9; color: #fff; padding: 0 14px; font-size: 12px; font-weight: 800; text-decoration: none; cursor: pointer; }
+    .appointment-qr-button.secondary { border-color: #b9cbdb; background: #fff; color: #365b7c; }
+    .appointment-qr-note { margin-top: 18px; border-left: 4px solid #0f766e; border-radius: 0 10px 10px 0; background: #effbf8; padding: 11px 13px; color: #285c57; font-size: 12px; line-height: 1.5; }
+    .appointment-qr-warning { margin-top: 18px; border-left: 4px solid #b7791f; border-radius: 0 10px 10px 0; background: #fff9ec; padding: 11px 13px; color: #805916; font-size: 12px; line-height: 1.5; }
+    @media print { .topbar, .sidebar, .appointment-qr-actions, .no-print { display: none !important; } .main-content { margin-left: 0 !important; padding: 0 !important; } body { background: #fff !important; } .appointment-qr-card { box-shadow: none; } }
+    @media (max-width: 620px) { .appointment-qr-card { grid-template-columns: 1fr; gap: 20px; padding: 18px; } .appointment-qr-image { width: min(100%, 235px); margin: 0 auto; } }
+</style>
+
+<main class="appointment-qr-page">
+    <p class="appointment-qr-eyebrow">Patient self-booking</p>
+    <h1 class="appointment-qr-title">Online appointment QR code</h1>
+    <p class="appointment-qr-intro">Print this QR code at reception or share it on WhatsApp. It opens the public booking page only—no patient details are embedded in the QR code.</p>
+
+    <section class="appointment-qr-card">
+        <div class="appointment-qr-image">
+            {% if qr_available %}
+            <img src="{{ qr_image_url }}" alt="QR code for online appointment booking">
+            {% else %}
+            <p class="appointment-qr-placeholder">QR generation package is not installed yet. Install the updated requirements once, then refresh this page.</p>
+            {% endif %}
+        </div>
+        <div class="appointment-qr-copy">
+            <h2>Patients scan, verify, then book</h2>
+            <p>Regular appointments close automatically after the daily capacity is used. The ₹1,000 priority option appears only after regular capacity is full and still requires payment verification before confirmation.</p>
+            <div class="appointment-qr-url" id="bookingUrl">{{ booking_url }}</div>
+            <div class="appointment-qr-actions">
+                {% if qr_available %}<a class="appointment-qr-button" href="{{ qr_image_url }}" download="appointment-booking-qr.png">Download QR PNG</a>{% endif %}
+                <button class="appointment-qr-button secondary" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(document.getElementById('bookingUrl').textContent.trim()).then(function(){ this.textContent='Link copied'; }.bind(this)).catch(function(){ window.prompt('Copy this booking link:', document.getElementById('bookingUrl').textContent.trim()); });">Copy booking link</button>
+                <button class="appointment-qr-button secondary no-print" type="button" onclick="window.print()">Print QR</button>
+            </div>
+        </div>
+    </section>
+
+    <p class="appointment-qr-note"><strong>Privacy:</strong> the QR contains only the public booking URL. OTP verification happens after a patient enters their mobile number.</p>
+    {% if not using_configured_public_url %}<p class="appointment-qr-warning"><strong>Before sharing publicly:</strong> set <code>PUBLIC_BOOKING_BASE_URL</code> to your real HTTPS website address. The current link is based on this browser's address and may be local-only.</p>{% endif %}
+</main>
+{% endblock %}

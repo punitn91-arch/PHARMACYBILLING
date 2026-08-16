@@ -575,7 +575,7 @@
         </table>
     </section>
 
-    {% elif invoices %}
+    {% elif invoices or collection_summary %}
     <section class="reports-card">
         <div class="section-head">
             <div>
@@ -586,8 +586,12 @@
         {% if collection_summary %}
         <div class="summary-row" style="margin-bottom:16px;">
             <div class="summary-pill">
-                <small>Total Sale</small>
-                <strong>Rs {{ total }}</strong>
+                <small>Net Sale</small>
+                <strong>Rs {{ collection_summary.net_sale_total }}</strong>
+            </div>
+            <div class="summary-pill">
+                <small>Refund Total</small>
+                <strong>Rs {{ collection_summary.refund_total }}</strong>
             </div>
             <div class="summary-pill">
                 <small>Cash Collection</small>
@@ -603,6 +607,7 @@
             </div>
         </div>
         {% endif %}
+        {% if invoice_rows %}
         <table class="reports-table">
             <tr>
                 <th>Invoice</th>
@@ -635,6 +640,9 @@
             </tr>
             {% endfor %}
         </table>
+        {% else %}
+        <p class="empty-note">No invoices matched this filter. Refund adjustments, if any, are already reflected above.</p>
+        {% endif %}
     </section>
 
     {% else %}

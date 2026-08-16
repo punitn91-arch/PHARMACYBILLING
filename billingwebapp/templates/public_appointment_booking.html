@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f766e">
+    <title>Book an Appointment{% if settings and settings.clinic_name %} | {{ settings.clinic_name }}{% endif %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            color-scheme: light;
+            --ink: #142033;
+            --muted: #64748b;
+            --line: #dce6f1;
+            --page: #f3f8fb;
+            --card: #ffffff;
+            --brand: #0f766e;
+            --brand-dark: #0b5f59;
+            --brand-soft: #e7f7f4;
+            --warning: #b45309;
+            --warning-soft: #fff7e8;
+            --danger: #b42318;
+            --danger-soft: #fff2f1;
+            --shadow: 0 16px 38px rgba(26, 54, 93, .10);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            min-width: 320px;
+            margin: 0;
+            background: var(--page);
+            color: var(--ink);
+            font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.5;
+        }
+        .shell { width: min(100% - 28px, 960px); margin: 0 auto; padding: 28px 0 48px; }
+        .masthead {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 22px;
+        }
+        .mark {
+            width: 48px;
+            height: 48px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            border-radius: 15px;
+            background: linear-gradient(135deg, var(--brand), #14b8a6);
+            color: #fff;
+            font-size: 23px;
+            font-weight: 800;
+            box-shadow: 0 8px 18px rgba(15, 118, 110, .22);
+        }
+        .eyebrow { margin: 0 0 2px; color: var(--brand); font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+        h1 { margin: 0; font-size: clamp(21px, 4vw, 30px); letter-spacing: -.04em; line-height: 1.15; }
+        .intro { max-width: 720px; margin: 0 0 22px; color: var(--muted); font-size: 14px; }
+        .flash-list { display: grid; gap: 9px; margin: 0 0 18px; padding: 0; list-style: none; }
+        .flash { border: 1px solid #fecaca; border-radius: 12px; background: var(--danger-soft); color: var(--danger); padding: 11px 13px; font-size: 13px; font-weight: 600; }
+        .flash.success { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
+        .flash.info, .flash.warning { border-color: #fde68a; background: #fffbeb; color: #a16207; }
+        .booking-card { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--card); box-shadow: var(--shadow); }
+        .card-head { padding: 20px 22px; border-bottom: 1px solid var(--line); background: linear-gradient(125deg, #fbfefd, #effaf8); }
+        .card-head h2 { margin: 0; font-size: 18px; letter-spacing: -.025em; }
+        .card-head p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+        .booking-form { padding: 22px; }
+        .date-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 17px; }
+        .date-picker label { margin: 0 0 5px; color: #40516a; }
+        .date-picker select { min-height: 41px; }
+        .date-picker button { min-height: 41px; border: 1px solid #b9d9d5; border-radius: 10px; background: #fff; color: var(--brand); padding: 0 13px; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+        .date-picker button:hover { background: #f4fcfa; }
+        .section { margin-top: 26px; }
+        .section:first-child { margin-top: 0; }
+        .section-title { display: flex; align-items: center; gap: 9px; margin: 0 0 13px; font-size: 14px; font-weight: 800; }
+        .step { display: inline-grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 11px; }
+        .fields { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 15px; }
+        .field { grid-column: span 6; min-width: 0; }
+        .field.full { grid-column: 1 / -1; }
+        label { display: block; margin-bottom: 6px; color: #40516a; font-size: 12px; font-weight: 800; }
+        .optional { color: #94a3b8; font-weight: 600; }
+        input, select, textarea {
+            width: 100%;
+            min-height: 45px;
+            border: 1px solid #cbd9e7;
+            border-radius: 10px;
+            outline: none;
+            background: #fff;
+            color: var(--ink);
+            padding: 10px 12px;
+            font: inherit;
+            font-size: 14px;
+            transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        textarea { min-height: 92px; resize: vertical; }
+        input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(15, 118, 110, .13); }
+        .hint { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+        .availability { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 15px; }
+        .meter { border: 1px solid #cce9e5; border-radius: 13px; background: var(--brand-soft); padding: 13px; }
+        .meter.priority { border-color: #fde1b0; background: var(--warning-soft); }
+        .meter.full { border-color: #fecaca; background: var(--danger-soft); }
+        .meter-label { display: block; color: #36586b; font-size: 11px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }
+        .meter strong { display: block; margin-top: 3px; color: #115e59; font-size: 21px; letter-spacing: -.04em; }
+        .meter.priority strong { color: var(--warning); }
+        .meter.full strong { color: var(--danger); }
+        .meter small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+        .slot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 9px; }
+        .slot { position: relative; }
+        .slot input { position: absolute; opacity: 0; pointer-events: none; }
+        .slot label {
+            display: grid;
+            min-height: 44px;
+            place-items: center;
+            margin: 0;
+            border: 1px solid #bdd6e4;
+            border-radius: 10px;
+            background: #fff;
+            color: #28465c;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 800;
+            text-align: center;
+            transition: .15s ease;
+        }
+        .slot input:checked + label { border-color: var(--brand); background: var(--brand); color: #fff; box-shadow: 0 5px 13px rgba(15,118,110,.19); }
+        .slot input:focus-visible + label { outline: 3px solid rgba(15, 118, 110, .20); outline-offset: 2px; }
+        .slot.unavailable label { border-color: #e4eaf0; background: #f8fafc; color: #94a3b8; cursor: not-allowed; text-decoration: line-through; }
+        .empty { margin: 0; border: 1px dashed #cad8e5; border-radius: 12px; background: #f8fafc; color: var(--muted); padding: 13px; font-size: 13px; }
+        .type-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .type-option { position: relative; }
+        .type-option input { position: absolute; opacity: 0; pointer-events: none; }
+        .type-option label {
+            display: block;
+            min-height: 135px;
+            margin: 0;
+            border: 1px solid #cbd9e7;
+            border-radius: 14px;
+            background: #fff;
+            padding: 15px;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+        .type-option input:checked + label { border-color: var(--brand); background: #f1fbfa; box-shadow: 0 0 0 3px rgba(15,118,110,.10); }
+        .type-option input:focus-visible + label { outline: 3px solid rgba(15, 118, 110, .20); outline-offset: 2px; }
+        .type-option.is-priority input:checked + label { border-color: #d97706; background: #fff8ed; box-shadow: 0 0 0 3px rgba(217,119,6,.10); }
+        .type-option.disabled label { border-color: #e6ebf0; background: #f8fafc; color: #94a3b8; cursor: not-allowed; }
+        .type-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; color: var(--ink); font-size: 14px; font-weight: 800; }
+        .type-option.disabled .type-heading { color: #94a3b8; }
+        .tag { flex: 0 0 auto; border-radius: 999px; background: #dff5f1; color: #0f766e; padding: 3px 7px; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+        .tag.priority { background: #ffecd0; color: #a75508; }
+        .type-option p { margin: 8px 0 0; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.45; }
+        .medical-note { margin-top: 14px; border-left: 4px solid #dc2626; border-radius: 0 10px 10px 0; background: #fff4f4; color: #7f1d1d; padding: 11px 13px; font-size: 12px; }
+        .medical-note strong { font-weight: 800; }
+        .actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 28px; padding-top: 19px; border-top: 1px solid var(--line); }
+        .secure { color: var(--muted); font-size: 11px; }
+        .submit { min-height: 46px; border: 0; border-radius: 11px; background: var(--brand); color: #fff; padding: 0 19px; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; box-shadow: 0 7px 14px rgba(15,118,110,.20); transition: background .15s ease, transform .15s ease; }
+        .submit:hover { background: var(--brand-dark); }
+        .submit:disabled { cursor: not-allowed; background: #94a3b8; box-shadow: none; }
+        .submit:focus-visible { outline: 3px solid rgba(15,118,110,.25); outline-offset: 3px; }
+        .footer { margin-top: 17px; color: #718096; font-size: 11px; text-align: center; }
+        @media (max-width: 600px) {
+            .shell { width: min(100% - 20px, 960px); padding-top: 17px; }
+            .masthead { margin-bottom: 17px; }
+            .mark { width: 42px; height: 42px; border-radius: 13px; }
+            .card-head, .booking-form { padding: 17px; }
+            .field { grid-column: 1 / -1; }
+            .availability, .type-options { grid-template-columns: 1fr; }
+            .slot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .date-picker { grid-template-columns: 1fr; }
+            .actions { align-items: stretch; flex-direction: column-reverse; }
+            .submit { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+{% set public_settings = settings|default({}, true) %}
+{% set booking_is_enabled = public_settings.booking_enabled|default(true) %}
+{% set normal_capacity = public_settings.normal_daily_limit|default(public_settings.normal_daily_capacity|default(public_settings.regular_daily_capacity|default(15))) %}
+{% set priority_capacity = public_settings.priority_daily_limit|default(public_settings.priority_daily_capacity|default(2)) %}
+{% set priority_fee = public_settings.priority_fee|default(public_settings.priority_fee_amount|default(1000)) %}
+{% set normal_fee = public_settings.normal_fee|default(0) %}
+{% set current_availability = availability|default({}, true) %}
+{% set normal_remaining = current_availability.normal_remaining|default(current_availability.regular_remaining|default(current_availability.normal_slots_remaining|default(0))) %}
+{% set priority_remaining = current_availability.priority_remaining|default(current_availability.priority_slots_remaining|default(0)) %}
+{% set normal_full = current_availability.normal_full|default((normal_remaining|int) <= 0) %}
+{% set priority_full = current_availability.priority_full|default(not current_availability.priority_available|default((priority_remaining|int) > 0)) %}
+{% set priority_selectable = normal_full and not priority_full %}
+{% set slot_options = current_availability.slots|default(current_availability.available_slots|default([], true), true) %}
+{% set saved_type = form_data.booking_type|default(form_data.appointment_type|default('NORMAL')) if form_data else 'NORMAL' %}
+<main class="shell">
+    <header class="masthead">
+        <div class="mark" aria-hidden="true">+</div>
+        <div>
+            <p class="eyebrow">Online appointment</p>
+            <h1>{{ public_settings.clinic_name|default(public_settings.business_name|default('Clinic Appointment Booking')) }}</h1>
+        </div>
+    </header>
+
+    <p class="intro">Choose an available slot and submit your details. We will verify your mobile number with a one-time password before confirming the booking.</p>
+
+    {% if not booking_is_enabled %}
+    <p class="empty" role="status">Online appointment booking is currently unavailable. Please contact the clinic directly.</p>
+    {% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <ul class="flash-list" aria-live="polite">
+        {% for category, message in messages %}
+        <li class="flash {{ category|default('')|lower }}">{{ message }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% endwith %}
+
+    <section class="booking-card" aria-labelledby="booking-title">
+        <div class="card-head">
+            <h2 id="booking-title">Request an appointment</h2>
+            <p>All fields marked required are needed to reserve your preferred consultation slot.</p>
+            <form class="date-picker" method="get" action="/book-appointment">
+                <div>
+                    <label for="availability_date">Check availability for date</label>
+                    <select id="availability_date" name="date" required>
+                        <option value="" disabled {% if not selected_date %}selected{% endif %}>Select an available date</option>
+                        {% for option in available_dates|default([], true) %}
+                            {% if option is mapping %}
+                                {% set option_value = option.value|default(option.date|default('')) %}
+                                {% set option_label = option.label|default(option.display|default(option_value)) %}
+                                {% set option_open = option.available|default(option.is_available|default(true)) %}
+                            {% else %}
+                                {% set option_value = option %}
+                                {% set option_label = option %}
+                                {% set option_open = true %}
+                            {% endif %}
+                            <option value="{{ option_value }}" {% if (option_value|string) == (selected_date|string) %}selected{% endif %} {% if not option_open %}disabled{% endif %}>{{ option_label }}{% if not option_open %} — unavailable{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit">Check slots</button>
+            </form>
+        </div>
+
+        <form class="booking-form" method="post" action="/book-appointment">
+            <section class="section" aria-labelledby="patient-details-title">
+                <h3 class="section-title" id="patient-details-title"><span class="step">1</span> Your details</h3>
+                <div class="fields">
+                    <div class="field">
+                        <label for="patient_name">Patient full name</label>
+                        <input id="patient_name" name="patient_name" type="text" autocomplete="name" maxlength="120" required value="{{ form_data.patient_name|default('') if form_data else '' }}" placeholder="Enter patient name">
+                    </div>
+                    <div class="field">
+                        <label for="mobile">Mobile number</label>
+                        <input id="mobile" name="mobile" type="tel" inputmode="numeric" autocomplete="tel" maxlength="15" pattern="[0-9+ -]{10,15}" required value="{{ form_data.mobile|default('') if form_data else '' }}" placeholder="10-digit mobile number">
+                        <p class="hint">An OTP will be sent to this number.</p>
+                    </div>
+                    <div class="field">
+                        <label for="gender">Gender</label>
+                        {% set saved_gender = form_data.gender|default('') if form_data else '' %}
+                        <select id="gender" name="gender" required>
+                            <option value="" {% if not saved_gender %}selected{% endif %} disabled>Select gender</option>
+                            <option value="MALE" {% if saved_gender|upper == 'MALE' %}selected{% endif %}>Male</option>
+                            <option value="FEMALE" {% if saved_gender|upper == 'FEMALE' %}selected{% endif %}>Female</option>
+                            <option value="OTHER" {% if saved_gender|upper == 'OTHER' %}selected{% endif %}>Other</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" aria-labelledby="schedule-title">
+                <h3 class="section-title" id="schedule-title"><span class="step">2</span> Select date and time</h3>
+                <input name="appointment_date" type="hidden" value="{{ selected_date|default(form_data.appointment_date|default('') if form_data else '') }}">
+                <div class="fields">
+                    <div class="field full">
+                        <label>Selected appointment date</label>
+                        <p class="empty">{{ selected_date|default(form_data.appointment_date|default('') if form_data else '') or 'Choose a date above to view available appointment times.' }}</p>
+                        <p class="hint">Use “Check slots” above to change the date. Availability is checked again securely when you submit the form.</p>
+                    </div>
+                </div>
+
+                <div class="availability" aria-label="Selected date availability">
+                    <div class="meter {% if normal_full %}full{% endif %}">
+                        <span class="meter-label">Regular appointments</span>
+                        <strong>{% if normal_full %}Full{% else %}{{ normal_remaining }} left{% endif %}</strong>
+                        <small>{{ normal_capacity }} regular appointments per day</small>
+                    </div>
+                    <div class="meter priority {% if priority_full %}full{% endif %}">
+                        <span class="meter-label">Priority appointments</span>
+                        <strong>{% if priority_full %}Full{% else %}{{ priority_remaining }} left{% endif %}</strong>
+                        <small>Limited same-day priority capacity</small>
+                    </div>
+                </div>
+
+                {% if current_availability.message %}<p class="empty">{{ current_availability.message }}</p>{% endif %}
+
+                <label>Available time slot</label>
+                {% if slot_options %}
+                <div class="slot-grid" role="radiogroup" aria-label="Available appointment time slots">
+                    {% for slot in slot_options %}
+                        {% if slot is mapping %}
+                            {% set slot_value = slot.value|default(slot.time|default(slot.label|default(''))) %}
+                            {% set slot_label = slot.label|default(slot.display|default(slot_value)) %}
+                            {% set slot_open = slot.available|default(slot.is_available|default(true)) %}
+                        {% else %}
+                            {% set slot_value = slot %}
+                            {% set slot_label = slot %}
+                            {% set slot_open = true %}
+                        {% endif %}
+                        {% set saved_slot = form_data.appointment_time|default(form_data.slot|default('')) if form_data else '' %}
+                        <div class="slot {% if not slot_open %}unavailable{% endif %}">
+                            <input id="slot-{{ loop.index }}" name="appointment_time" type="radio" value="{{ slot_value }}" {% if (saved_slot|string) == (slot_value|string) %}checked{% endif %} {% if not slot_open %}disabled{% endif %} required>
+                            <label for="slot-{{ loop.index }}">{{ slot_label }}</label>
+                        </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="empty">No time slots are available for the selected date. Please choose another date.</p>
+                {% endif %}
+            </section>
+
+            <section class="section" aria-labelledby="type-title">
+                <h3 class="section-title" id="type-title"><span class="step">3</span> Choose booking type</h3>
+                <div class="type-options">
+                    <div class="type-option {% if normal_full %}disabled{% endif %}">
+                        <input id="type-normal" name="booking_type" type="radio" value="NORMAL" {% if not normal_full %}checked{% endif %} {% if normal_full %}disabled{% endif %} required>
+                        <label for="type-normal">
+                            <span class="type-heading">Regular appointment <span class="tag">Regular queue</span></span>
+                            {% if normal_full %}
+                            <p>Today's regular appointment capacity is full. Please choose another date or, if available, the priority option.</p>
+                            {% else %}
+                            <p>Reserve an available consultation slot in today's regular queue{% if normal_fee|float > 0 %} for ₹{{ normal_fee }}{% endif %}. The clinic will confirm it after mobile OTP verification.</p>
+                            {% endif %}
+                        </label>
+                    </div>
+                    <div class="type-option is-priority {% if not priority_selectable %}disabled{% endif %}">
+                        <input id="type-priority" name="booking_type" type="radio" value="PRIORITY" {% if priority_selectable %}checked{% endif %} {% if not priority_selectable %}disabled{% endif %} required>
+                        <label for="type-priority">
+                            <span class="type-heading">Priority same-day request <span class="tag priority">₹{{ priority_fee }}</span></span>
+                            {% if not normal_full %}
+                            <p>Priority booking opens only after today's regular appointment capacity is full. Please select a regular appointment while slots remain.</p>
+                            {% elif priority_full %}
+                            <p>Priority capacity is full for this date. Please select another available date.</p>
+                            {% else %}
+                            <p>Regular appointments are full. A limited priority consultation request is available for ₹{{ priority_fee }}; payment is verified before confirmation.</p>
+                            {% endif %}
+                        </label>
+                    </div>
+                </div>
+                <p class="medical-note"><strong>For a medical emergency:</strong> do not wait for an online appointment or payment. Please contact local emergency services or go to the nearest emergency hospital immediately.</p>
+            </section>
+
+            <section class="section" aria-labelledby="reason-title">
+                <h3 class="section-title" id="reason-title"><span class="step">4</span> Reason for visit</h3>
+                <div class="fields">
+                    <div class="field full">
+                        <label for="symptoms">Symptoms or reason <span class="optional">(optional)</span></label>
+                        <textarea id="symptoms" name="symptoms" maxlength="1000" placeholder="Briefly describe the reason for your visit">{{ form_data.symptoms|default('') if form_data else '' }}</textarea>
+                    </div>
+                </div>
+            </section>
+
+            <div class="actions">
+                <span class="secure">Your details are used only for appointment booking and verification.</span>
+                <button class="submit" type="submit" {% if not booking_is_enabled %}disabled aria-disabled="true"{% endif %}>Continue to mobile verification</button>
+            </div>
+        </form>
+    </section>
+    <p class="footer">Please arrive a few minutes before your confirmed consultation time.</p>
+</main>
+</body>
+</html>

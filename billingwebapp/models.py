@@ -279,6 +279,175 @@ class Appointment(db.Model):
             return None
 
 
+# ================= LAB =================
+class LabTest(db.Model):
+    """Central, admin-managed catalog used by the lab billing screen."""
+
+    __tablename__ = "lab_test"
+
+    id = db.Column(db.Integer, primary_key=True)
+    test_code = db.Column(db.String(40), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(180), nullable=False, index=True)
+    category = db.Column(db.String(100), index=True)
+    specimen_type = db.Column(db.String(100))
+    preparation = db.Column(db.String(500))
+    default_price = db.Column(db.Float, nullable=False, default=0)
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LabOrder(db.Model):
+    """A lab receipt/order kept independent from medicine invoices and stock."""
+
+    __tablename__ = "lab_order"
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_no = db.Column(db.String(40), unique=True, index=True)
+    patient_id = db.Column(db.Integer, index=True)
+    patient_name = db.Column(db.String(120), nullable=False, index=True)
+    mobile = db.Column(db.String(20), index=True)
+    gender = db.Column(db.String(10))
+    doctor = db.Column(db.String(120))
+
+    subtotal = db.Column(db.Float, default=0)
+    discount = db.Column(db.Float, default=0)
+    total = db.Column(db.Float, default=0)
+    payment_mode = db.Column(db.String(20), default="CASH", index=True)
+    cash_amount = db.Column(db.Numeric(10, 2), default=0)
+    online_amount = db.Column(db.Numeric(10, 2), default=0)
+    is_split_payment = db.Column(db.Boolean, default=False)
+    internal_note = db.Column(db.Text)
+
+    # Phase 1 creates ORDERED records. Sample/report workflow can extend this safely.
+    status = db.Column(db.String(20), default="ORDERED", nullable=False, index=True)
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+class LabOrderItem(db.Model):
+    """Immutable test and price snapshot for a lab order."""
+
+    __tablename__ = "lab_order_item"
+
+    id = db.Column(db.Integer, primary_key=True)
+    lab_order_id = db.Column(db.Integer, nullable=False, index=True)
+    lab_test_id = db.Column(db.Integer, index=True)
+    test_code = db.Column(db.String(40), index=True)
+    test_name = db.Column(db.String(180), nullable=False, index=True)
+    category = db.Column(db.String(100))
+    specimen_type = db.Column(db.String(100))
+    preparation = db.Column(db.String(500))
+    qty = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Float, nullable=False, default=0)
+    amount = db.Column(db.Float, nullable=False, default=0)
+    discount_percent = db.Column(db.Float, default=0)
+    discount_amount = db.Column(db.Float, default=0)
+    net_amount = db.Column(db.Float, default=0)
+
+
+class LabReport(db.Model):
+    """A private, publishable PDF report linked to a lab order."""
+
+    __tablename__ = "lab_report"
+
+    id = db.Column(db.Integer, primary_key=True)
+    lab_order_id = db.Column(db.Integer, nullable=False, index=True)
+    lab_order_item_id = db.Column(db.Integer, index=True)
+    patient_id = db.Column(db.Integer, index=True)
+    patient_name = db.Column(db.String(120), nullable=False, index=True)
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    title = db.Column(db.String(180), nullable=False)
+    report_date = db.Column(db.Date, index=True)
+    patient_note = db.Column(db.String(500))
+    storage_key = db.Column(db.String(255), nullable=False, unique=True)
+    original_filename = db.Column(db.String(255), nullable=False)
+    mime_type = db.Column(db.String(100), nullable=False, default="application/pdf")
+    file_size = db.Column(db.Integer, default=0)
+    file_sha256 = db.Column(db.String(64), index=True)
+    status = db.Column(db.String(20), nullable=False, default="DRAFT", index=True)
+    uploaded_by = db.Column(db.String(50))
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    published_by = db.Column(db.String(50))
+    published_at = db.Column(db.DateTime, index=True)
+    revoked_by = db.Column(db.String(50))
+    revoked_at = db.Column(db.DateTime, index=True)
+    revoke_reason = db.Column(db.String(500))
+    download_count = db.Column(db.Integer, nullable=False, default=0)
+    last_downloaded_at = db.Column(db.DateTime, index=True)
+
+
+class PortalOtpChallenge(db.Model):
+    """Short-lived, hashed OTP challenge for public patient portals."""
+
+    __tablename__ = "portal_otp_challenge"
+
+    id = db.Column(db.Integer, primary_key=True)
+    purpose = db.Column(db.String(30), nullable=False, index=True)
+    context_ref = db.Column(db.String(100), index=True)
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    otp_hash = db.Column(db.String(255), nullable=False)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    max_attempts = db.Column(db.Integer, nullable=False, default=5)
+    sent_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    verified_at = db.Column(db.DateTime, index=True)
+    used_at = db.Column(db.DateTime, index=True)
+    request_ip = db.Column(db.String(80))
+    request_user_agent = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+class AppointmentBookingSettings(db.Model):
+    """Admin-controlled policy for the public QR appointment portal."""
+
+    __tablename__ = "appointment_booking_settings"
+
+    id = db.Column(db.Integer, primary_key=True)
+    booking_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    normal_daily_limit = db.Column(db.Integer, nullable=False, default=15)
+    priority_daily_limit = db.Column(db.Integer, nullable=False, default=2)
+    normal_fee = db.Column(db.Float, nullable=False, default=600)
+    priority_fee = db.Column(db.Float, nullable=False, default=1000)
+    opening_time = db.Column(db.String(5), nullable=False, default="10:00")
+    slot_minutes = db.Column(db.Integer, nullable=False, default=20)
+    max_days_ahead = db.Column(db.Integer, nullable=False, default=14)
+    booking_cutoff_minutes = db.Column(db.Integer, nullable=False, default=30)
+    updated_by = db.Column(db.String(50))
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PublicAppointmentBooking(db.Model):
+    """Public QR booking state kept separate until an appointment is confirmed."""
+
+    __tablename__ = "public_appointment_booking"
+
+    id = db.Column(db.Integer, primary_key=True)
+    booking_ref = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    appointment_id = db.Column(db.Integer, index=True)
+    patient_id = db.Column(db.Integer, index=True)
+    patient_name = db.Column(db.String(120), nullable=False, index=True)
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    gender = db.Column(db.String(10))
+    appointment_date = db.Column(db.Date, nullable=False, index=True)
+    appointment_time = db.Column(db.Time, nullable=False)
+    symptoms = db.Column(db.Text)
+    booking_type = db.Column(db.String(20), nullable=False, default="NORMAL", index=True)
+    amount = db.Column(db.Float, nullable=False, default=0)
+    status = db.Column(db.String(30), nullable=False, default="OTP_PENDING", index=True)
+    otp_verified_at = db.Column(db.DateTime, index=True)
+    reservation_expires_at = db.Column(db.DateTime, index=True)
+    payment_provider = db.Column(db.String(40))
+    payment_order_id = db.Column(db.String(120), index=True)
+    payment_id = db.Column(db.String(120), index=True)
+    payment_verified_at = db.Column(db.DateTime, index=True)
+    source_ip = db.Column(db.String(80))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ================= STOCK HISTORY =================
 class StockHistory(db.Model):
     __tablename__ = "stock_history"

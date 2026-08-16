@@ -1,0 +1,622 @@
+{% extends "base.html" %}
+{% block title %}Lab Billing{% endblock %}
+
+{% block body %}
+<style>
+    .lab-billing-page {
+        --lab-ink: #13233b;
+        --lab-muted: #607089;
+        --lab-line: #dbe4f0;
+        --lab-panel: #ffffff;
+        --lab-bg: #f4f8fc;
+        --lab-primary: #1264c9;
+        --lab-primary-dark: #0b4f9f;
+        --lab-teal: #087f72;
+        --lab-danger: #b42318;
+        max-width: 1440px;
+        margin: 0 auto;
+        color: var(--lab-ink);
+    }
+
+    .lab-billing-page *, .lab-billing-page *::before, .lab-billing-page *::after { box-sizing: border-box; }
+    .lab-billing-page button, .lab-billing-page input, .lab-billing-page select, .lab-billing-page textarea { font: inherit; }
+
+    .lab-page-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 18px;
+    }
+
+    .lab-page-kicker {
+        margin: 0 0 4px;
+        color: var(--lab-primary);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .1em;
+        text-transform: uppercase;
+    }
+
+    .lab-page-title { margin: 0; font-size: clamp(24px, 3vw, 32px); letter-spacing: -.03em; }
+    .lab-page-copy { margin: 7px 0 0; color: var(--lab-muted); font-size: 14px; line-height: 1.5; }
+
+    .lab-shortcut {
+        flex: 0 0 auto;
+        border: 1px solid #bcd3f0;
+        border-radius: 10px;
+        background: #edf6ff;
+        color: #215078;
+        padding: 9px 12px;
+        font-size: 12px;
+        line-height: 1.45;
+    }
+
+    .lab-shortcut kbd {
+        border: 1px solid #adc6e4;
+        border-radius: 4px;
+        background: #fff;
+        color: #17476f;
+        padding: 1px 5px;
+        font-weight: 800;
+    }
+
+    .lab-billing-form { display: grid; gap: 14px; }
+    .lab-card {
+        border: 1px solid var(--lab-line);
+        border-radius: 14px;
+        background: var(--lab-panel);
+        box-shadow: 0 8px 24px rgba(20, 48, 84, .055);
+    }
+
+    .lab-card-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 15px 18px;
+        border-bottom: 1px solid var(--lab-line);
+    }
+
+    .lab-card-title { margin: 0; font-size: 15px; letter-spacing: -.01em; }
+    .lab-card-note { margin: 3px 0 0; color: var(--lab-muted); font-size: 12px; }
+    .lab-card-body { padding: 16px 18px 18px; }
+
+    .lab-patient-grid {
+        display: grid;
+        grid-template-columns: minmax(180px, 1.5fr) minmax(160px, 1fr) minmax(130px, .7fr) minmax(160px, 1fr);
+        gap: 14px;
+    }
+
+    .lab-field { display: grid; gap: 6px; min-width: 0; }
+    .lab-field label, .lab-label {
+        color: #43546e;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+    }
+
+    .lab-field input, .lab-field select, .lab-field textarea, .lab-search-input, .lab-payment-field input, .lab-payment-field select {
+        width: 100%;
+        min-height: 39px;
+        border: 1px solid #cbd8e7;
+        border-radius: 8px;
+        background: #fff;
+        color: var(--lab-ink);
+        outline: none;
+        padding: 9px 10px;
+        transition: border-color .15s ease, box-shadow .15s ease;
+    }
+
+    .lab-field textarea { min-height: 72px; resize: vertical; }
+    .lab-field input:focus, .lab-field select:focus, .lab-field textarea:focus, .lab-search-input:focus, .lab-payment-field input:focus, .lab-payment-field select:focus {
+        border-color: var(--lab-primary);
+        box-shadow: 0 0 0 3px rgba(18, 100, 201, .12);
+    }
+
+    .lab-test-picker {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: end;
+    }
+
+    .lab-picker-help { margin-top: 6px; color: var(--lab-muted); font-size: 12px; }
+    .lab-add-manual {
+        min-height: 39px;
+        border: 1px solid #b8cae0;
+        border-radius: 8px;
+        background: #f5f9fe;
+        color: #1d578d;
+        padding: 0 13px;
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+    }
+
+    .lab-suggestions {
+        position: absolute;
+        z-index: 40;
+        top: calc(100% + 5px);
+        left: 0;
+        right: 0;
+        display: none;
+        overflow: auto;
+        max-height: 280px;
+        border: 1px solid #c8d8ea;
+        border-radius: 10px;
+        background: #fff;
+        box-shadow: 0 16px 34px rgba(17, 51, 91, .17);
+    }
+
+    .lab-suggestions.is-open { display: block; }
+    .lab-suggestion {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        width: 100%;
+        border: 0;
+        border-bottom: 1px solid #edf2f8;
+        background: #fff;
+        color: var(--lab-ink);
+        cursor: pointer;
+        padding: 10px 12px;
+        text-align: left;
+    }
+    .lab-suggestion:last-child { border-bottom: 0; }
+    .lab-suggestion:hover, .lab-suggestion.is-active { background: #edf6ff; }
+    .lab-suggestion-name { display: block; font-size: 13px; font-weight: 800; }
+    .lab-suggestion-meta { display: block; margin-top: 3px; color: var(--lab-muted); font-size: 11px; }
+    .lab-suggestion-price { align-self: center; color: var(--lab-teal); font-size: 13px; font-weight: 800; white-space: nowrap; }
+
+    .lab-lines-wrap { overflow-x: auto; }
+    .lab-lines { width: 100%; min-width: 690px; border-collapse: collapse; }
+    .lab-lines th {
+        border-bottom: 1px solid var(--lab-line);
+        color: #607089;
+        padding: 0 10px 10px;
+        font-size: 10px;
+        letter-spacing: .06em;
+        text-align: left;
+        text-transform: uppercase;
+    }
+    .lab-lines th:last-child, .lab-lines td:last-child { text-align: right; }
+    .lab-lines td { border-bottom: 1px solid #edf2f8; padding: 12px 10px; vertical-align: middle; }
+    .lab-lines tr:last-child td { border-bottom: 0; }
+    .lab-test-name { font-size: 13px; font-weight: 800; }
+    .lab-test-meta { display: block; margin-top: 3px; color: var(--lab-muted); font-size: 11px; }
+    .lab-rate { color: #254d73; font-weight: 700; white-space: nowrap; }
+    .lab-line-total { color: var(--lab-teal); font-size: 13px; font-weight: 800; white-space: nowrap; }
+    .lab-qty { width: 74px; min-height: 34px; border: 1px solid #cbd8e7; border-radius: 7px; padding: 6px 7px; text-align: center; }
+    .lab-remove {
+        border: 0;
+        border-radius: 7px;
+        background: #fff0ee;
+        color: var(--lab-danger);
+        cursor: pointer;
+        padding: 7px 9px;
+        font-size: 12px;
+        font-weight: 800;
+    }
+    .lab-empty-row td { padding: 28px 12px; color: var(--lab-muted); text-align: center !important; }
+    .lab-empty-row strong { display: block; color: var(--lab-ink); font-size: 13px; margin-bottom: 3px; }
+
+    .lab-summary-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, .9fr);
+        overflow: hidden;
+        border: 1px solid #b8d0ea;
+        border-radius: 14px;
+        background: #fff;
+        box-shadow: 0 10px 28px rgba(14, 65, 116, .08);
+    }
+    .lab-payment-block { padding: 17px 18px; }
+    .lab-payment-block + .lab-payment-block { border-left: 1px solid #d6e3f1; background: #f3f8fe; }
+    .lab-payment-title { margin: 0 0 12px; font-size: 14px; }
+    .lab-payment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .lab-payment-field { display: grid; gap: 6px; }
+    .lab-payment-field label { color: #43546e; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .lab-payment-field input[readonly] { background: #edf4fb; color: #315779; font-weight: 800; }
+    .lab-payment-note { margin: 10px 0 0; color: var(--lab-muted); font-size: 11px; line-height: 1.45; }
+    .lab-totals { display: grid; gap: 9px; }
+    .lab-total-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #53657d; font-size: 13px; }
+    .lab-total-row strong { color: var(--lab-ink); font-size: 14px; }
+    .lab-total-row.grand { margin-top: 3px; border-top: 1px dashed #a8bfd8; padding-top: 12px; }
+    .lab-total-row.grand span, .lab-total-row.grand strong { color: var(--lab-primary-dark); font-size: 16px; font-weight: 800; }
+
+    .lab-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+    .lab-button { min-height: 41px; border: 1px solid transparent; border-radius: 8px; padding: 0 16px; font-size: 13px; font-weight: 800; cursor: pointer; }
+    .lab-button.secondary { border-color: #bdccdc; background: #fff; color: #39536f; }
+    .lab-button.primary { border-color: var(--lab-primary-dark); background: var(--lab-primary); color: #fff; box-shadow: 0 6px 14px rgba(18, 100, 201, .22); }
+    .lab-button:hover { filter: brightness(.97); }
+
+    @media (max-width: 980px) {
+        .lab-patient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .lab-summary-card { grid-template-columns: 1fr; }
+        .lab-payment-block + .lab-payment-block { border-top: 1px solid #d6e3f1; border-left: 0; }
+    }
+    @media (max-width: 640px) {
+        .lab-page-head { display: block; }
+        .lab-shortcut { display: inline-block; margin-top: 12px; }
+        .lab-card-head, .lab-card-body, .lab-payment-block { padding-left: 13px; padding-right: 13px; }
+        .lab-patient-grid, .lab-payment-grid { grid-template-columns: 1fr; }
+        .lab-test-picker { grid-template-columns: 1fr; }
+        .lab-add-manual { width: 100%; }
+        .lab-actions { display: grid; grid-template-columns: 1fr; }
+        .lab-button { width: 100%; }
+    }
+</style>
+
+<main class="lab-billing-page">
+    <div class="lab-page-head">
+        <div>
+            <p class="lab-page-kicker">Laboratory services</p>
+            <h1 class="lab-page-title">Create Lab Order</h1>
+            <p class="lab-page-copy">Select the required tests from the approved rate card. Test rates are locked here and verified again when the order is saved.</p>
+        </div>
+        <div class="lab-shortcut"><kbd>Alt</kbd> + <kbd>L</kbd> opens test search<br>Use arrow keys and <kbd>Enter</kbd> to select</div>
+    </div>
+
+    <form method="POST" class="lab-billing-form" id="labBillingForm" novalidate>
+        <section class="lab-card">
+            <div class="lab-card-head">
+                <div>
+                    <h2 class="lab-card-title">Patient details</h2>
+                    <p class="lab-card-note">These details appear on the lab order and help with future lookup.</p>
+                </div>
+            </div>
+            <div class="lab-card-body">
+                <div class="lab-patient-grid">
+                    <div class="lab-field">
+                        <label for="labPatientName">Patient name</label>
+                        <input id="labPatientName" name="customer" type="text" required autocomplete="name" placeholder="Enter patient name" oninput="this.value=this.value.toUpperCase()">
+                    </div>
+                    <div class="lab-field">
+                        <label for="labPatientMobile">Mobile number</label>
+                        <input id="labPatientMobile" name="mobile" type="tel" inputmode="numeric" autocomplete="tel" placeholder="10-digit mobile">
+                    </div>
+                    <div class="lab-field">
+                        <label for="labPatientGender">Gender</label>
+                        <select id="labPatientGender" name="gender">
+                            <option value="">Select</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="lab-field">
+                        <label for="labDoctor">Referred by</label>
+                        <input id="labDoctor" name="doctor" type="text" autocomplete="off" placeholder="Doctor / referral source">
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="lab-card">
+            <div class="lab-card-head">
+                <div>
+                    <h2 class="lab-card-title">Tests requested</h2>
+                    <p class="lab-card-note">Search by test name, test code, category, or specimen type.</p>
+                </div>
+                <span class="lab-card-note" id="labLineCount" aria-live="polite">0 tests selected</span>
+            </div>
+            <div class="lab-card-body">
+                <div class="lab-test-picker">
+                    <div>
+                        <label class="lab-label" for="labTestSearch">Find a lab test</label>
+                        <input id="labTestSearch" class="lab-search-input" type="search" autocomplete="off" placeholder="e.g. CBC, thyroid, blood, LFT" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="labTestSuggestions">
+                        <div id="labTestSuggestions" class="lab-suggestions" role="listbox" aria-label="Lab test suggestions"></div>
+                        <div class="lab-picker-help">Only active tests from Lab Test Master can be added. Rate editing is restricted to the master.</div>
+                    </div>
+                    {% if session.get('role') == 'admin' %}
+                    <a class="lab-add-manual" href="/lab-tests/add" title="Open Lab Test Master to add a missing test">Add missing test</a>
+                    {% else %}
+                    <span class="lab-add-manual" title="Only administrators can change the approved rate card">Ask admin to add a test</span>
+                    {% endif %}
+                </div>
+
+                <div class="lab-lines-wrap" style="margin-top:18px;">
+                    <table class="lab-lines" id="labTestTable">
+                        <thead>
+                            <tr>
+                                <th>Test</th>
+                                <th>Specimen / preparation</th>
+                                <th>Rate</th>
+                                <th>Qty</th>
+                                <th>Amount</th>
+                                <th aria-label="Remove"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="labTestLines">
+                            <tr class="lab-empty-row" id="labEmptyRow">
+                                <td colspan="6"><strong>No tests selected yet</strong>Use the search box above to add the first test.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="lab-summary-card" aria-label="Payment and order summary">
+            <div class="lab-payment-block">
+                <h2 class="lab-payment-title">Payment</h2>
+                <div class="lab-payment-grid">
+                    <div class="lab-payment-field">
+                        <label for="labPaymentMode">Payment mode</label>
+                        <select id="labPaymentMode" name="payment_mode" required>
+                            {% for mode in payment_modes %}
+                            <option value="{{ mode }}" {% if mode == 'CASH' %}selected{% endif %}>
+                                {% if mode == 'ONLINE' %}Online{% elif mode == 'ADJUSTMENT' %}Adjustment{% else %}{{ mode }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="lab-payment-field">
+                        <label for="labSplitCashAmount">Split cash amount</label>
+                        <input id="labSplitCashAmount" name="split_cash_amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00">
+                    </div>
+                    <div class="lab-payment-field">
+                        <label for="labOnlineAmount">Online portion</label>
+                        <input id="labOnlineAmount" type="text" readonly value="₹0.00" aria-live="polite">
+                    </div>
+                    <div class="lab-payment-field">
+                        <label for="labInternalNote">Internal note</label>
+                        <input id="labInternalNote" name="internal_note" type="text" maxlength="400" placeholder="Optional internal note">
+                    </div>
+                </div>
+                <p class="lab-payment-note">For a split payment, select the non-cash mode for the online portion and enter the cash amount. The final payment is recalculated securely on save.</p>
+            </div>
+            <div class="lab-payment-block">
+                <h2 class="lab-payment-title">Order summary</h2>
+                <div class="lab-totals">
+                    <div class="lab-total-row"><span>Tests subtotal</span><strong id="labSubtotal">₹0.00</strong></div>
+                    <div class="lab-total-row"><span>Discount</span><strong>₹0.00</strong></div>
+                    <div class="lab-total-row grand"><span>Payable amount</span><strong id="labGrandTotal">₹0.00</strong></div>
+                </div>
+                <input type="hidden" name="subtotal" id="labSubtotalInput" value="0">
+                <input type="hidden" name="net_total" id="labNetTotalInput" value="0">
+                <input type="hidden" name="rounded_amount" id="labRoundedAmountInput" value="0">
+                <div class="lab-actions">
+                    <button type="reset" class="lab-button secondary">Reset order</button>
+                    <button type="submit" class="lab-button primary">Save lab order</button>
+                </div>
+            </div>
+        </section>
+    </form>
+</main>
+
+<script>
+(() => {
+    const labTests = [
+        {% for test in lab_tests %}
+        {
+            id: {{ test.id|tojson }},
+            testCode: {{ (test.test_code or '')|tojson }},
+            name: {{ (test.name or '')|tojson }},
+            category: {{ (test.category or '')|tojson }},
+            specimenType: {{ (test.specimen_type or '')|tojson }},
+            preparation: {{ (test.preparation or '')|tojson }},
+            defaultPrice: {{ (test.default_price or 0)|float }}
+        }{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+
+    const form = document.getElementById('labBillingForm');
+    const search = document.getElementById('labTestSearch');
+    const suggestions = document.getElementById('labTestSuggestions');
+    const lines = document.getElementById('labTestLines');
+    const emptyRow = document.getElementById('labEmptyRow');
+    const lineCount = document.getElementById('labLineCount');
+    const subtotalEl = document.getElementById('labSubtotal');
+    const grandTotalEl = document.getElementById('labGrandTotal');
+    const subtotalInput = document.getElementById('labSubtotalInput');
+    const netTotalInput = document.getElementById('labNetTotalInput');
+    const roundedAmountInput = document.getElementById('labRoundedAmountInput');
+    const paymentMode = document.getElementById('labPaymentMode');
+    const splitCash = document.getElementById('labSplitCashAmount');
+    const onlineAmount = document.getElementById('labOnlineAmount');
+    let visibleTests = [];
+    let activeSuggestion = -1;
+
+    const money = value => `₹${Number(value || 0).toFixed(2)}`;
+    const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+    const normalise = value => String(value || '').trim().toUpperCase();
+
+    function selectedRows() {
+        return Array.from(lines.querySelectorAll('.lab-line'));
+    }
+
+    function updateSummary() {
+        let subtotal = 0;
+        selectedRows().forEach(row => {
+            const qty = Math.max(1, Math.floor(number(row.querySelector('.lab-qty')?.value)) || 1);
+            const rate = number(row.dataset.rate);
+            const amount = qty * rate;
+            row.querySelector('.lab-qty').value = qty;
+            row.querySelector('.lab-line-total').textContent = money(amount);
+            subtotal += amount;
+        });
+        subtotalEl.textContent = money(subtotal);
+        grandTotalEl.textContent = money(subtotal);
+        subtotalInput.value = subtotal.toFixed(2);
+        netTotalInput.value = subtotal.toFixed(2);
+        roundedAmountInput.value = subtotal.toFixed(2);
+        lineCount.textContent = `${selectedRows().length} ${selectedRows().length === 1 ? 'test' : 'tests'} selected`;
+        updatePaymentPreview(subtotal);
+    }
+
+    function updatePaymentPreview(total) {
+        const rawCash = String(splitCash.value || '').trim();
+        const cash = rawCash === '' ? 0 : number(rawCash);
+        const mode = String(paymentMode.value || 'CASH').toUpperCase();
+        let error = '';
+        if (cash < 0) error = 'Cash amount cannot be negative.';
+        else if (cash > total) error = 'Cash amount cannot exceed the payable amount.';
+        else if (cash > 0 && cash < total && mode === 'CASH') error = 'Select an online payment mode for the split payment.';
+        splitCash.setCustomValidity(error);
+
+        let online = 0;
+        if (rawCash === '' || cash <= 0) online = mode === 'CASH' ? 0 : total;
+        else online = Math.max(total - Math.min(cash, total), 0);
+        onlineAmount.value = money(online);
+        splitCash.max = total.toFixed(2);
+    }
+
+    function closeSuggestions() {
+        suggestions.classList.remove('is-open');
+        search.setAttribute('aria-expanded', 'false');
+        activeSuggestion = -1;
+    }
+
+    function renderSuggestions(testList) {
+        visibleTests = testList;
+        suggestions.innerHTML = '';
+        if (!testList.length) {
+            closeSuggestions();
+            return;
+        }
+        testList.forEach((test, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'lab-suggestion';
+            button.setAttribute('role', 'option');
+            button.innerHTML = `<span><span class="lab-suggestion-name"></span><span class="lab-suggestion-meta"></span></span><span class="lab-suggestion-price"></span>`;
+            button.querySelector('.lab-suggestion-name').textContent = `${test.name}${test.testCode ? ` · ${test.testCode}` : ''}`;
+            button.querySelector('.lab-suggestion-meta').textContent = [test.category, test.specimenType].filter(Boolean).join(' · ') || 'Lab test';
+            button.querySelector('.lab-suggestion-price').textContent = money(test.defaultPrice);
+            button.addEventListener('mousedown', event => event.preventDefault());
+            button.addEventListener('click', () => addTest(test));
+            suggestions.appendChild(button);
+        });
+        suggestions.classList.add('is-open');
+        search.setAttribute('aria-expanded', 'true');
+        setActiveSuggestion(0);
+    }
+
+    function setActiveSuggestion(index) {
+        const buttons = Array.from(suggestions.querySelectorAll('.lab-suggestion'));
+        if (!buttons.length) return;
+        activeSuggestion = (index + buttons.length) % buttons.length;
+        buttons.forEach((button, buttonIndex) => button.classList.toggle('is-active', buttonIndex === activeSuggestion));
+        buttons[activeSuggestion].scrollIntoView({ block: 'nearest' });
+    }
+
+    function addTest(test) {
+        const existing = selectedRows().find(row => String(row.dataset.testId) === String(test.id));
+        if (existing) {
+            const qtyInput = existing.querySelector('.lab-qty');
+            qtyInput.value = Math.max(1, Math.floor(number(qtyInput.value)) || 1) + 1;
+            qtyInput.focus();
+            qtyInput.select();
+            updateSummary();
+        } else {
+            if (emptyRow) emptyRow.hidden = true;
+            const row = document.createElement('tr');
+            row.className = 'lab-line';
+            row.dataset.testId = test.id;
+            row.dataset.rate = number(test.defaultPrice).toFixed(2);
+            const prep = [test.specimenType, test.preparation].filter(Boolean).join(' · ') || 'No special preparation';
+            row.innerHTML = `
+                <td>
+                    <input type="hidden" name="lab_test_id[]" value="${String(test.id)}">
+                    <div class="lab-test-name"></div>
+                    <span class="lab-test-meta"></span>
+                </td>
+                <td><span class="lab-test-meta lab-preparation"></span></td>
+                <td><span class="lab-rate"></span></td>
+                <td><input class="lab-qty" name="qty[]" type="number" min="1" step="1" value="1" inputmode="numeric" aria-label="Quantity for lab test"></td>
+                <td><span class="lab-line-total"></span></td>
+                <td><button type="button" class="lab-remove" aria-label="Remove test">Remove</button></td>`;
+            row.querySelector('.lab-test-name').textContent = test.name;
+            row.querySelector('.lab-test-meta').textContent = [test.testCode, test.category].filter(Boolean).join(' · ');
+            row.querySelector('.lab-preparation').textContent = prep;
+            row.querySelector('.lab-rate').textContent = money(test.defaultPrice);
+            row.querySelector('.lab-remove').addEventListener('click', () => {
+                row.remove();
+                if (!selectedRows().length && emptyRow) emptyRow.hidden = false;
+                updateSummary();
+            });
+            row.querySelector('.lab-qty').addEventListener('input', updateSummary);
+            lines.appendChild(row);
+            updateSummary();
+        }
+        search.value = '';
+        closeSuggestions();
+        search.focus();
+    }
+
+    search.addEventListener('input', () => {
+        const query = normalise(search.value);
+        if (!query) {
+            closeSuggestions();
+            return;
+        }
+        const matches = labTests.filter(test => {
+            const haystack = [test.name, test.testCode, test.category, test.specimenType].map(normalise).join(' ');
+            return haystack.includes(query);
+        }).slice(0, 20);
+        renderSuggestions(matches);
+    });
+
+    search.addEventListener('keydown', event => {
+        const isOpen = suggestions.classList.contains('is-open');
+        if (event.key === 'ArrowDown' && isOpen) {
+            event.preventDefault();
+            setActiveSuggestion(activeSuggestion + 1);
+        } else if (event.key === 'ArrowUp' && isOpen) {
+            event.preventDefault();
+            setActiveSuggestion(activeSuggestion - 1);
+        } else if (event.key === 'Enter' && isOpen && visibleTests[activeSuggestion]) {
+            event.preventDefault();
+            addTest(visibleTests[activeSuggestion]);
+        } else if (event.key === 'Escape') {
+            closeSuggestions();
+        }
+    });
+
+    search.addEventListener('blur', () => window.setTimeout(closeSuggestions, 140));
+    paymentMode.addEventListener('change', () => updateSummary());
+    splitCash.addEventListener('input', () => updateSummary());
+    splitCash.addEventListener('blur', () => {
+        const value = String(splitCash.value || '').trim();
+        if (value) splitCash.value = number(value).toFixed(2);
+        updateSummary();
+    });
+
+    document.addEventListener('keydown', event => {
+        if (event.altKey && event.key.toLowerCase() === 'l') {
+            event.preventDefault();
+            search.focus();
+            search.select();
+        }
+    });
+
+    form.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && event.target !== search && event.target.tagName !== 'BUTTON') event.preventDefault();
+    });
+    form.addEventListener('submit', event => {
+        if (!selectedRows().length) {
+            event.preventDefault();
+            search.focus();
+            search.setCustomValidity('Please add at least one lab test.');
+            search.reportValidity();
+            search.setCustomValidity('');
+            return;
+        }
+        updateSummary();
+    });
+    form.addEventListener('reset', () => {
+        window.setTimeout(() => {
+            selectedRows().forEach(row => row.remove());
+            if (emptyRow) emptyRow.hidden = false;
+            search.value = '';
+            closeSuggestions();
+            updateSummary();
+        }, 0);
+    });
+    updateSummary();
+})();
+</script>
+{% endblock %}

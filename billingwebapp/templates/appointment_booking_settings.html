@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Online Appointment Settings{% endblock %}
+
+{% block body %}
+<style>
+    .booking-settings-page { max-width: 860px; margin: 0 auto; color: #17324d; }
+    .booking-settings-page *, .booking-settings-page *::before, .booking-settings-page *::after { box-sizing: border-box; }
+    .settings-eyebrow { margin: 0 0 5px; color: #1264c9; font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    .settings-title { margin: 0; font-size: clamp(25px, 4vw, 34px); letter-spacing: -.035em; }
+    .settings-copy { margin: 8px 0 20px; color: #60758b; font-size: 14px; line-height: 1.55; }
+    .settings-card { overflow: hidden; border: 1px solid #d8e5f0; border-radius: 17px; background: #fff; box-shadow: 0 12px 28px rgba(23,60,98,.07); }
+    .settings-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 20px; border-bottom: 1px solid #dce8f1; background: #f7fbff; }
+    .settings-status strong { font-size: 14px; }
+    .settings-badge { border-radius: 999px; padding: 5px 9px; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+    .settings-badge.on { background: #daf5ec; color: #08775d; }.settings-badge.off { background: #ffebe8; color: #b42318; }
+    .settings-form { padding: 21px; }.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }.settings-field { display: grid; gap: 6px; }.settings-field.full { grid-column: 1 / -1; }
+    .settings-field label { color: #425b75; font-size: 11px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }.settings-field small { color: #74889b; font-size: 11px; line-height: 1.45; }
+    .settings-field input { width: 100%; min-height: 42px; border: 1px solid #c3d4e3; border-radius: 8px; padding: 9px 10px; color: #1f405d; font: inherit; outline: none; }.settings-field input:focus { border-color: #1264c9; box-shadow: 0 0 0 3px rgba(18,100,201,.12); }
+    .settings-toggle { display: flex; align-items: center; gap: 10px; min-height: 45px; border: 1px solid #c9d9e6; border-radius: 9px; background: #fbfdff; padding: 0 12px; color: #25445e; font-size: 13px; font-weight: 700; }.settings-toggle input { width: 17px; height: 17px; margin: 0; }
+    .settings-actions { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 21px; padding-top: 17px; border-top: 1px solid #e1ebf3; }.settings-button { display: inline-flex; min-height: 41px; align-items: center; justify-content: center; border: 1px solid #0e57aa; border-radius: 8px; background: #1264c9; color: #fff; padding: 0 15px; font-size: 13px; font-weight: 800; cursor: pointer; text-decoration: none; }.settings-link { color: #1d5e9d; font-size: 12px; font-weight: 800; text-decoration: none; }.settings-note { color: #6b8093; font-size: 11px; line-height: 1.45; }
+    @media (max-width: 620px) { .settings-grid { grid-template-columns: 1fr; }.settings-actions { align-items: stretch; flex-direction: column-reverse; }.settings-button { width: 100%; } }
+</style>
+
+<main class="booking-settings-page">
+    <p class="settings-eyebrow">Admin control</p>
+    <h1 class="settings-title">Online appointment settings</h1>
+    <p class="settings-copy">The regular limit defaults to 15 patients. Change these settings only when clinic hours or capacity change; the public page checks the values again on every booking.</p>
+    <section class="settings-card">
+        <div class="settings-status"><strong>Public QR booking</strong><span class="settings-badge {% if settings.booking_enabled %}on{% else %}off{% endif %}">{% if settings.booking_enabled %}Open{% else %}Closed{% endif %}</span></div>
+        <form class="settings-form" method="post">
+            <div class="settings-grid">
+                <div class="settings-field full"><label class="settings-toggle"><input type="checkbox" name="booking_enabled" {% if settings.booking_enabled %}checked{% endif %}> Enable online patient booking</label><small>Turn this off for holidays, technical issues, or walk-in-only days.</small></div>
+                <div class="settings-field"><label for="normalDailyLimit">Regular daily capacity</label><input id="normalDailyLimit" name="normal_daily_limit" type="number" min="1" max="100" required value="{{ settings.normal_daily_limit }}"><small>Default: 15. Existing staff appointments also count toward this limit.</small></div>
+                <div class="settings-field"><label for="priorityDailyLimit">Priority daily capacity</label><input id="priorityDailyLimit" name="priority_daily_limit" type="number" min="0" max="20" required value="{{ settings.priority_daily_limit }}"><small>Shown only after regular capacity is full.</small></div>
+                <div class="settings-field"><label for="normalFee">Regular consultation amount (₹)</label><input id="normalFee" name="normal_fee" type="number" min="0" step="0.01" required value="{{ settings.normal_fee }}"></div>
+                <div class="settings-field"><label for="priorityFee">Priority amount (₹)</label><input id="priorityFee" name="priority_fee" type="number" min="0" step="0.01" required value="{{ settings.priority_fee }}"><small>Default: ₹1,000. Payment must be verified before appointment confirmation.</small></div>
+                <div class="settings-field"><label for="openingTime">First slot</label><input id="openingTime" name="opening_time" type="time" required value="{{ settings.opening_time }}"></div>
+                <div class="settings-field"><label for="slotMinutes">Slot duration (minutes)</label><input id="slotMinutes" name="slot_minutes" type="number" min="5" max="180" required value="{{ settings.slot_minutes }}"></div>
+                <div class="settings-field"><label for="maxDaysAhead">Advance booking days</label><input id="maxDaysAhead" name="max_days_ahead" type="number" min="0" max="90" required value="{{ settings.max_days_ahead }}"></div>
+                <div class="settings-field"><label for="cutoffMinutes">Same-day cutoff (minutes)</label><input id="cutoffMinutes" name="booking_cutoff_minutes" type="number" min="0" max="240" required value="{{ settings.booking_cutoff_minutes }}"></div>
+            </div>
+            <div class="settings-actions"><a class="settings-link" href="/appointment-booking/priority-requests">{{ pending_priority_count }} priority payment request(s) awaiting verification →</a><button class="settings-button" type="submit">Save booking settings</button></div>
+        </form>
+    </section>
+    <p class="settings-note">For a public QR, set <code>PUBLIC_BOOKING_BASE_URL</code> to your clinic’s HTTPS domain, then open “Appointment QR” from the sidebar.</p>
+</main>
+{% endblock %}

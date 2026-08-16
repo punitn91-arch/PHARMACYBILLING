@@ -1,24 +1,30 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, g
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, send_file, g, abort
 from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
 import json
 import math
 import re
-import webbrowser
-import threading
 import os
 import secrets
-import subprocess
-import sys
+import hashlib
+from io import BytesIO
 from decimal import Decimal, ROUND_HALF_UP
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
     ZoneInfo = None
 from werkzeug.utils import secure_filename
+from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import text, or_, and_, inspect, cast, String
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from itsdangerous import BadSignature, URLSafeSerializer
+
+try:
+    from .local_launch import prepare_local_server, schedule_browser_open
+except ImportError:  # pragma: no cover - direct `python app.py` startup
+    from local_launch import prepare_local_server, schedule_browser_open
+
 try:
     from flask_migrate import Migrate
 except Exception:  # pragma: no cover
@@ -38,6 +44,13 @@ try:
         PendingBillStore,
         Patient,
         Appointment,
+        LabTest,
+        LabOrder,
+        LabOrderItem,
+        LabReport,
+        PortalOtpChallenge,
+        AppointmentBookingSettings,
+        PublicAppointmentBooking,
         Vendor,
         VendorPurchase,
         VendorPurchaseItem,
@@ -64,6 +77,7 @@ try:
         restore_backup_snapshot,
     )
     from .services.monitoring import configure_monitoring
+    from .services.public_portal import mask_mobile, send_portal_otp
     from .services.validation import (
         ACCESS_PROFILE_PRESETS,
         USER_PERMISSION_FIELDS,
@@ -88,6 +102,13 @@ except ImportError:  # pragma: no cover - script/local fallback
         PendingBillStore,
         Patient,
         Appointment,
+        LabTest,
+        LabOrder,
+        LabOrderItem,
+        LabReport,
+        PortalOtpChallenge,
+        AppointmentBookingSettings,
+        PublicAppointmentBooking,
         Vendor,
         VendorPurchase,
         VendorPurchaseItem,
@@ -114,6 +135,7 @@ except ImportError:  # pragma: no cover - script/local fallback
         restore_backup_snapshot,
     )
     from services.monitoring import configure_monitoring
+    from services.public_portal import mask_mobile, send_portal_otp
     from services.validation import (
         ACCESS_PROFILE_PRESETS,
         USER_PERMISSION_FIELDS,
@@ -125,23 +147,6 @@ except ImportError:  # pragma: no cover - script/local fallback
         validate_user_form,
     )
 
-def open_browser():
-    launch_url = os.environ.get("APP_LAUNCH_URL", "http://127.0.0.1:5000").strip() or "http://127.0.0.1:5000"
-    try:
-        if sys.platform == "darwin":
-            subprocess.Popen(
-                ["open", launch_url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return
-        webbrowser.open_new(launch_url)
-    except Exception:
-        try:
-            webbrowser.open_new(launch_url)
-        except Exception:
-            pass
-
 IS_PROD = bool(
     os.environ.get("RAILWAY_ENVIRONMENT")
     or os.environ.get("RAILWAY_PUBLIC_DOMAIN")
@@ -151,14 +156,6 @@ IS_PROD = bool(
     or (os.environ.get("VERCEL_ENV") or "").lower() == "production"
 )
 IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-
-if (
-    os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-    and not IS_PROD
-    and str(os.environ.get("AUTO_OPEN_BROWSER", "1")).strip().lower() not in {"0", "false", "no", "off"}
-):
-    threading.Timer(1, open_browser).start()
-
 
 APP_TIMEZONE = (os.environ.get("APP_TIMEZONE") or "Asia/Kolkata").strip() or "Asia/Kolkata"
 APP_ENV = (os.environ.get("APP_ENV") or ("production" if IS_PROD else "local")).strip().lower() or "local"
@@ -201,6 +198,24 @@ app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
 app.config["JSON_SORT_KEYS"] = False
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=session_absolute_hours)
 app.config["APP_ENV"] = APP_ENV
+
+INVOICE_SHARE_SALT = "invoice-share-link"
+
+
+def invoice_share_serializer():
+    return URLSafeSerializer(app.secret_key, salt=INVOICE_SHARE_SALT)
+
+
+def build_invoice_share_token(invoice_id):
+    return invoice_share_serializer().dumps({"invoice_id": int(invoice_id)})
+
+
+def read_invoice_share_token(token):
+    try:
+        payload = invoice_share_serializer().loads(token or "")
+    except BadSignature:
+        return 0
+    return to_int_safe(payload.get("invoice_id"), 0) if isinstance(payload, dict) else 0
 
 ASYNC_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
@@ -257,17 +272,27 @@ def resolve_upload_dir(*parts):
 
 UPLOAD_FOLDER = resolve_upload_dir("vendors")
 VENDOR_BILL_UPLOAD_FOLDER = resolve_upload_dir("vendor_bills")
+PRIVATE_STORAGE_ROOT = os.path.abspath(
+    (os.environ.get("APP_PRIVATE_STORAGE_ROOT") or os.path.join(app.instance_path, "private")).strip()
+)
+LAB_REPORT_UPLOAD_FOLDER = ensure_writable_dir(
+    os.path.join(PRIVATE_STORAGE_ROOT, "lab_reports"),
+    os.path.join(TMP_BASE_DIR, "private_lab_reports"),
+)
 BACKUP_ROOT = os.path.abspath(
     (os.environ.get("APP_BACKUP_ROOT") or os.path.join(app.instance_path, "backups")).strip()
 )
 app.config["APP_BASE_DIR"] = APP_BASE_DIR
 app.config["APP_STORAGE_ROOT"] = UPLOAD_STORAGE_ROOT
+app.config["APP_PRIVATE_STORAGE_ROOT"] = PRIVATE_STORAGE_ROOT
 app.config["BACKUP_ROOT"] = BACKUP_ROOT
 app.config["INFRA_UPLOAD_DIRECTORIES"] = {
     "vendor_uploads": UPLOAD_FOLDER,
     "vendor_bill_uploads": VENDOR_BILL_UPLOAD_FOLDER,
+    "private_lab_reports": LAB_REPORT_UPLOAD_FOLDER,
 }
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
+LAB_REPORT_EXTENSIONS = {"pdf"}
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -296,6 +321,61 @@ def delete_uploaded_file(upload_dir, filename):
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
+    except OSError:
+        pass
+
+
+def save_private_lab_report_file(file_storage, order_id):
+    """Persist a report PDF outside the public static directory."""
+    if not file_storage or not (file_storage.filename or "").strip():
+        raise ValueError("Please choose a PDF report file.")
+    original_name = secure_filename(file_storage.filename)
+    extension = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
+    if extension not in LAB_REPORT_EXTENSIONS:
+        raise ValueError("Only PDF lab reports are allowed.")
+    try:
+        header = file_storage.stream.read(5)
+        file_storage.stream.seek(0)
+    except Exception as exc:
+        raise ValueError("Unable to read the uploaded report file.") from exc
+    if header != b"%PDF-":
+        raise ValueError("The uploaded file is not a valid PDF report.")
+
+    safe_root = secure_filename(os.path.splitext(original_name)[0])[:80] or "report"
+    stored_name = (
+        f"labreport_{int(order_id)}_{clinic_now().strftime('%Y%m%d%H%M%S')}_"
+        f"{secrets.token_hex(8)}_{safe_root}.pdf"
+    )
+    target_path = os.path.join(LAB_REPORT_UPLOAD_FOLDER, stored_name)
+    file_storage.save(target_path)
+    digest = hashlib.sha256()
+    file_size = 0
+    try:
+        with open(target_path, "rb") as report_file:
+            for chunk in iter(lambda: report_file.read(1024 * 1024), b""):
+                file_size += len(chunk)
+                digest.update(chunk)
+    except Exception:
+        try:
+            os.remove(target_path)
+        except OSError:
+            pass
+        raise
+    return {
+        "storage_key": stored_name,
+        "original_filename": original_name,
+        "file_size": file_size,
+        "file_sha256": digest.hexdigest(),
+        "mime_type": "application/pdf",
+    }
+
+
+def delete_private_lab_report_file(storage_key):
+    cleaned_name = secure_filename(storage_key or "")
+    if not cleaned_name:
+        return
+    try:
+        os.remove(os.path.join(LAB_REPORT_UPLOAD_FOLDER, cleaned_name))
     except OSError:
         pass
 
@@ -784,6 +864,200 @@ def to_float_safe(val, default=0.0):
         return default
 
 
+PUBLIC_PORTAL_OTP_TTL_MINUTES = 5
+PUBLIC_PORTAL_SESSION_TTL_MINUTES = 15
+PUBLIC_PORTAL_OTP_RESEND_SECONDS = 60
+PUBLIC_PORTAL_OTP_WINDOW_MINUTES = 15
+PUBLIC_PORTAL_OTP_MAX_SENDS = 3
+PUBLIC_PORTAL_OTP_MAX_ATTEMPTS = 5
+
+
+def portal_request_ip():
+    forwarded = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    return (forwarded or request.remote_addr or "")[:80]
+
+
+def create_portal_otp_challenge(*, mobile, purpose, context_ref=None):
+    normalized_mobile = normalize_portal_mobile(mobile)
+    normalized_purpose = (purpose or "").strip().upper()[:30]
+    context_value = (context_ref or "").strip()[:100] or None
+    if len(normalized_mobile) < 10 or not normalized_purpose:
+        return None, "", "Please enter a valid mobile number."
+
+    now = datetime.utcnow()
+    query = PortalOtpChallenge.query.filter_by(
+        mobile=normalized_mobile,
+        purpose=normalized_purpose,
+    )
+    if context_value:
+        query = query.filter(PortalOtpChallenge.context_ref == context_value)
+    else:
+        query = query.filter(PortalOtpChallenge.context_ref.is_(None))
+    latest = query.order_by(PortalOtpChallenge.sent_at.desc(), PortalOtpChallenge.id.desc()).first()
+    if latest and latest.sent_at and (now - latest.sent_at).total_seconds() < PUBLIC_PORTAL_OTP_RESEND_SECONDS:
+        return None, "", "Please wait one minute before requesting another OTP."
+
+    window_start = now - timedelta(minutes=PUBLIC_PORTAL_OTP_WINDOW_MINUTES)
+    sent_count = PortalOtpChallenge.query.filter(
+        PortalOtpChallenge.mobile == normalized_mobile,
+        PortalOtpChallenge.sent_at >= window_start,
+    ).count()
+    if sent_count >= PUBLIC_PORTAL_OTP_MAX_SENDS:
+        return None, "", "Too many OTP requests. Please try again after 15 minutes."
+
+    otp_code = f"{secrets.randbelow(900000) + 100000:06d}"
+    challenge = PortalOtpChallenge(
+        purpose=normalized_purpose,
+        context_ref=context_value,
+        mobile=normalized_mobile,
+        otp_hash=generate_password_hash(otp_code, method="pbkdf2:sha256"),
+        attempt_count=0,
+        max_attempts=PUBLIC_PORTAL_OTP_MAX_ATTEMPTS,
+        sent_at=now,
+        expires_at=now + timedelta(minutes=PUBLIC_PORTAL_OTP_TTL_MINUTES),
+        request_ip=portal_request_ip(),
+        request_user_agent=(request.headers.get("User-Agent") or "")[:255],
+    )
+    try:
+        db.session.add(challenge)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to create public portal OTP challenge")
+        return None, "", "Unable to start verification right now. Please try again."
+
+    sent, development_code, delivery_error = send_portal_otp(
+        mobile=normalized_mobile,
+        code=otp_code,
+        purpose=normalized_purpose.replace("_", " ").title(),
+        is_production=IS_PROD,
+        testing=bool(app.config.get("TESTING")),
+    )
+    if sent:
+        return challenge, development_code, ""
+
+    try:
+        db.session.delete(challenge)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return None, "", delivery_error or "Unable to send the verification code right now."
+
+
+def verify_portal_otp_challenge(*, mobile, purpose, otp_code, context_ref=None):
+    normalized_mobile = normalize_portal_mobile(mobile)
+    normalized_purpose = (purpose or "").strip().upper()[:30]
+    context_value = (context_ref or "").strip()[:100] or None
+    submitted_code = (otp_code or "").strip()
+    if not normalized_mobile or not normalized_purpose or len(submitted_code) != 6 or not submitted_code.isdigit():
+        return None, "Enter the six-digit verification code."
+
+    query = PortalOtpChallenge.query.filter_by(
+        mobile=normalized_mobile,
+        purpose=normalized_purpose,
+    )
+    if context_value:
+        query = query.filter(PortalOtpChallenge.context_ref == context_value)
+    else:
+        query = query.filter(PortalOtpChallenge.context_ref.is_(None))
+    challenge = query.order_by(PortalOtpChallenge.sent_at.desc(), PortalOtpChallenge.id.desc()).first()
+    now = datetime.utcnow()
+    if not challenge or not challenge.expires_at or challenge.expires_at < now:
+        return None, "This verification code has expired. Please request a new OTP."
+    if challenge.verified_at or challenge.attempt_count >= challenge.max_attempts:
+        return None, "This verification code is no longer valid. Please request a new OTP."
+
+    challenge.attempt_count += 1
+    try:
+        valid = check_password_hash(challenge.otp_hash, submitted_code)
+    except (ValueError, AttributeError):
+        valid = False
+    if not valid:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        remaining = max(0, challenge.max_attempts - challenge.attempt_count)
+        return None, "Invalid verification code." if remaining else "Too many invalid attempts. Please request a new OTP."
+
+    challenge.verified_at = now
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return None, "Unable to complete verification right now. Please try again."
+    return challenge, ""
+
+
+def set_public_portal_session(session_key, mobile):
+    session[session_key] = {
+        "mobile": normalize_portal_mobile(mobile),
+        "expires_at": (datetime.utcnow() + timedelta(minutes=PUBLIC_PORTAL_SESSION_TTL_MINUTES)).timestamp(),
+    }
+    session.modified = True
+
+
+def get_public_portal_session_mobile(session_key):
+    payload = session.get(session_key)
+    if not isinstance(payload, dict):
+        return ""
+    mobile = normalize_portal_mobile(payload.get("mobile"))
+    expires_at = to_float_safe(payload.get("expires_at"), 0)
+    if not mobile or expires_at <= datetime.utcnow().timestamp():
+        session.pop(session_key, None)
+        session.modified = True
+        return ""
+    return mobile
+
+
+def build_lab_report_audit_snapshot(report):
+    """Return the non-file metadata needed to audit a lab-report action."""
+    if not report:
+        return None
+    return {
+        "id": report.id,
+        "lab_order_id": report.lab_order_id,
+        "patient_id": report.patient_id,
+        "patient_name": (report.patient_name or "").strip(),
+        "mobile": mask_mobile(report.mobile),
+        "title": (report.title or "").strip(),
+        "report_date": report.report_date.isoformat() if report.report_date else None,
+        "original_filename": (report.original_filename or "").strip(),
+        "file_size": to_int_safe(report.file_size, 0),
+        "file_sha256": (report.file_sha256 or "").strip(),
+        "status": (report.status or "").strip().upper(),
+        "uploaded_by": (report.uploaded_by or "").strip(),
+        "published_by": (report.published_by or "").strip(),
+        "revoked_by": (report.revoked_by or "").strip(),
+        "download_count": to_int_safe(report.download_count, 0),
+    }
+
+
+def normalize_public_report_mobile(value):
+    """Canonical Indian mobile number used only by the public report portal."""
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    return digits if len(digits) == 10 else ""
+
+
+def private_lab_report_path(storage_key):
+    """Resolve a report key only when it is a safe filename inside private storage."""
+    cleaned_key = secure_filename(storage_key or "")
+    if not cleaned_key or cleaned_key != (storage_key or ""):
+        return "", ""
+    return cleaned_key, os.path.join(LAB_REPORT_UPLOAD_FOLDER, cleaned_key)
+
+
+def lab_report_download_name(report):
+    filename = secure_filename((report.original_filename or "").strip())
+    if not filename:
+        filename = f"lab-report-{report.id}.pdf"
+    if not filename.lower().endswith(".pdf"):
+        filename = f"{filename}.pdf"
+    return filename
+
+
 POS_PAYMENT_MODES = ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "ADJUSTMENT", "CREDIT")
 INVOICE_PRINT_PROFILE_CUTOVER = date(2026, 7, 1)
 OPERATIONS_FRESH_START_DATE = INVOICE_PRINT_PROFILE_CUTOVER
@@ -1132,6 +1406,57 @@ def build_invoice_payment_breakdown(invoice, rounded_amount=None):
         "is_split_payment": is_split,
         "payment_mode": normalized_mode,
         "payment_type": payment_type,
+        "display_mode": display_mode,
+    }
+
+
+def build_return_payment_breakdown(return_bill, refund_amount=None):
+    normalized_mode = normalize_payment_mode(getattr(return_bill, "payment_mode", "CASH"))
+    refundable_amount = max(
+        round_currency(
+            refund_amount
+            if refund_amount is not None
+            else getattr(return_bill, "total_refund", 0)
+        ),
+        0.0,
+    )
+    stored_cash_amount = round_currency(getattr(return_bill, "cash_refund_amount", 0))
+    stored_online_amount = round_currency(getattr(return_bill, "online_refund_amount", 0))
+    stored_is_split = bool(getattr(return_bill, "is_split_refund", False))
+    has_explicit_breakdown = stored_is_split or stored_cash_amount > 0 or stored_online_amount > 0
+
+    if not has_explicit_breakdown:
+        if is_cash_payment_mode(normalized_mode):
+            stored_cash_amount = refundable_amount
+            stored_online_amount = 0.0
+        elif is_non_collection_payment_mode(normalized_mode):
+            stored_cash_amount = 0.0
+            stored_online_amount = 0.0
+        else:
+            stored_cash_amount = 0.0
+            stored_online_amount = refundable_amount
+
+    is_split = stored_cash_amount > 0 and stored_online_amount > 0
+    if is_split:
+        refund_type = "Split Refund"
+        display_mode = f"Cash + {normalized_mode}"
+    elif stored_cash_amount > 0 and stored_online_amount <= 0:
+        refund_type = "Cash Refund"
+        display_mode = "CASH"
+    elif stored_online_amount > 0 and stored_cash_amount <= 0:
+        refund_type = f"{normalized_mode} Refund"
+        display_mode = normalized_mode
+    else:
+        refund_type = "Adjustment Refund" if is_non_collection_payment_mode(normalized_mode) else normalized_mode
+        display_mode = normalized_mode
+
+    return {
+        "refund_amount": refundable_amount,
+        "cash_refund_amount": round_currency(stored_cash_amount),
+        "online_refund_amount": round_currency(stored_online_amount),
+        "is_split_refund": is_split,
+        "payment_mode": normalized_mode,
+        "refund_type": refund_type,
         "display_mode": display_mode,
     }
 
@@ -1905,15 +2230,20 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
     }, None
 
 
-def summarize_invoice_collection(invoices):
+def summarize_invoice_collection(invoices, returns=None):
     summary = {
         "invoice_count": 0,
         "sale_total": 0.0,
+        "refund_total": 0.0,
+        "net_sale_total": 0.0,
         "cash_collection": 0.0,
         "online_collection": 0.0,
+        "cash_refund_total": 0.0,
+        "online_refund_total": 0.0,
         "split_payment_count": 0,
         "cash_invoice_count": 0,
         "online_invoice_count": 0,
+        "return_count": 0,
     }
 
     for invoice in invoices or []:
@@ -1929,9 +2259,24 @@ def summarize_invoice_collection(invoices):
         if breakdown["is_split_payment"]:
             summary["split_payment_count"] += 1
 
+    for return_bill in returns or []:
+        if bool(getattr(return_bill, "is_cancelled", False)):
+            continue
+        breakdown = build_return_payment_breakdown(return_bill)
+        summary["return_count"] += 1
+        summary["refund_total"] += breakdown["refund_amount"]
+        summary["cash_refund_total"] += breakdown["cash_refund_amount"]
+        summary["online_refund_total"] += breakdown["online_refund_amount"]
+        summary["cash_collection"] -= breakdown["cash_refund_amount"]
+        summary["online_collection"] -= breakdown["online_refund_amount"]
+
     summary["sale_total"] = round_currency(summary["sale_total"])
+    summary["refund_total"] = round_currency(summary["refund_total"])
+    summary["net_sale_total"] = round_currency(summary["sale_total"] - summary["refund_total"])
     summary["cash_collection"] = round_currency(summary["cash_collection"])
     summary["online_collection"] = round_currency(summary["online_collection"])
+    summary["cash_refund_total"] = round_currency(summary["cash_refund_total"])
+    summary["online_refund_total"] = round_currency(summary["online_refund_total"])
     return summary
 
 
@@ -3398,6 +3743,100 @@ def build_invoice_audit_snapshot(inv):
         "internal_note": (getattr(inv, "internal_note", "") or "").strip(),
         "created_by": (inv.created_by or "").strip()
     }
+
+
+def build_lab_test_audit_snapshot(lab_test):
+    if not lab_test:
+        return None
+    return {
+        "id": lab_test.id,
+        "test_code": (lab_test.test_code or "").strip().upper(),
+        "name": (lab_test.name or "").strip(),
+        "category": (lab_test.category or "").strip(),
+        "specimen_type": (lab_test.specimen_type or "").strip(),
+        "preparation": (lab_test.preparation or "").strip(),
+        "default_price": round(to_float_safe(lab_test.default_price, 0), 2),
+        "is_active": bool(lab_test.is_active),
+    }
+
+
+def build_lab_order_audit_snapshot(order):
+    if not order:
+        return None
+    payment_breakdown = build_invoice_payment_breakdown(order)
+    return {
+        "id": order.id,
+        "order_no": (order.order_no or "").strip(),
+        "patient_id": order.patient_id,
+        "patient_name": (order.patient_name or "").strip(),
+        "mobile": (order.mobile or "").strip(),
+        "doctor": (order.doctor or "").strip(),
+        "status": (order.status or "").strip().upper(),
+        "subtotal": round(to_float_safe(order.subtotal, 0), 2),
+        "discount": round(to_float_safe(order.discount, 0), 2),
+        "total": round(to_float_safe(order.total, 0), 2),
+        "payment_mode": payment_breakdown["payment_mode"],
+        "cash_amount": payment_breakdown["cash_amount"],
+        "online_amount": payment_breakdown["online_amount"],
+        "is_split_payment": payment_breakdown["is_split_payment"],
+        "created_by": (order.created_by or "").strip(),
+    }
+
+
+def normalize_lab_test_code(value):
+    normalized = re.sub(r"[^A-Z0-9_-]+", "-", (value or "").strip().upper())
+    return normalized.strip("-_")[:40]
+
+
+def assign_lab_order_number(order):
+    if not order:
+        return ""
+    if not order.id:
+        db.session.flush()
+    if not order.order_no:
+        order.order_no = f"LAB-{order.id:06d}"
+    return order.order_no
+
+
+def build_lab_order_line_items(form_data):
+    raw_ids = form_data.getlist("lab_test_id[]") or form_data.getlist("lab_test_id")
+    raw_qtys = form_data.getlist("qty[]") or form_data.getlist("qty")
+    if not raw_ids:
+        return [], "Please add at least one lab test."
+    if len(raw_qtys) < len(raw_ids):
+        return [], "Lab test quantity is incomplete. Please review the selected tests."
+
+    requested_qty = {}
+    for idx, raw_id in enumerate(raw_ids):
+        test_id = to_int_safe(raw_id, 0)
+        qty = to_int_safe(raw_qtys[idx] if idx < len(raw_qtys) else 0, 0)
+        if test_id <= 0 or qty <= 0:
+            return [], "Please select valid lab tests with a quantity greater than zero."
+        if qty > 25:
+            return [], "A lab test quantity cannot be more than 25 in one order."
+        requested_qty[test_id] = requested_qty.get(test_id, 0) + qty
+
+    if not requested_qty:
+        return [], "Please add at least one lab test."
+    if any(qty > 25 for qty in requested_qty.values()):
+        return [], "A lab test quantity cannot be more than 25 in one order."
+
+    selected_tests = LabTest.query.filter(LabTest.id.in_(list(requested_qty))).all()
+    tests_by_id = {test.id: test for test in selected_tests}
+    line_items = []
+    for test_id, qty in requested_qty.items():
+        lab_test = tests_by_id.get(test_id)
+        if not lab_test or not lab_test.is_active:
+            return [], "One or more selected lab tests are unavailable. Please refresh and try again."
+        unit_price = round(max(to_float_safe(lab_test.default_price, 0), 0), 2)
+        amount = round(unit_price * qty, 2)
+        line_items.append({
+            "lab_test": lab_test,
+            "qty": qty,
+            "unit_price": unit_price,
+            "amount": amount,
+        })
+    return line_items, None
 
 def build_appointment_audit_snapshot(appt):
     if not appt:
@@ -5387,6 +5826,30 @@ def invoice_access_required(f):
         return f(*args, **kwargs)
     return w
 
+
+def lab_catalog_access_required(f):
+    """Phase 1 keeps price-master ownership with administrators only."""
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = active_user_by_id(session.get("user_id"))
+        if not user or user.role != "admin":
+            flash("Only an administrator can manage the Lab Test Master.", "danger")
+            return redirect("/lab-billing")
+        return f(*args, **kwargs)
+    return w
+
+
+def public_appointment_admin_required(f):
+    """Keep public-booking policy and payment approval with a true admin."""
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = active_user_by_id(session.get("user_id"))
+        if not user or user.role != "admin":
+            flash("Only an administrator can manage public appointment booking.", "danger")
+            return redirect("/appointments")
+        return f(*args, **kwargs)
+    return w
+
 def inventory_access_required(f):
     @wraps(f)
     def w(*args, **kwargs):
@@ -5501,8 +5964,13 @@ def index():
         Invoice.created_at >= today_start,
         Invoice.created_at < tomorrow_start
     ).all()
+    today_returns = Return.query.filter(
+        Return.created_at >= today_start,
+        Return.created_at < tomorrow_start,
+        falsey_or_null_column_expr(Return.is_cancelled)
+    ).all()
 
-    today_collection_summary = summarize_invoice_collection(today_invoices)
+    today_collection_summary = summarize_invoice_collection(today_invoices, today_returns)
     cash_today_sale = 0
     online_today_sale = 0
     cash_bills_today = 0
@@ -5513,7 +5981,7 @@ def index():
     cash_bills_today = today_collection_summary["cash_invoice_count"]
     online_bills_today = today_collection_summary["online_invoice_count"]
 
-    today_sale = round(sum(round_currency(invoice.total) for invoice in today_invoices), 2)
+    today_sale = today_collection_summary["net_sale_total"]
     bills_today = len(today_invoices)
 
     # ---------- LOW STOCK ----------
@@ -6508,6 +6976,765 @@ def billing():
     )
 
 
+# ---------------- LAB TEST MASTER & BILLING ----------------
+@app.route("/lab-tests")
+@login_required
+@lab_catalog_access_required
+def lab_tests():
+    search_query = (request.args.get("q") or "").strip()
+    query = LabTest.query
+    if search_query:
+        like = f"%{search_query}%"
+        query = query.filter(or_(
+            LabTest.test_code.ilike(like),
+            LabTest.name.ilike(like),
+            LabTest.category.ilike(like),
+            LabTest.specimen_type.ilike(like),
+        ))
+    tests = query.order_by(LabTest.is_active.desc(), LabTest.name.asc(), LabTest.test_code.asc()).all()
+    return render_template("lab_tests.html", tests=tests, search_query=search_query)
+
+
+def validate_lab_test_master_form(form_data):
+    test_code = normalize_lab_test_code(form_data.get("test_code"))
+    name = (form_data.get("name") or "").strip()
+    category = (form_data.get("category") or "").strip()
+    specimen_type = (form_data.get("specimen_type") or "").strip()
+    preparation = (form_data.get("preparation") or "").strip()
+    default_price, price_error = parse_optional_money(form_data.get("default_price"))
+
+    if not test_code:
+        return None, "Test code is required."
+    if not name:
+        return None, "Test name is required."
+    if default_price is None or price_error:
+        return None, price_error or "A valid test price is required."
+    if default_price > 1000000:
+        return None, "Test price is too high. Please review it."
+    return {
+        "test_code": test_code,
+        "name": name,
+        "category": category,
+        "specimen_type": specimen_type,
+        "preparation": preparation,
+        "default_price": default_price,
+    }, None
+
+
+@app.route("/lab-tests/add", methods=["GET", "POST"])
+@login_required
+@lab_catalog_access_required
+def add_lab_test():
+    if request.method == "POST":
+        payload, error = validate_lab_test_master_form(request.form)
+        if error:
+            flash(error, "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=None,
+                form_title="Add Lab Test",
+                submit_label="Save Lab Test",
+            ), 400
+
+        duplicate = LabTest.query.filter_by(test_code=payload["test_code"]).first()
+        if duplicate:
+            flash("This test code already exists. Use a unique code.", "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=None,
+                form_title="Add Lab Test",
+                submit_label="Save Lab Test",
+            ), 400
+
+        lab_test = LabTest(
+            **payload,
+            is_active=True,
+            created_by=session.get("username"),
+            updated_by=session.get("username"),
+        )
+        try:
+            db.session.add(lab_test)
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("This test code already exists. Use a unique code.", "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=None,
+                form_title="Add Lab Test",
+                submit_label="Save Lab Test",
+            ), 400
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to create lab test")
+            flash("Unable to save the lab test. Please try again.", "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=None,
+                form_title="Add Lab Test",
+                submit_label="Save Lab Test",
+            ), 500
+
+        record_audit_event(
+            action="Created lab test",
+            entity_type="LAB_TEST",
+            entity_id=lab_test.id,
+            ref_code=lab_test.test_code,
+            before=None,
+            after=build_lab_test_audit_snapshot(lab_test),
+        )
+        flash("Lab test added to the price master.", "success")
+        return redirect("/lab-tests")
+
+    return render_template(
+        "lab_test_form.html",
+        test=None,
+        form_title="Add Lab Test",
+        submit_label="Save Lab Test",
+    )
+
+
+@app.route("/lab-tests/<int:id>/edit", methods=["GET", "POST"])
+@login_required
+@lab_catalog_access_required
+def edit_lab_test(id):
+    lab_test = LabTest.query.get_or_404(id)
+    if request.method == "POST":
+        before_snapshot = build_lab_test_audit_snapshot(lab_test)
+        payload, error = validate_lab_test_master_form(request.form)
+        if error:
+            flash(error, "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=lab_test,
+                form_title="Edit Lab Test",
+                submit_label="Save Changes",
+            ), 400
+
+        duplicate = LabTest.query.filter(
+            LabTest.test_code == payload["test_code"],
+            LabTest.id != lab_test.id,
+        ).first()
+        if duplicate:
+            flash("This test code already exists. Use a unique code.", "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=lab_test,
+                form_title="Edit Lab Test",
+                submit_label="Save Changes",
+            ), 400
+
+        for field_name, field_value in payload.items():
+            setattr(lab_test, field_name, field_value)
+        lab_test.updated_by = session.get("username")
+        if "is_active" in request.form:
+            lab_test.is_active = bool(request.form.get("is_active"))
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("This test code already exists. Use a unique code.", "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=lab_test,
+                form_title="Edit Lab Test",
+                submit_label="Save Changes",
+            ), 400
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to update lab test %s", id)
+            flash("Unable to update the lab test. Please try again.", "danger")
+            return render_template(
+                "lab_test_form.html",
+                test=lab_test,
+                form_title="Edit Lab Test",
+                submit_label="Save Changes",
+            ), 500
+
+        record_audit_event(
+            action="Updated lab test",
+            entity_type="LAB_TEST",
+            entity_id=lab_test.id,
+            ref_code=lab_test.test_code,
+            before=before_snapshot,
+            after=build_lab_test_audit_snapshot(lab_test),
+        )
+        flash("Lab test updated. New price applies only to new lab orders.", "success")
+        return redirect("/lab-tests")
+
+    return render_template(
+        "lab_test_form.html",
+        test=lab_test,
+        form_title="Edit Lab Test",
+        submit_label="Save Changes",
+    )
+
+
+@app.route("/lab-tests/<int:id>/deactivate", methods=["POST"])
+@login_required
+@lab_catalog_access_required
+def deactivate_lab_test(id):
+    lab_test = LabTest.query.get_or_404(id)
+    before_snapshot = build_lab_test_audit_snapshot(lab_test)
+    lab_test.is_active = False
+    lab_test.updated_by = session.get("username")
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to deactivate lab test %s", id)
+        flash("Unable to deactivate the lab test. Please try again.", "danger")
+        return redirect("/lab-tests")
+
+    record_audit_event(
+        action="Deactivated lab test",
+        entity_type="LAB_TEST",
+        entity_id=lab_test.id,
+        ref_code=lab_test.test_code,
+        before=before_snapshot,
+        after=build_lab_test_audit_snapshot(lab_test),
+    )
+    flash("Lab test deactivated. Historical lab orders are unchanged.", "info")
+    return redirect("/lab-tests")
+
+
+@app.route("/lab-billing", methods=["GET", "POST"])
+@login_required
+@invoice_access_required
+def lab_billing():
+    active_lab_tests = LabTest.query.filter(LabTest.is_active.is_(True)).order_by(
+        LabTest.name.asc(), LabTest.test_code.asc()
+    ).all()
+
+    if request.method == "POST":
+        patient_name = (request.form.get("customer") or "").strip()
+        mobile = (request.form.get("mobile") or "").strip()
+        gender = (request.form.get("gender") or "").strip().upper()
+        doctor = (request.form.get("doctor") or "").strip()
+        internal_note = (request.form.get("internal_note") or "").strip()
+        payment_mode = normalize_payment_mode(request.form.get("payment_mode") or "CASH")
+
+        if not patient_name:
+            flash("Patient name is required for a lab order.", "danger")
+            return redirect("/lab-billing")
+        if payment_mode not in POS_PAYMENT_MODES:
+            flash("Invalid payment mode selected.", "danger")
+            return redirect("/lab-billing")
+
+        line_items, line_error = build_lab_order_line_items(request.form)
+        if line_error:
+            flash(line_error, "danger")
+            return redirect("/lab-billing")
+
+        subtotal = round(sum(item["amount"] for item in line_items), 2)
+        rounded_total = compute_invoice_rounded_total(subtotal)
+        payment_breakdown, payment_error = calculate_invoice_payment_breakdown(
+            payment_mode=payment_mode,
+            rounded_amount=rounded_total,
+            split_cash_amount_raw=request.form.get("split_cash_amount"),
+        )
+        if payment_error:
+            flash(payment_error, "danger")
+            return redirect("/lab-billing")
+
+        patient, normalized_mobile = upsert_patient_from_invoice(patient_name, mobile, gender)
+        try:
+            if patient and not patient.id:
+                db.session.flush()
+
+            order = LabOrder(
+                order_no=None,
+                patient_id=patient.id if patient else None,
+                patient_name=patient_name,
+                mobile=normalized_mobile or mobile,
+                gender=gender,
+                doctor=doctor,
+                subtotal=subtotal,
+                discount=0,
+                total=subtotal,
+                payment_mode=payment_breakdown["payment_mode"],
+                cash_amount=payment_breakdown["cash_amount"],
+                online_amount=payment_breakdown["online_amount"],
+                is_split_payment=payment_breakdown["is_split_payment"],
+                internal_note=internal_note,
+                status="ORDERED",
+                created_by=session.get("username"),
+                created_at=datetime.utcnow(),
+            )
+            db.session.add(order)
+            db.session.flush()
+            assign_lab_order_number(order)
+
+            for line in line_items:
+                lab_test = line["lab_test"]
+                db.session.add(LabOrderItem(
+                    lab_order_id=order.id,
+                    lab_test_id=lab_test.id,
+                    test_code=lab_test.test_code,
+                    test_name=lab_test.name,
+                    category=lab_test.category,
+                    specimen_type=lab_test.specimen_type,
+                    preparation=lab_test.preparation,
+                    qty=line["qty"],
+                    unit_price=line["unit_price"],
+                    amount=line["amount"],
+                    discount_percent=0,
+                    discount_amount=0,
+                    net_amount=line["amount"],
+                ))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to create lab order")
+            flash("Unable to create the lab order. No bill was saved.", "danger")
+            return redirect("/lab-billing")
+
+        record_audit_event(
+            action="Created lab order",
+            entity_type="LAB_ORDER",
+            entity_id=order.id,
+            ref_code=order.order_no,
+            before=None,
+            after=build_lab_order_audit_snapshot(order),
+            extra={"test_count": len(line_items), "payment_mode": order.payment_mode},
+        )
+        flash("Lab order created successfully.", "success")
+        return redirect(url_for("view_lab_order", id=order.id))
+
+    return render_template(
+        "lab_billing.html",
+        lab_tests=active_lab_tests,
+        payment_modes=POS_PAYMENT_MODES,
+    )
+
+
+@app.route("/lab-orders")
+@login_required
+@invoice_access_required
+def lab_orders():
+    search_query = (request.args.get("q") or request.args.get("search") or "").strip()
+    status_filter = (request.args.get("status") or "").strip().upper()
+    query = LabOrder.query
+    if search_query:
+        like = f"%{search_query}%"
+        query = query.filter(or_(
+            LabOrder.order_no.ilike(like),
+            LabOrder.patient_name.ilike(like),
+            LabOrder.mobile.ilike(like),
+            LabOrder.doctor.ilike(like),
+        ))
+    if status_filter:
+        query = query.filter(LabOrder.status == status_filter)
+    orders = query.order_by(LabOrder.created_at.desc(), LabOrder.id.desc()).limit(300).all()
+    if orders:
+        order_ids = [order.id for order in orders]
+        item_counts = dict(
+            db.session.query(LabOrderItem.lab_order_id, db.func.count(LabOrderItem.id))
+            .filter(LabOrderItem.lab_order_id.in_(order_ids))
+            .group_by(LabOrderItem.lab_order_id)
+            .all()
+        )
+        for order in orders:
+            order.item_count = item_counts.get(order.id, 0)
+    return render_template(
+        "lab_orders.html",
+        orders=orders,
+        search_query=search_query,
+        status_filter=status_filter,
+    )
+
+
+@app.route("/lab-order/<int:id>")
+@login_required
+@invoice_access_required
+def view_lab_order(id):
+    order = LabOrder.query.get_or_404(id)
+    items = LabOrderItem.query.filter_by(lab_order_id=order.id).order_by(LabOrderItem.id.asc()).all()
+    reports = LabReport.query.filter_by(lab_order_id=order.id).order_by(
+        LabReport.uploaded_at.desc(), LabReport.id.desc()
+    ).all()
+    rounded_total = compute_invoice_rounded_total(order.total or order.subtotal)
+    payment_breakdown = build_invoice_payment_breakdown(order, rounded_total)
+    local_created_at = storage_datetime_to_local(order.created_at) or order.created_at or clinic_now()
+    return render_template(
+        "lab_order.html",
+        order=order,
+        items=items,
+        reports=reports,
+        payment_breakdown=payment_breakdown,
+        rounded_total=rounded_total,
+        date=local_created_at.strftime("%d-%m-%Y"),
+        bill_time=local_created_at.strftime("%I:%M %p"),
+    )
+
+
+@app.route("/lab-order/<int:id>/reports/upload", methods=["GET", "POST"])
+@login_required
+@invoice_access_required
+def lab_report_upload(id):
+    """Staff-only upload for a finalized report; files never enter /static."""
+    order = LabOrder.query.get_or_404(id)
+
+    def render_upload_page(status_code=200):
+        reports = LabReport.query.filter_by(lab_order_id=order.id).order_by(
+            LabReport.uploaded_at.desc(), LabReport.id.desc()
+        ).all()
+        return render_template(
+            "lab_report_upload.html",
+            order=order,
+            reports=reports,
+        ), status_code
+
+    if request.method == "GET":
+        return render_upload_page()
+
+    title = (request.form.get("report_title") or "").strip()
+    raw_report_date = (request.form.get("report_date") or "").strip()
+    patient_note = (request.form.get("patient_note") or "").strip()
+    report_file = request.files.get("report_file")
+    report_mobile = normalize_public_report_mobile(order.mobile)
+
+    if not report_mobile:
+        flash(
+            "Add a valid 10-digit mobile number to this lab order before publishing a patient report.",
+            "danger",
+        )
+        return render_upload_page(400)
+    if not title:
+        flash("Report title is required.", "danger")
+        return render_upload_page(400)
+    if len(title) > 180:
+        flash("Report title must be 180 characters or fewer.", "danger")
+        return render_upload_page(400)
+    if len(patient_note) > 500:
+        flash("Patient note must be 500 characters or fewer.", "danger")
+        return render_upload_page(400)
+
+    report_date = parse_date(raw_report_date) if raw_report_date else clinic_now().date()
+    if raw_report_date and not report_date:
+        flash("Please enter a valid report date.", "danger")
+        return render_upload_page(400)
+
+    saved_file = None
+    try:
+        saved_file = save_private_lab_report_file(report_file, order.id)
+        now = datetime.utcnow()
+        report = LabReport(
+            lab_order_id=order.id,
+            patient_id=order.patient_id,
+            patient_name=(order.patient_name or "").strip() or "Patient",
+            mobile=report_mobile,
+            title=title,
+            report_date=report_date,
+            patient_note=patient_note or None,
+            storage_key=saved_file["storage_key"],
+            original_filename=saved_file["original_filename"],
+            mime_type=saved_file["mime_type"],
+            file_size=saved_file["file_size"],
+            file_sha256=saved_file["file_sha256"],
+            status="PUBLISHED",
+            uploaded_by=session.get("username"),
+            uploaded_at=now,
+            published_by=session.get("username"),
+            published_at=now,
+        )
+        db.session.add(report)
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "danger")
+        return render_upload_page(400)
+    except Exception:
+        db.session.rollback()
+        if saved_file:
+            delete_private_lab_report_file(saved_file.get("storage_key"))
+        app.logger.exception("Unable to upload lab report for order %s", order.id)
+        flash("Unable to upload the report. Please try again.", "danger")
+        return render_upload_page(500)
+
+    record_audit_event(
+        action="Published lab report",
+        entity_type="LAB_REPORT",
+        entity_id=report.id,
+        ref_code=order.order_no,
+        before=None,
+        after=build_lab_report_audit_snapshot(report),
+        extra={"lab_order_id": order.id},
+    )
+    flash("Lab report uploaded and published for secure patient access.", "success")
+    return redirect(url_for("view_lab_order", id=order.id))
+
+
+@app.route("/lab-reports/<int:report_id>/file")
+@login_required
+@invoice_access_required
+def staff_download_lab_report(report_id):
+    report = LabReport.query.get_or_404(report_id)
+    storage_key, file_path = private_lab_report_path(report.storage_key)
+    if not storage_key or not os.path.isfile(file_path):
+        abort(404)
+
+    record_audit_event(
+        action="Downloaded lab report (staff)",
+        entity_type="LAB_REPORT",
+        entity_id=report.id,
+        ref_code=str(report.lab_order_id),
+        after=build_lab_report_audit_snapshot(report),
+    )
+    response = send_from_directory(
+        LAB_REPORT_UPLOAD_FOLDER,
+        storage_key,
+        as_attachment=True,
+        download_name=lab_report_download_name(report),
+    )
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    return response
+
+
+@app.route("/lab-reports/<int:report_id>/publish", methods=["POST"])
+@login_required
+@invoice_access_required
+def publish_lab_report(report_id):
+    report = LabReport.query.get_or_404(report_id)
+    if (report.status or "").upper() == "PUBLISHED":
+        flash("This lab report is already published.", "info")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+    if (report.status or "").upper() == "REVOKED":
+        flash("A revoked report cannot be republished. Upload the corrected final report instead.", "warning")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+    storage_key, file_path = private_lab_report_path(report.storage_key)
+    if not storage_key or not os.path.isfile(file_path):
+        flash("The private PDF file is unavailable, so this report cannot be published.", "danger")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+    before_snapshot = build_lab_report_audit_snapshot(report)
+    report.status = "PUBLISHED"
+    report.published_by = session.get("username")
+    report.published_at = datetime.utcnow()
+    report.revoked_by = None
+    report.revoked_at = None
+    report.revoke_reason = None
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to publish lab report %s", report.id)
+        flash("Unable to publish the lab report. Please try again.", "danger")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+    record_audit_event(
+        action="Published lab report",
+        entity_type="LAB_REPORT",
+        entity_id=report.id,
+        ref_code=str(report.lab_order_id),
+        before=before_snapshot,
+        after=build_lab_report_audit_snapshot(report),
+    )
+    flash("Lab report published for secure patient access.", "success")
+    return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+
+@app.route("/lab-reports/<int:report_id>/revoke", methods=["POST"])
+@login_required
+@invoice_access_required
+def revoke_lab_report(report_id):
+    report = LabReport.query.get_or_404(report_id)
+    if (report.status or "").upper() == "REVOKED":
+        flash("This lab report is already revoked.", "info")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+    revoke_reason = (request.form.get("revoke_reason") or "").strip()
+    if len(revoke_reason) > 500:
+        flash("Revoke reason must be 500 characters or fewer.", "danger")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+    before_snapshot = build_lab_report_audit_snapshot(report)
+    report.status = "REVOKED"
+    report.revoked_by = session.get("username")
+    report.revoked_at = datetime.utcnow()
+    report.revoke_reason = revoke_reason or "Revoked by laboratory staff"
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to revoke lab report %s", report.id)
+        flash("Unable to revoke the lab report. Please try again.", "danger")
+        return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+    record_audit_event(
+        action="Revoked lab report",
+        entity_type="LAB_REPORT",
+        entity_id=report.id,
+        ref_code=str(report.lab_order_id),
+        before=before_snapshot,
+        after=build_lab_report_audit_snapshot(report),
+    )
+    flash("Lab report access has been revoked. The PDF remains in private storage for audit purposes.", "success")
+    return redirect(url_for("lab_report_upload", id=report.lab_order_id))
+
+
+@app.route("/my-lab-reports")
+def patient_report_portal():
+    """Entry point for the public, OTP-protected report portal."""
+    session.pop("pending_lab_report_mobile", None)
+    session.pop("lab_report_portal", None)
+    session.modified = True
+    return render_template("patient_report_portal.html")
+
+
+@app.route("/my-lab-reports/send-otp", methods=["POST"])
+def send_patient_report_otp():
+    mobile = normalize_public_report_mobile(request.form.get("mobile"))
+    session.pop("pending_lab_report_mobile", None)
+    session.pop("lab_report_portal", None)
+    session.modified = True
+    if not mobile:
+        flash("Please enter the registered 10-digit mobile number.", "danger")
+        return redirect(url_for("patient_report_portal"))
+
+    # Limit one IP from using this endpoint to send bulk OTP messages.  Per-mobile
+    # resend and expiry limits are also enforced by create_portal_otp_challenge.
+    recent_window = datetime.utcnow() - timedelta(minutes=PUBLIC_PORTAL_OTP_WINDOW_MINUTES)
+    recent_ip_requests = PortalOtpChallenge.query.filter(
+        PortalOtpChallenge.purpose == "LAB_REPORTS",
+        PortalOtpChallenge.request_ip == portal_request_ip(),
+        PortalOtpChallenge.sent_at >= recent_window,
+    ).count()
+    if recent_ip_requests >= 10:
+        flash("Too many verification requests from this connection. Please try again later.", "danger")
+        return redirect(url_for("patient_report_portal"))
+
+    # Always issue a challenge for a valid mobile. This prevents the endpoint
+    # from revealing whether a number has a report before its owner verifies it.
+    _, _, delivery_error = create_portal_otp_challenge(
+        mobile=mobile,
+        purpose="LAB_REPORTS",
+    )
+    if delivery_error:
+        flash(delivery_error, "danger")
+        return redirect(url_for("patient_report_portal"))
+
+    session["pending_lab_report_mobile"] = mobile
+    session.modified = True
+    return render_template(
+        "patient_report_verify.html",
+        mobile_masked=mask_mobile(mobile),
+    )
+
+
+@app.route("/my-lab-reports/verify-otp", methods=["GET", "POST"])
+def verify_patient_report_otp():
+    mobile = normalize_public_report_mobile(session.get("pending_lab_report_mobile"))
+    if not mobile:
+        flash("Start with your registered mobile number to request a verification code.", "warning")
+        return redirect(url_for("patient_report_portal"))
+
+    if request.method == "GET":
+        return render_template("patient_report_verify.html", mobile_masked=mask_mobile(mobile))
+
+    challenge, verification_error = verify_portal_otp_challenge(
+        mobile=mobile,
+        purpose="LAB_REPORTS",
+        otp_code=request.form.get("otp"),
+    )
+    if verification_error:
+        flash(verification_error, "danger")
+        return render_template("patient_report_verify.html", mobile_masked=mask_mobile(mobile)), 400
+
+    # Mark this one-time code consumed. The verified session has its own short TTL.
+    if challenge:
+        challenge.used_at = datetime.utcnow()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.warning("Unable to record OTP consumption for lab report portal")
+    set_public_portal_session("lab_report_portal", mobile)
+    session.pop("pending_lab_report_mobile", None)
+    session.modified = True
+    return redirect(url_for("patient_report_list"))
+
+
+@app.route("/my-lab-reports/list")
+def patient_report_list():
+    mobile = normalize_public_report_mobile(get_public_portal_session_mobile("lab_report_portal"))
+    if not mobile:
+        flash("Please verify your mobile number before viewing reports.", "warning")
+        return redirect(url_for("patient_report_portal"))
+
+    reports = LabReport.query.filter(
+        LabReport.mobile == mobile,
+        LabReport.status == "PUBLISHED",
+    ).order_by(
+        LabReport.report_date.desc(), LabReport.uploaded_at.desc(), LabReport.id.desc()
+    ).all()
+    if reports:
+        order_numbers = dict(
+            db.session.query(LabOrder.id, LabOrder.order_no)
+            .filter(LabOrder.id.in_([report.lab_order_id for report in reports]))
+            .all()
+        )
+        for report in reports:
+            report.order_no = order_numbers.get(report.lab_order_id) or f"LAB-{report.lab_order_id:06d}"
+
+    patient_name = reports[0].patient_name if reports else ""
+    return render_template(
+        "patient_report_list.html",
+        reports=reports,
+        patient_name=patient_name,
+        mobile_masked=mask_mobile(mobile),
+    )
+
+
+@app.route("/my-lab-reports/<int:report_id>/download")
+def download_patient_lab_report(report_id):
+    mobile = normalize_public_report_mobile(get_public_portal_session_mobile("lab_report_portal"))
+    if not mobile:
+        flash("Please verify your mobile number before downloading a report.", "warning")
+        return redirect(url_for("patient_report_portal"))
+
+    # Filter by both verified mobile and published status so a guessed report ID
+    # cannot disclose whether any other patient's record exists.
+    report = LabReport.query.filter(
+        LabReport.id == report_id,
+        LabReport.mobile == mobile,
+        LabReport.status == "PUBLISHED",
+    ).first()
+    if not report:
+        abort(404)
+    storage_key, file_path = private_lab_report_path(report.storage_key)
+    if not storage_key or not os.path.isfile(file_path):
+        abort(404)
+
+    before_snapshot = build_lab_report_audit_snapshot(report)
+    report.download_count = to_int_safe(report.download_count, 0) + 1
+    report.last_downloaded_at = datetime.utcnow()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Unable to record download for lab report %s", report.id)
+
+    record_audit_event(
+        action="Downloaded lab report (patient portal)",
+        entity_type="LAB_REPORT",
+        entity_id=report.id,
+        ref_code=str(report.lab_order_id),
+        before=before_snapshot,
+        after=build_lab_report_audit_snapshot(report),
+        extra={"verified_mobile": mask_mobile(mobile)},
+    )
+    response = send_from_directory(
+        LAB_REPORT_UPLOAD_FOLDER,
+        storage_key,
+        as_attachment=True,
+        download_name=lab_report_download_name(report),
+    )
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    return response
+
+
 @app.route("/stock-sale", methods=["GET", "POST"])
 @login_required
 def stock_sale():
@@ -7199,19 +8426,16 @@ def invoices():
         fresh_start_date=fresh_start_date.isoformat(),
     )
 
-# ---------------- PART-3: VIEW / PRINT INVOICE ----------------
-@app.route("/invoice/<int:id>")
-@login_required
-@invoice_access_required
-def view_invoice(id):
-    inv = Invoice.query.get_or_404(id)
-    items = InvoiceItem.query.filter_by(invoice_id=id).all()
+def render_invoice_page(inv, *, share_url="", is_public_invoice=False):
+    items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
     rounded_total = compute_invoice_rounded_total(inv.total if inv.total not in (None, "") else inv.subtotal)
     payment_breakdown = build_invoice_payment_breakdown(inv, rounded_total)
 
     return render_template(
         "invoice.html",
         inv=inv,
+        is_public_invoice=is_public_invoice,
+        share_url=share_url,
         print_profile=resolve_invoice_print_profile(inv),
         payment_breakdown=payment_breakdown,
         cart=items,
@@ -7230,6 +8454,29 @@ def view_invoice(id):
         date=(storage_datetime_to_local(inv.created_at) or inv.created_at).strftime("%d-%m-%Y"),
         bill_time=(storage_datetime_to_local(inv.created_at) or inv.created_at).strftime("%I:%M %p")
     )
+
+
+# ---------------- PART-3: VIEW / PRINT INVOICE ----------------
+@app.route("/invoice/<int:id>")
+@login_required
+@invoice_access_required
+def view_invoice(id):
+    inv = Invoice.query.get_or_404(id)
+    share_url = url_for(
+        "shared_invoice",
+        token=build_invoice_share_token(inv.id),
+        _external=True,
+    )
+    return render_invoice_page(inv, share_url=share_url, is_public_invoice=False)
+
+
+@app.route("/invoice/share/<token>")
+def shared_invoice(token):
+    invoice_id = read_invoice_share_token(token)
+    if not invoice_id:
+        abort(404)
+    inv = Invoice.query.get_or_404(invoice_id)
+    return render_invoice_page(inv, share_url=request.url, is_public_invoice=True)
 @app.route("/invoice/edit/<int:id>", methods=["GET", "POST"])
 @login_required
 @invoice_access_required
@@ -9900,6 +11147,21 @@ def normalize_patient_mobile(raw_mobile):
     digits = "".join(ch for ch in raw if ch.isdigit())
     return digits if digits else ""
 
+
+def normalize_portal_mobile(raw_mobile):
+    """Return the ten-digit Indian mobile identity used by public portals.
+
+    Internal records historically retain whatever digit string staff entered.
+    The patient-facing portals must be less ambiguous: ``+91 98...`` and
+    ``098...`` should authenticate the same ten-digit mobile number.
+    """
+    digits = normalize_patient_mobile(raw_mobile)
+    if len(digits) == 12 and digits.startswith("91"):
+        return digits[-10:]
+    if len(digits) == 11 and digits.startswith("0"):
+        return digits[-10:]
+    return digits
+
 def appointment_net_amount(appt):
     fee = to_float_safe(appt.consultation_fee, 0)
     discount = to_float_safe(appt.doctor_discount, 0)
@@ -10917,6 +12179,851 @@ def validate_appointment_form(form_data):
 def get_patient_suggestions(limit=200):
     return Patient.query.order_by(Patient.updated_at.desc(), Patient.id.desc()).limit(limit).all()
 
+
+# ---------------- PUBLIC QR APPOINTMENT BOOKING ----------------
+# This public flow deliberately sits alongside (rather than inside) the
+# staff appointment screen.  It reserves capacity while an OTP is pending,
+# then creates the same Appointment record the reception team already uses.
+PUBLIC_APPOINTMENT_SESSION_KEY = "public_appointment_booking_ref"
+PUBLIC_APPOINTMENT_RESERVATION_MINUTES = max(
+    5,
+    min(30, to_int_safe(os.environ.get("PUBLIC_APPOINTMENT_RESERVATION_MINUTES"), 10)),
+)
+PUBLIC_APPOINTMENT_ACTIVE_STATUSES = {"OTP_PENDING", "PAYMENT_PENDING", "BOOKED"}
+
+
+def get_public_appointment_booking_settings():
+    """Return the singleton policy row, creating the safe 15-patient default."""
+    settings = AppointmentBookingSettings.query.order_by(AppointmentBookingSettings.id.asc()).first()
+    if settings:
+        return settings
+    settings = AppointmentBookingSettings(
+        booking_enabled=True,
+        normal_daily_limit=15,
+        priority_daily_limit=2,
+        normal_fee=600,
+        priority_fee=1000,
+        opening_time="10:00",
+        slot_minutes=20,
+        max_days_ahead=14,
+        booking_cutoff_minutes=30,
+    )
+    try:
+        db.session.add(settings)
+        db.session.commit()
+        return settings
+    except IntegrityError:
+        # Two first visitors can reach this branch at the same time.
+        db.session.rollback()
+        return AppointmentBookingSettings.query.order_by(AppointmentBookingSettings.id.asc()).first()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to initialize public appointment settings")
+        return settings
+
+
+def public_appointment_settings_value(settings, field_name, default, *, minimum=None, maximum=None):
+    value = getattr(settings, field_name, default) if settings else default
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def public_appointment_slot_values(settings, selected_date, taken_times=None):
+    """Build the visible bookable slots from the admin policy, not form data."""
+    normal_limit = public_appointment_settings_value(settings, "normal_daily_limit", 15, minimum=1, maximum=100)
+    priority_limit = public_appointment_settings_value(settings, "priority_daily_limit", 2, minimum=0, maximum=20)
+    slot_count = max(1, normal_limit + priority_limit)
+    slot_minutes = public_appointment_settings_value(settings, "slot_minutes", 20, minimum=5, maximum=180)
+    opening_time = parse_time_value(getattr(settings, "opening_time", "10:00")) or time(10, 0)
+    taken_values = set(taken_times or set())
+    now_local = clinic_now()
+    cutoff_minutes = public_appointment_settings_value(
+        settings, "booking_cutoff_minutes", 30, minimum=0, maximum=240
+    )
+    cutoff_time = (now_local + timedelta(minutes=cutoff_minutes)).time()
+    base_datetime = datetime.combine(selected_date, opening_time)
+    slots = []
+    for offset in range(slot_count):
+        slot_time = (base_datetime + timedelta(minutes=slot_minutes * offset)).time()
+        is_past_cutoff = selected_date == now_local.date() and slot_time <= cutoff_time
+        slots.append({
+            "value": slot_time.strftime("%H:%M"),
+            "label": slot_time.strftime("%I:%M %p").lstrip("0"),
+            "available": slot_time not in taken_values and not is_past_cutoff,
+        })
+    return slots
+
+
+def public_appointment_booking_is_active(booking, now=None):
+    if not booking:
+        return False
+    status = (booking.status or "").strip().upper()
+    if status not in PUBLIC_APPOINTMENT_ACTIVE_STATUSES:
+        return False
+    if status in {"OTP_PENDING", "PAYMENT_PENDING"}:
+        current_time = now or datetime.utcnow()
+        return bool(booking.reservation_expires_at and booking.reservation_expires_at >= current_time)
+    return True
+
+
+def get_public_appointment_availability(selected_date, settings=None, exclude_booking_id=None):
+    """Calculate quota and slots server-side so browser changes cannot oversell."""
+    settings = settings or get_public_appointment_booking_settings()
+    now = datetime.utcnow()
+    normal_limit = public_appointment_settings_value(settings, "normal_daily_limit", 15, minimum=1, maximum=100)
+    priority_limit = public_appointment_settings_value(settings, "priority_daily_limit", 2, minimum=0, maximum=20)
+
+    bookings_query = PublicAppointmentBooking.query.filter(
+        PublicAppointmentBooking.appointment_date == selected_date
+    )
+    if exclude_booking_id:
+        bookings_query = bookings_query.filter(PublicAppointmentBooking.id != exclude_booking_id)
+    public_bookings = bookings_query.order_by(PublicAppointmentBooking.id.asc()).all()
+    active_public_bookings = [
+        booking for booking in public_bookings
+        if public_appointment_booking_is_active(booking, now)
+    ]
+
+    priority_appointment_ids = {
+        booking.appointment_id
+        for booking in active_public_bookings
+        if (booking.booking_type or "").upper() == "PRIORITY"
+        and (booking.status or "").upper() == "BOOKED"
+        and booking.appointment_id
+    }
+    active_appointments = active_appointment_query().filter(
+        Appointment.appointment_date == selected_date,
+        db.func.upper(db.func.coalesce(Appointment.status, "BOOKED")) != "CANCELLED",
+    ).all()
+    normal_confirmed_count = sum(
+        1 for appointment in active_appointments if appointment.id not in priority_appointment_ids
+    )
+    normal_pending_count = sum(
+        1 for booking in active_public_bookings
+        if (booking.booking_type or "").upper() == "NORMAL"
+        and (booking.status or "").upper() == "OTP_PENDING"
+    )
+    priority_count = sum(
+        1 for booking in active_public_bookings
+        if (booking.booking_type or "").upper() == "PRIORITY"
+    )
+    normal_used = normal_confirmed_count + normal_pending_count
+    normal_remaining = max(0, normal_limit - normal_used)
+    priority_remaining = max(0, priority_limit - priority_count)
+    taken_times = {
+        appointment.appointment_time
+        for appointment in active_appointments
+        if appointment.appointment_time
+    }
+    taken_times.update(
+        booking.appointment_time for booking in active_public_bookings if booking.appointment_time
+    )
+    normal_full = normal_remaining <= 0
+    priority_full = priority_remaining <= 0
+    priority_available = bool(normal_full and not priority_full)
+    message = ""
+    if not getattr(settings, "booking_enabled", True):
+        message = "Online appointment booking is currently unavailable."
+    elif normal_full and priority_full:
+        message = "Appointments are full for this date. Please choose another date."
+    elif normal_full:
+        message = "Regular appointments are full. A limited priority same-day option is available."
+    return {
+        "normal_remaining": normal_remaining,
+        "priority_remaining": priority_remaining,
+        "normal_full": normal_full,
+        "priority_full": priority_full,
+        "priority_available": priority_available,
+        "normal_used": normal_used,
+        "priority_used": priority_count,
+        "slots": public_appointment_slot_values(settings, selected_date, taken_times),
+        "message": message,
+    }
+
+
+def public_appointment_form_data(source=None):
+    source = source or {}
+    read_value = source.get if hasattr(source, "get") else lambda _key, default="": default
+    return {
+        "patient_name": (read_value("patient_name", "") or "").strip()[:120],
+        "mobile": normalize_portal_mobile(read_value("mobile", "")),
+        "gender": (read_value("gender", "") or "").strip().upper()[:10],
+        "appointment_date": (read_value("appointment_date", "") or "").strip()[:10],
+        "appointment_time": (read_value("appointment_time", "") or "").strip()[:20],
+        "booking_type": (read_value("booking_type", "NORMAL") or "NORMAL").strip().upper()[:20],
+        "symptoms": (read_value("symptoms", "") or "").strip()[:1000],
+    }
+
+
+def validate_public_appointment_request(form_data, settings, availability):
+    patient_name = form_data["patient_name"]
+    mobile = form_data["mobile"]
+    gender = form_data["gender"]
+    appointment_date = parse_date(form_data["appointment_date"])
+    appointment_time = parse_time_value(form_data["appointment_time"])
+    booking_type = form_data["booking_type"]
+    today = clinic_now().date()
+    max_days_ahead = public_appointment_settings_value(settings, "max_days_ahead", 14, minimum=0, maximum=90)
+
+    if not getattr(settings, "booking_enabled", True):
+        return None, "Online appointment booking is currently unavailable."
+    if not patient_name:
+        return None, "Please enter the patient's full name."
+    if len(mobile) != 10 or not mobile.isdigit():
+        return None, "Please enter a valid 10-digit mobile number."
+    if gender not in APPOINTMENT_GENDERS:
+        return None, "Please select a valid gender."
+    if not appointment_date or appointment_date < today or appointment_date > today + timedelta(days=max_days_ahead):
+        return None, "Please choose an available appointment date."
+    if not appointment_time:
+        return None, "Please choose an available appointment time."
+    if booking_type not in {"NORMAL", "PRIORITY"}:
+        return None, "Please choose a valid booking type."
+
+    slots_by_value = {slot["value"]: slot for slot in availability.get("slots", [])}
+    selected_slot = slots_by_value.get(appointment_time.strftime("%H:%M"))
+    if not selected_slot or not selected_slot.get("available"):
+        return None, "That appointment time is no longer available. Please choose another slot."
+    if booking_type == "NORMAL" and availability.get("normal_full"):
+        return None, "Regular appointments are full for this date. Please choose another date."
+    if booking_type == "PRIORITY":
+        if not availability.get("normal_full"):
+            return None, "Priority booking opens only after regular appointments are full."
+        if not availability.get("priority_available"):
+            return None, "Priority appointment capacity is full for this date."
+
+    return {
+        "patient_name": patient_name,
+        "mobile": mobile,
+        "gender": gender,
+        "appointment_date": appointment_date,
+        "appointment_time": appointment_time,
+        "booking_type": booking_type,
+        "symptoms": form_data["symptoms"],
+        "amount": round(
+            to_float_safe(
+                getattr(settings, "priority_fee" if booking_type == "PRIORITY" else "normal_fee", 0),
+                0,
+            ),
+            2,
+        ),
+    }, ""
+
+
+def create_public_appointment_reservation(payload):
+    booking = PublicAppointmentBooking(
+        booking_ref=secrets.token_urlsafe(18),
+        patient_name=payload["patient_name"],
+        mobile=payload["mobile"],
+        gender=payload["gender"],
+        appointment_date=payload["appointment_date"],
+        appointment_time=payload["appointment_time"],
+        symptoms=payload["symptoms"],
+        booking_type=payload["booking_type"],
+        amount=payload["amount"],
+        status="OTP_PENDING",
+        reservation_expires_at=datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES),
+        source_ip=portal_request_ip(),
+    )
+    try:
+        db.session.add(booking)
+        db.session.commit()
+        return booking, ""
+    except IntegrityError:
+        db.session.rollback()
+        return None, "Unable to reserve that appointment. Please choose the slot again."
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to create public appointment reservation")
+        return None, "Unable to start the appointment request right now. Please try again."
+
+
+def public_appointment_slot_is_available(availability, appointment_time):
+    selected_value = appointment_time.strftime("%H:%M") if appointment_time else ""
+    return any(
+        slot.get("value") == selected_value and slot.get("available")
+        for slot in availability.get("slots", [])
+    )
+
+
+def confirm_public_normal_appointment(booking, settings):
+    """Create the clinic's real Appointment record after OTP, never before."""
+    availability = get_public_appointment_availability(
+        booking.appointment_date,
+        settings,
+        exclude_booking_id=booking.id,
+    )
+    if availability.get("normal_full"):
+        return None, "Regular appointment capacity was just filled. Please choose another date."
+    if not public_appointment_slot_is_available(availability, booking.appointment_time):
+        return None, "That appointment time was just booked. Please choose another slot."
+
+    patient = Patient.query.filter_by(mobile=booking.mobile).first()
+    if not patient:
+        patient = Patient(
+            name=booking.patient_name,
+            mobile=booking.mobile,
+            gender=booking.gender,
+        )
+        db.session.add(patient)
+        db.session.flush()
+    else:
+        # Keep a mature patient profile intact, while filling missing details.
+        if not (patient.name or "").strip():
+            patient.name = booking.patient_name
+        if not (patient.gender or "").strip():
+            patient.gender = booking.gender
+
+    appointment = Appointment(
+        appointment_no=generate_appointment_no(),
+        token_no=get_next_daily_token(booking.appointment_date),
+        patient_id=patient.id,
+        patient_name=booking.patient_name,
+        mobile=booking.mobile,
+        gender=booking.gender,
+        doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
+        appointment_date=booking.appointment_date,
+        appointment_time=booking.appointment_time,
+        payment_mode="CASH",
+        payment_status="UNPAID",
+        doctor_discount=0,
+        consultation_fee=booking.amount,
+        status="BOOKED",
+        symptoms=booking.symptoms,
+        notes="Booked through public QR appointment portal.",
+        created_by="PUBLIC_QR",
+        is_deleted=False,
+    )
+    try:
+        db.session.add(appointment)
+        db.session.flush()
+        booking.appointment_id = appointment.id
+        booking.patient_id = patient.id
+        booking.otp_verified_at = booking.otp_verified_at or datetime.utcnow()
+        booking.status = "BOOKED"
+        booking.reservation_expires_at = None
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return None, "That appointment could not be confirmed. Please choose the slot again."
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to confirm public appointment %s", booking.booking_ref)
+        return None, "Unable to confirm the appointment right now. Please try again."
+
+    record_audit_event(
+        action="Created public QR appointment",
+        entity_type="APPOINTMENT",
+        entity_id=appointment.id,
+        ref_code=appointment.appointment_no,
+        before=None,
+        after=build_appointment_audit_snapshot(appointment),
+        extra={"booking_ref": booking.booking_ref, "booking_type": "NORMAL", "source": "PUBLIC_QR"},
+    )
+    return appointment, ""
+
+
+def confirm_public_priority_appointment(booking, settings, payment_mode, payment_reference):
+    """Finalize a priority booking only after staff verifies the payment.
+
+    A gateway webhook can call this same service after signature verification.
+    The temporary staff action exists for clinic-verified UPI/card payments; it
+    is intentionally admin-only and records the reference for audit.
+    """
+    if (booking.status or "").upper() != "PAYMENT_PENDING":
+        return None, "This priority request is no longer awaiting payment verification."
+    if not public_appointment_booking_is_active(booking):
+        booking.status = "EXPIRED"
+        db.session.commit()
+        return None, "This priority payment reservation has expired. Ask the patient to make a new request."
+    if payment_mode not in {"ONLINE", "UPI", "CARD"}:
+        return None, "Choose the verified online payment method."
+    if not payment_reference or len(payment_reference) > 120:
+        return None, "Enter a valid payment reference before confirming the priority appointment."
+
+    availability = get_public_appointment_availability(
+        booking.appointment_date,
+        settings,
+        exclude_booking_id=booking.id,
+    )
+    if availability.get("priority_remaining", 0) <= 0:
+        return None, "Priority capacity was just filled. Do not confirm this payment without a replacement slot."
+    if not public_appointment_slot_is_available(availability, booking.appointment_time):
+        return None, "That appointment time was just booked. Please agree a new slot with the patient first."
+
+    patient = Patient.query.filter_by(mobile=booking.mobile).first()
+    if not patient:
+        patient = Patient(name=booking.patient_name, mobile=booking.mobile, gender=booking.gender)
+        db.session.add(patient)
+        db.session.flush()
+    else:
+        if not (patient.name or "").strip():
+            patient.name = booking.patient_name
+        if not (patient.gender or "").strip():
+            patient.gender = booking.gender
+
+    appointment = Appointment(
+        appointment_no=generate_appointment_no(),
+        token_no=get_next_daily_token(booking.appointment_date),
+        patient_id=patient.id,
+        patient_name=booking.patient_name,
+        mobile=booking.mobile,
+        gender=booking.gender,
+        doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
+        appointment_date=booking.appointment_date,
+        appointment_time=booking.appointment_time,
+        payment_mode=payment_mode,
+        payment_status="PAID",
+        doctor_discount=0,
+        consultation_fee=booking.amount,
+        status="BOOKED",
+        symptoms=booking.symptoms,
+        notes="Priority appointment booked through public QR portal.",
+        created_by="PUBLIC_QR",
+        is_deleted=False,
+    )
+    now = datetime.utcnow()
+    try:
+        db.session.add(appointment)
+        db.session.flush()
+        booking.appointment_id = appointment.id
+        booking.patient_id = patient.id
+        booking.status = "BOOKED"
+        booking.payment_provider = "MANUAL_VERIFIED"
+        booking.payment_id = payment_reference
+        booking.payment_verified_at = now
+        booking.reservation_expires_at = None
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return None, "Unable to confirm the priority appointment. Please check the slot and try again."
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to finalize priority booking %s", booking.booking_ref)
+        return None, "Unable to confirm the priority appointment right now. Please try again."
+
+    record_audit_event(
+        action="Confirmed priority appointment payment",
+        entity_type="APPOINTMENT",
+        entity_id=appointment.id,
+        ref_code=appointment.appointment_no,
+        before=None,
+        after=build_appointment_audit_snapshot(appointment),
+        extra={
+            "booking_ref": booking.booking_ref,
+            "booking_type": "PRIORITY",
+            "payment_reference": payment_reference,
+            "payment_mode": payment_mode,
+            "verified_by": session.get("username"),
+        },
+    )
+    return appointment, ""
+
+
+def render_public_appointment_booking_form(*, form_data=None, selected_date=None, status_code=200):
+    settings = get_public_appointment_booking_settings()
+    today = clinic_now().date()
+    requested_date = selected_date or (form_data or {}).get("appointment_date") or today.isoformat()
+    selected = parse_date(requested_date)
+    max_days_ahead = public_appointment_settings_value(settings, "max_days_ahead", 14, minimum=0, maximum=90)
+    if not selected or selected < today or selected > today + timedelta(days=max_days_ahead):
+        selected = today
+    availability = get_public_appointment_availability(selected, settings)
+    available_dates = []
+    for day_offset in range(max_days_ahead + 1):
+        candidate = today + timedelta(days=day_offset)
+        candidate_availability = availability if candidate == selected else get_public_appointment_availability(candidate, settings)
+        can_book = bool(
+            getattr(settings, "booking_enabled", True)
+            and (candidate_availability.get("normal_remaining", 0) > 0 or candidate_availability.get("priority_remaining", 0) > 0)
+            and any(slot.get("available") for slot in candidate_availability.get("slots", []))
+        )
+        available_dates.append({
+            "value": candidate.isoformat(),
+            "label": candidate.strftime("%a, %d %b %Y"),
+            "available": can_book,
+        })
+    return render_template(
+        "public_appointment_booking.html",
+        settings=settings,
+        availability=availability,
+        selected_date=selected.isoformat(),
+        available_dates=available_dates,
+        form_data=form_data or {},
+    ), status_code
+
+
+@app.route("/book-appointment", methods=["GET", "POST"])
+def public_appointment_booking():
+    if request.method == "GET":
+        requested_date = (request.args.get("date") or "").strip()
+        return render_public_appointment_booking_form(selected_date=requested_date)
+
+    form_data = public_appointment_form_data(request.form)
+    settings = get_public_appointment_booking_settings()
+    selected_date = parse_date(form_data.get("appointment_date"))
+    availability = get_public_appointment_availability(selected_date or clinic_now().date(), settings)
+    payload, error = validate_public_appointment_request(form_data, settings, availability)
+    if error:
+        flash(error, "danger")
+        return render_public_appointment_booking_form(
+            form_data=form_data,
+            selected_date=form_data.get("appointment_date"),
+            status_code=400,
+        )
+
+    booking, error = create_public_appointment_reservation(payload)
+    if error:
+        flash(error, "danger")
+        return render_public_appointment_booking_form(
+            form_data=form_data,
+            selected_date=form_data.get("appointment_date"),
+            status_code=409,
+        )
+    challenge, _development_code, error = create_portal_otp_challenge(
+        mobile=booking.mobile,
+        purpose="PUBLIC_APPOINTMENT",
+        context_ref=booking.booking_ref,
+    )
+    if not challenge:
+        try:
+            db.session.delete(booking)
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+        flash(error or "Unable to send the verification code. Please try again.", "danger")
+        return render_public_appointment_booking_form(
+            form_data=form_data,
+            selected_date=form_data.get("appointment_date"),
+            status_code=503,
+        )
+
+    session[PUBLIC_APPOINTMENT_SESSION_KEY] = booking.booking_ref
+    session.modified = True
+    return redirect(url_for("public_appointment_verify"))
+
+
+def get_public_appointment_session_booking():
+    booking_ref = (session.get(PUBLIC_APPOINTMENT_SESSION_KEY) or "").strip()
+    if not booking_ref:
+        return None
+    return PublicAppointmentBooking.query.filter_by(booking_ref=booking_ref).first()
+
+
+@app.route("/book-appointment/verify", methods=["GET", "POST"])
+def public_appointment_verify():
+    booking = get_public_appointment_session_booking()
+    if not booking:
+        flash("Please start a new appointment request.", "warning")
+        return redirect(url_for("public_appointment_booking"))
+    if (booking.status or "").upper() != "OTP_PENDING" or not public_appointment_booking_is_active(booking):
+        if (booking.status or "").upper() == "OTP_PENDING":
+            booking.status = "EXPIRED"
+            db.session.commit()
+        flash("This appointment request has expired. Please choose a new slot.", "warning")
+        return redirect(url_for("public_appointment_booking"))
+
+    if request.method == "GET":
+        return render_template(
+            "public_appointment_verify.html",
+            booking=booking,
+            masked_mobile=mask_mobile(booking.mobile),
+        )
+
+    challenge, error = verify_portal_otp_challenge(
+        mobile=booking.mobile,
+        purpose="PUBLIC_APPOINTMENT",
+        context_ref=booking.booking_ref,
+        otp_code=request.form.get("otp_code"),
+    )
+    if error:
+        flash(error, "danger")
+        return render_template(
+            "public_appointment_verify.html",
+            booking=booking,
+            masked_mobile=mask_mobile(booking.mobile),
+        ), 400
+
+    booking.otp_verified_at = challenge.verified_at or datetime.utcnow()
+    settings = get_public_appointment_booking_settings()
+    booking_type = (booking.booking_type or "NORMAL").upper()
+    if booking_type == "NORMAL":
+        appointment, error = confirm_public_normal_appointment(booking, settings)
+        if error:
+            fresh_booking = PublicAppointmentBooking.query.get(booking.id)
+            if fresh_booking and fresh_booking.status == "OTP_PENDING":
+                fresh_booking.status = "EXPIRED"
+                db.session.commit()
+            flash(error, "danger")
+            return redirect(url_for("public_appointment_booking"))
+        return render_template(
+            "public_appointment_confirmation.html",
+            booking=booking,
+            appointment=appointment,
+        )
+
+    availability = get_public_appointment_availability(
+        booking.appointment_date,
+        settings,
+        exclude_booking_id=booking.id,
+    )
+    if not availability.get("normal_full") or not availability.get("priority_available"):
+        booking.status = "EXPIRED"
+        db.session.commit()
+        flash("Priority capacity is no longer available. Please choose another date.", "warning")
+        return redirect(url_for("public_appointment_booking"))
+    if not public_appointment_slot_is_available(availability, booking.appointment_time):
+        booking.status = "EXPIRED"
+        db.session.commit()
+        flash("That appointment time was just booked. Please choose another slot.", "warning")
+        return redirect(url_for("public_appointment_booking"))
+
+    # A browser callback must never be treated as payment proof.  Until a
+    # signed gateway webhook is configured, keep this as a visible staff
+    # review/payment-pending request instead of creating a paid appointment.
+    booking.status = "PAYMENT_PENDING"
+    booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES)
+    db.session.commit()
+    record_audit_event(
+        action="Created priority appointment payment request",
+        entity_type="PUBLIC_APPOINTMENT_BOOKING",
+        entity_id=booking.id,
+        ref_code=booking.booking_ref,
+        before=None,
+        after={
+            "booking_type": "PRIORITY",
+            "status": booking.status,
+            "amount": booking.amount,
+            "appointment_date": booking.appointment_date.isoformat(),
+        },
+        extra={"source": "PUBLIC_QR", "payment_provider": "NOT_CONFIGURED"},
+    )
+    return render_template("public_appointment_confirmation.html", booking=booking, appointment=None)
+
+
+@app.route("/book-appointment/confirmation")
+def public_appointment_confirmation():
+    booking = get_public_appointment_session_booking()
+    if not booking:
+        return redirect(url_for("public_appointment_booking"))
+    appointment = Appointment.query.get(booking.appointment_id) if booking.appointment_id else None
+    return render_template(
+        "public_appointment_confirmation.html",
+        booking=booking,
+        appointment=appointment,
+    )
+
+
+def public_appointment_booking_url():
+    """Use the configured public HTTPS origin when sharing a reception QR."""
+    configured_base = (os.environ.get("PUBLIC_BOOKING_BASE_URL") or "").strip().rstrip("/")
+    if configured_base.startswith(("https://", "http://")):
+        return f"{configured_base}{url_for('public_appointment_booking')}", True
+    return f"{request.url_root.rstrip('/')}{url_for('public_appointment_booking')}", False
+
+
+def appointment_qr_library():
+    try:
+        import qrcode  # type: ignore
+        return qrcode
+    except ImportError:
+        return None
+
+
+@app.route("/appointment-booking/qr")
+@login_required
+@public_appointment_admin_required
+def public_appointment_qr_page():
+    booking_url, using_configured_public_url = public_appointment_booking_url()
+    return render_template(
+        "appointment_booking_qr.html",
+        booking_url=booking_url,
+        using_configured_public_url=using_configured_public_url,
+        qr_available=bool(appointment_qr_library()),
+        qr_image_url=url_for("public_appointment_qr_png"),
+    )
+
+
+@app.route("/appointment-booking/qr.png")
+@login_required
+@public_appointment_admin_required
+def public_appointment_qr_png():
+    qrcode = appointment_qr_library()
+    if not qrcode:
+        abort(503, description="QR generation is not installed. Install the updated application requirements first.")
+    booking_url, _using_configured_public_url = public_appointment_booking_url()
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=9,
+        border=4,
+    )
+    qr.add_data(booking_url)
+    qr.make(fit=True)
+    image = qr.make_image(fill_color="#0f172a", back_color="white")
+    image_stream = BytesIO()
+    image.save(image_stream, format="PNG")
+    image_stream.seek(0)
+    return send_file(
+        image_stream,
+        mimetype="image/png",
+        as_attachment=False,
+        download_name="appointment-booking-qr.png",
+        max_age=0,
+    )
+
+
+def get_active_priority_payment_requests():
+    now = datetime.utcnow()
+    pending_requests = PublicAppointmentBooking.query.filter(
+        PublicAppointmentBooking.status == "PAYMENT_PENDING"
+    ).order_by(
+        PublicAppointmentBooking.appointment_date.asc(),
+        PublicAppointmentBooking.appointment_time.asc(),
+        PublicAppointmentBooking.id.asc(),
+    ).all()
+    expired_any = False
+    active_requests = []
+    for booking in pending_requests:
+        if public_appointment_booking_is_active(booking, now):
+            active_requests.append(booking)
+        else:
+            booking.status = "EXPIRED"
+            expired_any = True
+    if expired_any:
+        try:
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            app.logger.exception("Unable to expire stale priority payment requests")
+    return active_requests
+
+
+@app.route("/appointment-booking/priority-requests")
+@login_required
+@public_appointment_admin_required
+def public_appointment_priority_requests():
+    return render_template(
+        "appointment_priority_requests.html",
+        pending_requests=get_active_priority_payment_requests(),
+    )
+
+
+@app.route("/appointment-booking/priority-requests/<int:booking_id>/confirm", methods=["POST"])
+@login_required
+@public_appointment_admin_required
+def confirm_public_appointment_priority_request(booking_id):
+    booking = PublicAppointmentBooking.query.get_or_404(booking_id)
+    settings = get_public_appointment_booking_settings()
+    payment_mode = (request.form.get("payment_mode") or "").strip().upper()
+    payment_reference = (request.form.get("payment_reference") or "").strip()
+    appointment, error = confirm_public_priority_appointment(
+        booking,
+        settings,
+        payment_mode,
+        payment_reference,
+    )
+    if error:
+        flash(error, "danger")
+        return redirect(url_for("public_appointment_priority_requests"))
+    flash(
+        f"Priority appointment {appointment.appointment_no} confirmed after payment verification.",
+        "success",
+    )
+    return redirect(url_for("public_appointment_priority_requests"))
+
+
+@app.route("/appointment-booking/settings", methods=["GET", "POST"])
+@login_required
+@public_appointment_admin_required
+def public_appointment_booking_settings():
+    settings = get_public_appointment_booking_settings()
+    if request.method == "POST":
+        normal_daily_limit = to_int_safe(request.form.get("normal_daily_limit"), 0)
+        priority_daily_limit = to_int_safe(request.form.get("priority_daily_limit"), -1)
+        slot_minutes = to_int_safe(request.form.get("slot_minutes"), 0)
+        max_days_ahead = to_int_safe(request.form.get("max_days_ahead"), -1)
+        booking_cutoff_minutes = to_int_safe(request.form.get("booking_cutoff_minutes"), -1)
+        normal_fee = to_float_safe(request.form.get("normal_fee"), -1)
+        priority_fee = to_float_safe(request.form.get("priority_fee"), -1)
+        opening_time = parse_time_value(request.form.get("opening_time"))
+
+        if not 1 <= normal_daily_limit <= 100:
+            flash("Regular daily capacity must be between 1 and 100.", "danger")
+        elif not 0 <= priority_daily_limit <= 20:
+            flash("Priority daily capacity must be between 0 and 20.", "danger")
+        elif not 5 <= slot_minutes <= 180:
+            flash("Slot duration must be between 5 and 180 minutes.", "danger")
+        elif not 0 <= max_days_ahead <= 90:
+            flash("Advance booking window must be between 0 and 90 days.", "danger")
+        elif not 0 <= booking_cutoff_minutes <= 240:
+            flash("Same-day cutoff must be between 0 and 240 minutes.", "danger")
+        elif normal_fee < 0 or normal_fee > 100000 or priority_fee < 0 or priority_fee > 100000:
+            flash("Please enter valid consultation amounts.", "danger")
+        elif not opening_time:
+            flash("Please enter a valid clinic opening time.", "danger")
+        else:
+            before_snapshot = {
+                "booking_enabled": bool(settings.booking_enabled),
+                "normal_daily_limit": settings.normal_daily_limit,
+                "priority_daily_limit": settings.priority_daily_limit,
+                "normal_fee": settings.normal_fee,
+                "priority_fee": settings.priority_fee,
+                "opening_time": settings.opening_time,
+                "slot_minutes": settings.slot_minutes,
+                "max_days_ahead": settings.max_days_ahead,
+                "booking_cutoff_minutes": settings.booking_cutoff_minutes,
+            }
+            settings.booking_enabled = "booking_enabled" in request.form
+            settings.normal_daily_limit = normal_daily_limit
+            settings.priority_daily_limit = priority_daily_limit
+            settings.normal_fee = round(normal_fee, 2)
+            settings.priority_fee = round(priority_fee, 2)
+            settings.opening_time = opening_time.strftime("%H:%M")
+            settings.slot_minutes = slot_minutes
+            settings.max_days_ahead = max_days_ahead
+            settings.booking_cutoff_minutes = booking_cutoff_minutes
+            settings.updated_by = session.get("username")
+            try:
+                db.session.commit()
+                record_audit_event(
+                    action="Updated public appointment booking settings",
+                    entity_type="APPOINTMENT_BOOKING_SETTINGS",
+                    entity_id=settings.id,
+                    ref_code="PUBLIC_QR",
+                    before=before_snapshot,
+                    after={
+                        "booking_enabled": bool(settings.booking_enabled),
+                        "normal_daily_limit": settings.normal_daily_limit,
+                        "priority_daily_limit": settings.priority_daily_limit,
+                        "normal_fee": settings.normal_fee,
+                        "priority_fee": settings.priority_fee,
+                        "opening_time": settings.opening_time,
+                        "slot_minutes": settings.slot_minutes,
+                        "max_days_ahead": settings.max_days_ahead,
+                        "booking_cutoff_minutes": settings.booking_cutoff_minutes,
+                    },
+                )
+                flash("Online appointment booking settings saved.", "success")
+                return redirect(url_for("public_appointment_booking_settings"))
+            except SQLAlchemyError:
+                db.session.rollback()
+                app.logger.exception("Unable to update public appointment booking settings")
+                flash("Unable to save booking settings. Please try again.", "danger")
+
+    return render_template(
+        "appointment_booking_settings.html",
+        settings=settings,
+        pending_priority_count=len(get_active_priority_payment_requests()),
+    )
+
 @app.route("/appointments/add", methods=["GET", "POST"])
 @login_required
 def add_appointment():
@@ -11498,11 +13605,13 @@ def export_excel():
         top_n = request.args.get("top_n")
 
         query = Invoice.query
+        returns_query = Return.query.filter(falsey_or_null_column_expr(Return.is_cancelled))
         applied_filter = "all"
         if report_type == "daily":
             today = clinic_now().date()
             start_bound, end_bound = local_date_range_to_storage_bounds(today, today)
             query = query.filter(Invoice.created_at >= start_bound, Invoice.created_at < end_bound)
+            returns_query = returns_query.filter(Return.created_at >= start_bound, Return.created_at < end_bound)
             applied_filter = f"daily ({today.isoformat()})"
         elif report_type == "monthly":
             if month >= 1 and month <= 12 and year >= 1900:
@@ -11510,6 +13619,10 @@ def export_excel():
                 query = query.filter(
                     Invoice.created_at >= start_bound,
                     Invoice.created_at < end_bound
+                )
+                returns_query = returns_query.filter(
+                    Return.created_at >= start_bound,
+                    Return.created_at < end_bound
                 )
                 applied_filter = f"monthly ({year}-{month:02d})"
             else:
@@ -11520,12 +13633,14 @@ def export_excel():
             if from_date_value and to_date_value and to_date_value >= from_date_value:
                 from_dt, to_dt = local_date_range_to_storage_bounds(from_date_value, to_date_value)
                 query = query.filter(Invoice.created_at >= from_dt, Invoice.created_at < to_dt)
+                returns_query = returns_query.filter(Return.created_at >= from_dt, Return.created_at < to_dt)
                 applied_filter = f"custom ({from_date} to {to_date})"
             else:
                 applied_filter = "custom (invalid dates, exported all)"
         elif report_type == "patient":
             if patient:
                 query = query.filter(Invoice.customer.ilike(f"%{patient}%"))
+                returns_query = returns_query.filter(Return.customer.ilike(f"%{patient}%"))
                 applied_filter = f"patient ({patient})"
             else:
                 applied_filter = "patient (blank, exported all)"
@@ -11555,8 +13670,34 @@ def export_excel():
                             Invoice.mobile.ilike(f"%{mobile_raw}%")
                         )
                     )
+                    normalized_return_mobile = db.func.replace(
+                        db.func.replace(
+                            db.func.replace(
+                                db.func.replace(
+                                    db.func.replace(
+                                        db.func.replace(db.func.coalesce(Return.mobile, ""), " ", ""),
+                                        "-", ""
+                                    ),
+                                    "+", ""
+                                ),
+                                "(",
+                                ""
+                            ),
+                            ")",
+                            ""
+                        ),
+                        ".",
+                        ""
+                    )
+                    returns_query = returns_query.filter(
+                        or_(
+                            normalized_return_mobile.like(f"%{mobile_digits}%"),
+                            Return.mobile.ilike(f"%{mobile_raw}%")
+                        )
+                    )
                 else:
                     query = query.filter(Invoice.mobile.ilike(f"%{mobile_raw}%"))
+                    returns_query = returns_query.filter(Return.mobile.ilike(f"%{mobile_raw}%"))
                 applied_filter = f"mobile ({mobile_raw})"
             else:
                 applied_filter = "mobile (blank, exported all)"
@@ -11734,6 +13875,7 @@ def export_excel():
             applied_filter = f"{report_type} (not invoice list type, exported all)"
 
         invoices = query.order_by(Invoice.created_at.desc(), Invoice.id.desc()).all()
+        returns = returns_query.order_by(Return.created_at.desc(), Return.id.desc()).all()
         invoice_ids = [i.id for i in invoices]
         invoice_items = []
         if invoice_ids:
@@ -11741,18 +13883,23 @@ def export_excel():
                 InvoiceItem.invoice_id.in_(invoice_ids)
             ).order_by(InvoiceItem.invoice_id.asc(), InvoiceItem.id.asc()).all()
 
-        collection_summary = summarize_invoice_collection(invoices)
+        collection_summary = summarize_invoice_collection(invoices, returns)
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             pd.DataFrame([{
                 "Applied Filter": applied_filter,
                 "Invoice Count": collection_summary["invoice_count"],
                 "Sales Total": collection_summary["sale_total"],
+                "Refund Total": collection_summary["refund_total"],
+                "Net Sale Total": collection_summary["net_sale_total"],
                 "Cash Collection": collection_summary["cash_collection"],
                 "Online Collection": collection_summary["online_collection"],
+                "Cash Refund": collection_summary["cash_refund_total"],
+                "Online Refund": collection_summary["online_refund_total"],
                 "Split Payment Count": collection_summary["split_payment_count"],
                 "Cash Received Invoices": collection_summary["cash_invoice_count"],
                 "Online Received Invoices": collection_summary["online_invoice_count"],
+                "Return Count": collection_summary["return_count"],
             }]).to_excel(writer, sheet_name="Summary", index=False)
             pd.DataFrame(build_invoice_rows_legacy(invoices)).to_excel(writer, sheet_name="Reports", index=False)
         output.seek(0)
@@ -11830,23 +13977,29 @@ def export_excel():
         "Created At": m.created_at.strftime("%d-%m-%Y %I:%M %p") if m.created_at else ""
     } for m in medicines]
 
-    return_rows = [{
-        "Return ID": r.id,
-        "Return No": r.return_no,
-        "Invoice ID": r.invoice_id,
-        "Invoice No": r.invoice_no,
-        "Customer": r.customer,
-        "Mobile": r.mobile,
-        "Total Refund": r.total_refund,
-        "CGST": r.cgst,
-        "SGST": r.sgst,
-        "Payment Mode": r.payment_mode,
-        "Is Cancelled": r.is_cancelled,
-        "Cancelled By": r.cancelled_by,
-        "Cancelled At": r.cancelled_at.strftime("%d-%m-%Y %I:%M %p") if r.cancelled_at else "",
-        "Created By": r.created_by,
-        "Created At": r.created_at.strftime("%d-%m-%Y %I:%M %p") if r.created_at else ""
-    } for r in returns]
+    return_rows = []
+    for r in returns:
+        refund_breakdown = build_return_payment_breakdown(r)
+        return_rows.append({
+            "Return ID": r.id,
+            "Return No": r.return_no,
+            "Invoice ID": r.invoice_id,
+            "Invoice No": r.invoice_no,
+            "Customer": r.customer,
+            "Mobile": r.mobile,
+            "Total Refund": r.total_refund,
+            "Cash Refund": refund_breakdown["cash_refund_amount"],
+            "Online Refund": refund_breakdown["online_refund_amount"],
+            "Refund Type": refund_breakdown["refund_type"],
+            "CGST": r.cgst,
+            "SGST": r.sgst,
+            "Payment Mode": r.payment_mode,
+            "Is Cancelled": r.is_cancelled,
+            "Cancelled By": r.cancelled_by,
+            "Cancelled At": r.cancelled_at.strftime("%d-%m-%Y %I:%M %p") if r.cancelled_at else "",
+            "Created By": r.created_by,
+            "Created At": r.created_at.strftime("%d-%m-%Y %I:%M %p") if r.created_at else ""
+        })
 
     return_item_rows = [{
         "Return Item ID": ri.id,
@@ -12353,4 +14506,8 @@ def delete_stock_history(id):
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    debug_flag = (os.environ.get("FLASK_DEBUG") or os.environ.get("DEBUG") or "1").strip().lower()
+    debug = debug_flag not in {"0", "false", "no", "off"}
+    port = prepare_local_server(is_production=IS_PROD)
+    schedule_browser_open(is_production=IS_PROD)
+    app.run(host="0.0.0.0", port=port, debug=debug)

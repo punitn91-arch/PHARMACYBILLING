@@ -375,6 +375,12 @@ body {
 
 .print-btn { background: #007bff; color: white; }
 .pdf-btn { background: #198754; color: white; }
+.wa-btn { background: #1fa855; color: white; }
+
+.btn[disabled] {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
 
 @media (max-width: 720px) {
     .invoice-top,
@@ -567,10 +573,66 @@ body {
 <div class="action-btns" style="text-align:center; margin-top:28px;">
     <button class="btn print-btn" onclick="window.print()">🖨 PRINT</button>
     <button class="btn pdf-btn" onclick="window.print()">⬇ DOWNLOAD PDF</button>
+    {% if not is_public_invoice %}
+    {% set has_whatsapp_mobile = ((mobile or '')|trim) != '' %}
+    <button
+        class="btn wa-btn"
+        type="button"
+        onclick="openInvoiceWhatsapp(this)"
+        data-wa-mobile="{{ mobile or '' }}"
+        data-wa-customer="{{ customer or 'Patient' }}"
+        data-wa-invoice="{{ invoice_no }}"
+        data-wa-date="{{ date }}{% if bill_time %} {{ bill_time }}{% endif %}"
+        data-wa-total="{{ '%.2f'|format((rounded_total or total)|float) }}"
+        data-wa-link="{{ share_url or request.url }}"
+        {% if not has_whatsapp_mobile %}disabled{% endif %}
+    >WHATSAPP</button>
+    {% endif %}
     <br><br>
+    {% if not is_public_invoice %}
     <a href="/billing">Create New Bill</a> | <a href="/">Home</a>
+    {% endif %}
 </div>
 
 </div>
+<script>
+function normalizeWhatsappNumber(raw) {
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length === 10) return `91${digits}`;
+    if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`;
+    return digits;
+}
+
+function openInvoiceWhatsapp(button) {
+    if (!button) return;
+
+    const phone = normalizeWhatsappNumber(button.dataset.waMobile);
+    if (!phone) {
+        alert('Mobile number not available for this invoice.');
+        return;
+    }
+
+    const customer = (button.dataset.waCustomer || 'Patient').trim();
+    const invoiceNo = (button.dataset.waInvoice || '-').trim();
+    const billDate = (button.dataset.waDate || '-').trim();
+    const total = (button.dataset.waTotal || '0.00').trim();
+    const invoiceLink = (button.dataset.waLink || window.location.href).trim();
+
+    const message = [
+        `Hello ${customer},`,
+        'Your invoice from THE ENDO PHARMACY is ready.',
+        `Invoice No: ${invoiceNo}`,
+        `Date: ${billDate}`,
+        `Amount: Rs ${total}`,
+        `Invoice Link: ${invoiceLink}`,
+        '',
+        'Thank you.'
+    ].join('\n');
+
+    const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+}
+</script>
 </body>
 </html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <title>Verify Access to Lab Reports</title>
+    <style>
+        :root { --ink:#14243a; --muted:#61728a; --line:#dbe5ef; --blue:#1264c9; --blue-dark:#0b4e9d; --surface:#fff; --danger:#b42318; }
+        * { box-sizing:border-box; }
+        body { min-height:100vh; margin:0; background:linear-gradient(145deg,#edf5fd 0%,#f8fbff 50%,#eef8f7 100%); color:var(--ink); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+        .verify-shell { width:min(100% - 28px,520px); margin:0 auto; padding:40px 0; }
+        .back-link { display:inline-flex; margin:0 0 17px 4px; color:#2d5d90; font-size:13px; font-weight:800; text-decoration:none; }
+        .verify-card { overflow:hidden; border:1px solid var(--line); border-radius:18px; background:var(--surface); box-shadow:0 18px 45px rgba(20,54,91,.12); }
+        .verify-top { padding:27px 27px 20px; border-bottom:1px solid var(--line); background:#fbfdff; text-align:center; }
+        .shield { display:grid; width:48px; height:48px; place-items:center; border-radius:15px; margin:0 auto 13px; background:#e9f3ff; color:var(--blue); font-size:24px; }
+        .eyebrow { margin:0 0 5px; color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; }
+        h1 { margin:0; font-size:26px; letter-spacing:-.035em; }
+        .copy { margin:9px auto 0; max-width:390px; color:var(--muted); font-size:13px; line-height:1.55; }
+        .mobile-pill { display:inline-flex; margin-top:12px; border-radius:999px; background:#eaf3fd; padding:5px 10px; color:#285b8a; font-size:12px; font-weight:800; }
+        .verify-body { padding:24px 27px 27px; }
+        .flash { margin:0 0 16px; border:1px solid #c8d8eb; border-radius:10px; background:#f2f7fc; padding:11px 12px; color:#294a6b; font-size:13px; line-height:1.45; }
+        .flash.flash-danger, .flash.flash-error { border-color:#f2c8c3; background:#fff4f2; color:var(--danger); }
+        .flash.flash-success { border-color:#bce5d8; background:#effbf6; color:#0c6b51; }
+        label { display:block; margin-bottom:8px; color:#364e69; font-size:12px; font-weight:800; letter-spacing:.045em; text-align:center; }
+        .otp-input { display:block; width:min(100%,310px); min-height:55px; border:1px solid #bdcfe2; border-radius:11px; margin:0 auto; padding:0 13px; color:var(--ink); font:700 22px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.36em; text-align:center; outline:none; }
+        .otp-input:focus { border-color:var(--blue); box-shadow:0 0 0 4px rgba(18,100,201,.13); }
+        .hint { margin:10px 0 0; color:var(--muted); font-size:12px; line-height:1.5; text-align:center; }
+        .submit { display:inline-flex; width:100%; min-height:49px; align-items:center; justify-content:center; border:1px solid var(--blue-dark); border-radius:10px; margin-top:21px; background:var(--blue); color:#fff; font:inherit; font-size:14px; font-weight:800; cursor:pointer; box-shadow:0 8px 18px rgba(18,100,201,.21); }
+        .submit:disabled { cursor:wait; opacity:.72; }
+        .resend-note { margin:20px 0 0; color:var(--muted); font-size:12px; line-height:1.5; text-align:center; }
+        .resend-link { color:#1d5f9f; font-weight:800; text-decoration:none; }
+        @media (max-width:420px) { .verify-shell { width:min(100% - 20px,520px); padding-top:18px; } .verify-top,.verify-body { padding-left:19px; padding-right:19px; } }
+    </style>
+</head>
+<body>
+    <main class="verify-shell">
+        <a class="back-link" href="/my-lab-reports">← Use a different mobile number</a>
+        <section class="verify-card" aria-labelledby="verifyTitle">
+            <header class="verify-top">
+                <div class="shield" aria-hidden="true">🔐</div>
+                <p class="eyebrow">One-time verification</p>
+                <h1 id="verifyTitle">Enter verification code</h1>
+                <p class="copy">We sent a code to the registered mobile number{% if mobile_masked %} ending in {{ mobile_masked }}{% endif %}.</p>
+                {% if mobile_masked %}<span class="mobile-pill">{{ mobile_masked }}</span>{% endif %}
+            </header>
+            <div class="verify-body">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% for category, message in messages %}
+                    <div class="flash flash-{{ (category or 'info')|lower }}" role="alert">{{ message }}</div>
+                    {% endfor %}
+                {% endwith %}
+                <form method="post" action="/my-lab-reports/verify-otp" id="verifyOtpForm">
+                    <label for="otp">6-digit OTP</label>
+                    <input class="otp-input" id="otp" name="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus aria-describedby="otpHelp">
+                    <p class="hint" id="otpHelp">The code expires shortly for your privacy. Do not share it with anyone.</p>
+                    <button class="submit" id="verifyButton" type="submit">Securely view my reports</button>
+                </form>
+                <p class="resend-note">Did not receive the code? <a class="resend-link" href="/my-lab-reports">Request a new code</a></p>
+            </div>
+        </section>
+    </main>
+    <script>
+        const otp = document.getElementById('otp');
+        otp.addEventListener('input', function () { this.value = this.value.replace(/\D/g, ''); });
+        document.getElementById('verifyOtpForm').addEventListener('submit', function () {
+            const button = document.getElementById('verifyButton');
+            button.disabled = true;
+            button.textContent = 'Verifying…';
+        });
+    </script>
+</body>
+</html>

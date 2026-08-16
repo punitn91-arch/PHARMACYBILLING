@@ -181,6 +181,25 @@ class SystemSmokeTests(unittest.TestCase):
         self.assertIn(b"Internal Note", response.data)
         self.assertIn(b"More Actions", response.data)
 
+    def test_invoice_view_exposes_whatsapp_share_button_and_public_link(self):
+        with self.app.app_context():
+            invoice = self.app_module.Invoice.query.filter_by(invoice_no="INV-1001").one()
+            invoice_id = invoice.id
+            share_token = self.app_module.build_invoice_share_token(invoice_id)
+
+        self.login()
+        response = self.client.get(f"/invoice/{invoice_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"WHATSAPP", response.data)
+        self.assertIn(b"data-wa-mobile=\"9876543210\"", response.data)
+        self.assertIn(b"/invoice/share/", response.data)
+
+        public_client = self.app.test_client()
+        public_response = public_client.get(f"/invoice/share/{share_token}")
+        self.assertEqual(public_response.status_code, 200)
+        self.assertIn(b"TAX INVOICE", public_response.data)
+        self.assertNotIn(b"Create New Bill", public_response.data)
+
     def test_appointments_page_renders_shortcut_filters(self):
         self.login()
         response = self.client.get("/appointments")

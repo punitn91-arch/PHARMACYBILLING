@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <title>View Lab Reports</title>
+    <style>
+        :root {
+            --ink: #14243a;
+            --muted: #61728a;
+            --line: #dbe5ef;
+            --blue: #1264c9;
+            --blue-dark: #0b4e9d;
+            --blue-soft: #f2f8ff;
+            --green: #087b70;
+            --danger: #b42318;
+            --surface: #ffffff;
+        }
+        * { box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(145deg, #edf5fd 0%, #f8fbff 47%, #eef8f7 100%);
+            color: var(--ink);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .portal-shell { width: min(100% - 28px, 560px); margin: 0 auto; padding: 28px 0 36px; }
+        .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; color: #274764; font-size: 13px; font-weight: 800; letter-spacing: .04em; }
+        .brand-mark { display: grid; width: 33px; height: 33px; place-items: center; border-radius: 10px; background: var(--blue); color: #fff; box-shadow: 0 6px 15px rgba(18,100,201,.2); font-size: 17px; }
+        .portal-card { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: 0 18px 45px rgba(20, 54, 91, .12); }
+        .portal-head { padding: 29px 27px 23px; background: linear-gradient(140deg, #0d559f, #1770cb); color: #fff; }
+        .eyebrow { margin: 0 0 8px; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; opacity: .84; }
+        h1 { margin: 0; font-size: clamp(25px, 7vw, 32px); letter-spacing: -.035em; line-height: 1.13; }
+        .head-copy { max-width: 420px; margin: 10px 0 0; color: #e4f1ff; font-size: 14px; line-height: 1.55; }
+        .portal-body { padding: 25px 27px 27px; }
+        .flash { margin: 0 0 16px; border: 1px solid #c8d8eb; border-radius: 10px; background: #f2f7fc; padding: 11px 12px; color: #294a6b; font-size: 13px; line-height: 1.45; }
+        .flash.flash-danger, .flash.flash-error { border-color: #f2c8c3; background: #fff4f2; color: var(--danger); }
+        .flash.flash-success { border-color: #bce5d8; background: #effbf6; color: #0c6b51; }
+        .field-label { display: block; margin-bottom: 7px; color: #364e69; font-size: 12px; font-weight: 800; letter-spacing: .045em; }
+        .mobile-wrap { position: relative; }
+        .country-code { position: absolute; top: 50%; left: 14px; color: #4d6178; font-size: 15px; font-weight: 800; transform: translateY(-50%); pointer-events: none; }
+        input[type="tel"] { width: 100%; min-height: 49px; border: 1px solid #bdcfe2; border-radius: 10px; padding: 0 13px 0 51px; background: #fff; color: var(--ink); font: inherit; font-size: 16px; letter-spacing: .04em; outline: none; }
+        input[type="tel"]:focus { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(18,100,201,.13); }
+        .field-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+        .primary-button { display: inline-flex; width: 100%; min-height: 49px; align-items: center; justify-content: center; border: 1px solid var(--blue-dark); border-radius: 10px; margin-top: 20px; background: var(--blue); color: #fff; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; box-shadow: 0 8px 18px rgba(18,100,201,.21); }
+        .primary-button:hover { background: #0d58b1; }
+        .primary-button:focus-visible { outline: 3px solid rgba(18,100,201,.32); outline-offset: 2px; }
+        .primary-button:disabled { cursor: wait; opacity: .72; }
+        .privacy-box { display: flex; gap: 11px; margin-top: 22px; border: 1px solid #c7e6df; border-radius: 11px; background: #f1fbf8; padding: 12px; color: #265c58; font-size: 12px; line-height: 1.5; }
+        .privacy-box strong { color: #125a52; }
+        .privacy-icon { flex: 0 0 auto; font-size: 17px; line-height: 1; }
+        .help { margin: 19px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; text-align: center; }
+        .portal-footer { margin: 20px 8px 0; color: #708198; font-size: 11px; line-height: 1.5; text-align: center; }
+        @media (max-width: 420px) {
+            .portal-shell { width: min(100% - 20px, 560px); padding-top: 14px; }
+            .portal-head, .portal-body { padding-left: 19px; padding-right: 19px; }
+            .brand { margin: 0 4px 14px; }
+        }
+    </style>
+</head>
+<body>
+    <main class="portal-shell">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">✚</span><span>{{ clinic_name or 'THE ENDO PHARMACY' }}</span></div>
+
+        <section class="portal-card" aria-labelledby="pageTitle">
+            <header class="portal-head">
+                <p class="eyebrow">Secure patient access</p>
+                <h1 id="pageTitle">View your lab reports</h1>
+                <p class="head-copy">Enter the mobile number registered during lab billing. We will send a one-time verification code before showing any report.</p>
+            </header>
+
+            <div class="portal-body">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% for category, message in messages %}
+                    <div class="flash flash-{{ (category or 'info')|lower }}" role="alert">{{ message }}</div>
+                    {% endfor %}
+                {% endwith %}
+
+                <form method="post" action="/my-lab-reports/send-otp" id="reportPortalForm">
+                    <label class="field-label" for="mobile">Registered mobile number</label>
+                    <div class="mobile-wrap">
+                        <span class="country-code" aria-hidden="true">+91</span>
+                        <input id="mobile" name="mobile" type="tel" inputmode="numeric" autocomplete="tel-national" pattern="[0-9]{10}" minlength="10" maxlength="10" required placeholder="10-digit mobile number" aria-describedby="mobileHint">
+                    </div>
+                    <p class="field-hint" id="mobileHint">Use the same 10-digit number provided at the laboratory.</p>
+                    <button class="primary-button" type="submit" id="sendOtpButton">Send verification code</button>
+                </form>
+
+                <div class="privacy-box">
+                    <span class="privacy-icon" aria-hidden="true">🔒</span>
+                    <div><strong>Your reports stay private.</strong><br>An OTP is required every time before reports can be viewed or downloaded. Do not share the code with anyone.</div>
+                </div>
+                <p class="help">If the mobile number is incorrect or a report is missing, please contact the laboratory reception.</p>
+            </div>
+        </section>
+        <p class="portal-footer">This page is for personal medical-report access only. Please use a private device and sign out of shared browsers.</p>
+    </main>
+    <script>
+        document.getElementById('reportPortalForm').addEventListener('submit', function () {
+            const button = document.getElementById('sendOtpButton');
+            button.disabled = true;
+            button.textContent = 'Sending verification code…';
+        });
+    </script>
+</body>
+</html>

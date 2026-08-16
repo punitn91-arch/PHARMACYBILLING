@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 try:
-    from ..models import Invoice, db
+    from ..models import Invoice, Return, db
 except ImportError:  # pragma: no cover - script/local fallback
-    from models import Invoice, db
+    from models import Invoice, Return, db
 
 
 def default_report_filters(fresh_start_date=None, current_date=None):
@@ -54,6 +54,7 @@ def build_reports_page_state(
     patient_medicine_summary = None
     collection_summary = None
     invoice_rows = []
+    returns = []
     current_date = clinic_now().date()
     report_filters = default_report_filters(fresh_start_date=fresh_start_date, current_date=current_date)
     messages = []
@@ -103,6 +104,11 @@ def build_reports_page_state(
                 Invoice.created_at >= start_bound,
                 Invoice.created_at < end_bound,
             ).all()
+            returns = Return.query.filter(
+                Return.created_at >= start_bound,
+                Return.created_at < end_bound,
+                or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+            ).all()
         elif report_type == "monthly":
             month = to_int_safe(form_data.get("month"), 0)
             year = to_int_safe(form_data.get("year"), 0)
@@ -121,6 +127,11 @@ def build_reports_page_state(
                     Invoice.created_at >= start_bound,
                     Invoice.created_at < end_bound,
                 ).all()
+                returns = Return.query.filter(
+                    Return.created_at >= start_bound,
+                    Return.created_at < end_bound,
+                    or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                ).all()
         elif report_type == "custom":
             from_date = report_filters["from_date"]
             to_date = report_filters["to_date"]
@@ -137,6 +148,11 @@ def build_reports_page_state(
                         Invoice.created_at >= from_dt,
                         Invoice.created_at < to_dt,
                     ).all()
+                    returns = Return.query.filter(
+                        Return.created_at >= from_dt,
+                        Return.created_at < to_dt,
+                        or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                    ).all()
             else:
                 messages.append(("danger", "Please select both from date and to date."))
         elif report_type == "patient":
@@ -145,6 +161,10 @@ def build_reports_page_state(
                 messages.append(("danger", "Please enter patient name."))
             else:
                 invoices = Invoice.query.filter(Invoice.customer.ilike(f"%{patient}%")).all()
+                returns = Return.query.filter(
+                    Return.customer.ilike(f"%{patient}%"),
+                    or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                ).all()
         elif report_type == "mobile":
             mobile_raw = (form_data.get("mobile") or "").strip()
             if not mobile_raw:
@@ -179,8 +199,40 @@ def build_reports_page_state(
                             Invoice.mobile.ilike(f"%{mobile_raw}%"),
                         )
                     ).all()
+                    normalized_return_mobile = db.func.replace(
+                        db.func.replace(
+                            db.func.replace(
+                                db.func.replace(
+                                    db.func.replace(
+                                        db.func.replace(db.func.coalesce(Return.mobile, ""), " ", ""),
+                                        "-",
+                                        "",
+                                    ),
+                                    "+",
+                                    "",
+                                ),
+                                "(",
+                                "",
+                            ),
+                            ")",
+                            "",
+                        ),
+                        ".",
+                        "",
+                    )
+                    returns = Return.query.filter(
+                        or_(
+                            normalized_return_mobile.like(f"%{mobile_digits}%"),
+                            Return.mobile.ilike(f"%{mobile_raw}%"),
+                        ),
+                        or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                    ).all()
                 else:
                     invoices = Invoice.query.filter(Invoice.mobile.ilike(f"%{mobile_raw}%")).all()
+                    returns = Return.query.filter(
+                        Return.mobile.ilike(f"%{mobile_raw}%"),
+                        or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                    ).all()
         elif report_type == "patient_medicine":
             (
                 patient_medicine_patients,
@@ -215,8 +267,8 @@ def build_reports_page_state(
             fast_movers = medicine_report["fast_movers"]
             medicine_totals = medicine_report["medicine_totals"]
 
-        total = sum(invoice.total for invoice in invoices)
-        collection_summary = summarize_invoice_collection(invoices) if invoices else None
+        collection_summary = summarize_invoice_collection(invoices, returns) if invoices or returns else None
+        total = collection_summary["net_sale_total"] if collection_summary else sum(invoice.total for invoice in invoices)
         invoice_rows = [
             {
                 "invoice": invoice,

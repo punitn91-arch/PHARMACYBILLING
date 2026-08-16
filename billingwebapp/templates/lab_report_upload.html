@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Upload Lab Report{% endblock %}
+
+{% block body %}
+<style>
+    .report-upload-page { --ink:#14243a; --muted:#65748a; --line:#dce5f0; --blue:#1264c9; --blue-dark:#0b4e9d; --green:#087b70; max-width:920px; margin:0 auto; color:var(--ink); }
+    .report-upload-page *, .report-upload-page *::before, .report-upload-page *::after { box-sizing:border-box; }
+    .report-upload-back { display:inline-flex; margin-bottom:16px; color:#286096; font-size:13px; font-weight:800; text-decoration:none; }
+    .report-upload-kicker { margin:0 0 4px; color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+    .report-upload-title { margin:0; font-size:clamp(24px,3vw,31px); letter-spacing:-.03em; }
+    .report-upload-copy { margin:7px 0 18px; color:var(--muted); font-size:14px; line-height:1.5; }
+    .report-upload-surface { overflow:hidden; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 10px 28px rgba(20,48,84,.06); }
+    .report-upload-order { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; padding:15px 19px; border-bottom:1px solid var(--line); background:#f7fbff; }
+    .report-upload-order span { display:block; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .report-upload-order strong { display:block; overflow-wrap:anywhere; margin-top:4px; color:var(--ink); font-size:13px; }
+    .report-upload-form { padding:20px; }
+    .report-upload-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:15px; }
+    .report-field { display:grid; gap:6px; min-width:0; }
+    .report-field.wide { grid-column:1 / -1; }
+    .report-field label { color:#43546e; font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .report-field input, .report-field textarea { width:100%; min-height:40px; border:1px solid #c9d7e7; border-radius:8px; padding:9px 10px; color:var(--ink); font:inherit; outline:none; }
+    .report-field textarea { min-height:88px; resize:vertical; }
+    .report-field input:focus, .report-field textarea:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(18,100,201,.12); }
+    .report-file-box { border:1px dashed #8ab4df; border-radius:10px; background:#f6faff; padding:13px; }
+    .report-file-box input { min-height:auto; border:0; border-radius:0; padding:0; background:transparent; }
+    .report-hint { margin:0; color:var(--muted); font-size:11px; line-height:1.45; }
+    .report-security { display:flex; gap:10px; margin-top:17px; border:1px solid #bee5da; border-radius:9px; background:#effbf7; padding:11px 12px; color:#265f58; font-size:12px; line-height:1.45; }
+    .report-actions { display:flex; justify-content:flex-end; gap:10px; padding:15px 20px; border-top:1px solid var(--line); background:#f8fbfe; }
+    .report-button { display:inline-flex; min-height:41px; align-items:center; justify-content:center; border:1px solid transparent; border-radius:8px; padding:0 16px; font-size:13px; font-weight:800; text-decoration:none; cursor:pointer; }
+    .report-button.cancel { border-color:#c4d2e1; background:#fff; color:#39536f; }
+    .report-button.save { border-color:var(--blue-dark); background:var(--blue); color:#fff; box-shadow:0 6px 14px rgba(18,100,201,.2); }
+    .uploaded-reports { border-top:1px solid var(--line); padding:20px; }
+    .uploaded-reports h2 { margin:0; font-size:15px; }
+    .uploaded-reports p { margin:5px 0 0; color:var(--muted); font-size:12px; }
+    .uploaded-report-list { display:grid; gap:8px; margin:14px 0 0; }
+    .uploaded-report-item { display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid #dbe6f0; border-radius:8px; padding:9px 10px; font-size:12px; }
+    .uploaded-report-item strong { overflow-wrap:anywhere; }
+    .uploaded-report-item span { color:var(--green); font-size:11px; font-weight:800; white-space:nowrap; }
+    @media (max-width:620px) { .report-upload-order,.report-upload-grid { grid-template-columns:1fr; } .report-upload-form,.uploaded-reports { padding:15px; } .report-actions { display:grid; grid-template-columns:1fr; padding:14px 15px; } .report-button { width:100%; } }
+</style>
+
+{% set order_no = order.order_no or order.invoice_no or ('LAB-' ~ order.id) %}
+<main class="report-upload-page">
+    <a class="report-upload-back" href="/lab-order/{{ order.id }}">← Back to lab order</a>
+    <p class="report-upload-kicker">Laboratory reports</p>
+    <h1 class="report-upload-title">Upload patient report</h1>
+    <p class="report-upload-copy">The uploaded PDF becomes available only to the patient after mobile OTP verification. Check the patient and document carefully before publishing.</p>
+
+    <section class="report-upload-surface">
+        <div class="report-upload-order">
+            <div><span>Lab order</span><strong>{{ order_no }}</strong></div>
+            <div><span>Patient</span><strong>{{ order.customer or order.patient_name or '-' }}</strong></div>
+            <div><span>Registered mobile</span><strong>{{ order.mobile or '-' }}</strong></div>
+        </div>
+
+        <form class="report-upload-form" method="post" action="/lab-order/{{ order.id }}/reports/upload" enctype="multipart/form-data" id="labReportUploadForm">
+            <div class="report-upload-grid">
+                <div class="report-field">
+                    <label for="reportTitle">Report title</label>
+                    <input id="reportTitle" name="report_title" type="text" maxlength="150" required placeholder="e.g. Complete Blood Count report">
+                </div>
+                <div class="report-field">
+                    <label for="reportDate">Report date</label>
+                    <input id="reportDate" name="report_date" type="date">
+                    <p class="report-hint">Leave blank to use today's upload date.</p>
+                </div>
+                <div class="report-field wide">
+                    <label for="reportFile">Final report PDF</label>
+                    <div class="report-file-box"><input id="reportFile" name="report_file" type="file" accept="application/pdf,.pdf" required aria-describedby="fileHelp"></div>
+                    <p class="report-hint" id="fileHelp">PDF only. Upload the final approved report, not a sample-collection slip or draft.</p>
+                </div>
+                <div class="report-field wide">
+                    <label for="patientNote">Patient note (optional)</label>
+                    <textarea id="patientNote" name="patient_note" maxlength="500" placeholder="Optional note shown with the downloaded report"></textarea>
+                </div>
+            </div>
+            <div class="report-security"><span aria-hidden="true">🔒</span><span><strong>Privacy check:</strong> patients can access this file only through the verified report portal. Confirm the patient name and order number before uploading.</span></div>
+        </form>
+
+        <div class="report-actions">
+            <a class="report-button cancel" href="/lab-order/{{ order.id }}">Cancel</a>
+            <button class="report-button save" type="submit" form="labReportUploadForm" id="uploadReportButton">Upload &amp; publish report</button>
+        </div>
+
+        {% if reports is defined and reports %}
+        <section class="uploaded-reports" aria-labelledby="existingReportsHeading">
+            <h2 id="existingReportsHeading">Already uploaded</h2>
+            <p>Only reports marked <strong>Published</strong> are available to the patient after OTP verification.</p>
+            <div class="uploaded-report-list">
+                {% for report in reports %}
+                <div class="uploaded-report-item"><strong>{{ report.report_title or report.title or report.name or 'Lab report' }}</strong><span>{{ (report.status or 'DRAFT')|lower|title }}</span></div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+    </section>
+</main>
+<script>
+    document.getElementById('labReportUploadForm').addEventListener('submit', function () {
+        const button = document.getElementById('uploadReportButton');
+        button.disabled = true;
+        button.textContent = 'Uploading…';
+    });
+</script>
+{% endblock %}

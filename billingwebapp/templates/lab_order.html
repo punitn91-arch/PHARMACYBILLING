@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lab Order {{ order.order_no or order.invoice_no or ('LAB-' ~ order.id) }}</title>
+    <style>
+        :root { --ink:#15263d; --muted:#607089; --line:#d9e4ef; --blue:#155eb4; --blue-soft:#f2f7fd; --teal:#087b70; }
+        * { box-sizing:border-box; }
+        body { margin:0; background:#edf3f9; color:var(--ink); font-family:"Segoe UI",Arial,sans-serif; font-size:12px; }
+        .lab-order-sheet { width:min(900px, calc(100% - 24px)); margin:18px auto; border:1px solid #cbd9e8; border-radius:16px; background:#fff; box-shadow:0 18px 42px rgba(20,48,84,.14); overflow:hidden; }
+        .lab-order-head { display:flex; justify-content:space-between; gap:20px; padding:24px 26px 19px; border-bottom:1px solid var(--line); }
+        .lab-brand { min-width:0; }
+        .lab-brand-mark { color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.13em; text-transform:uppercase; }
+        .lab-brand-name { margin-top:5px; font-size:24px; font-weight:800; letter-spacing:-.035em; }
+        .lab-brand-note { max-width:410px; margin-top:5px; color:var(--muted); font-size:12px; line-height:1.45; }
+        .lab-order-badge { min-width:220px; border:1px solid #c9d9ec; border-radius:12px; background:linear-gradient(180deg,#f8fbff,#f2f7fd); padding:12px 14px; text-align:right; }
+        .lab-order-type { color:var(--blue); font-size:16px; font-weight:800; letter-spacing:.08em; }
+        .lab-order-number { margin-top:8px; color:var(--ink); font-size:13px; font-weight:800; }
+        .lab-order-date { margin-top:4px; color:var(--muted); font-size:11px; }
+        .lab-section { padding:18px 26px; }
+        .lab-patient-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+        .lab-info-card { border:1px solid var(--line); border-radius:11px; background:#fbfdff; padding:12px 14px; }
+        .lab-label { display:block; margin-bottom:7px; color:var(--blue); font-size:10px; font-weight:800; letter-spacing:.09em; text-transform:uppercase; }
+        .lab-detail { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px; padding:4px 0; border-bottom:1px dashed #dce6f0; font-size:12px; }
+        .lab-detail:last-child { border-bottom:0; }
+        .lab-detail span { color:var(--muted); }
+        .lab-detail strong { overflow-wrap:anywhere; }
+        .lab-table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:11px; }
+        .lab-table { width:100%; min-width:620px; border-collapse:collapse; }
+        .lab-table th { padding:10px 12px; background:var(--blue); color:#fff; font-size:10px; font-weight:800; letter-spacing:.07em; text-align:left; text-transform:uppercase; }
+        .lab-table th:nth-child(n+3), .lab-table td:nth-child(n+3) { text-align:right; }
+        .lab-table td { padding:11px 12px; border-bottom:1px solid #e7eef5; vertical-align:top; }
+        .lab-table tr:last-child td { border-bottom:0; }
+        .lab-item-name { font-size:13px; font-weight:800; }
+        .lab-item-meta { margin-top:3px; color:var(--muted); font-size:11px; }
+        .lab-money { color:var(--teal); font-weight:800; white-space:nowrap; }
+        .lab-footer { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.55fr); gap:18px; padding:18px 26px 25px; }
+        .lab-note { border-top:1px solid var(--line); padding-top:10px; color:var(--muted); font-size:11px; line-height:1.5; }
+        .lab-note strong { color:var(--ink); }
+        .lab-summary { border:1px solid var(--line); border-radius:11px; background:#f8fbff; padding:11px 13px; }
+        .lab-summary-row { display:flex; justify-content:space-between; gap:14px; border-bottom:1px dashed #d7e2ee; padding:6px 0; color:var(--muted); }
+        .lab-summary-row strong { color:var(--ink); }
+        .lab-summary-row:last-child { border-bottom:0; }
+        .lab-summary-row.grand { padding-top:10px; font-size:14px; font-weight:800; }
+        .lab-summary-row.grand span, .lab-summary-row.grand strong { color:var(--blue); }
+        .lab-payment-details { margin-top:10px; border-top:1px solid #dbe6f1; padding-top:9px; }
+        .lab-payment-details-title { margin:0 0 4px; color:var(--blue); font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+        .lab-actions { padding:0 26px 25px; text-align:center; }
+        .lab-button { min-height:37px; border:0; border-radius:7px; margin:0 3px; padding:0 14px; background:var(--blue); color:#fff; font-size:12px; font-weight:800; cursor:pointer; }
+        .lab-button.secondary { background:#edf4fb; color:#285b8b; border:1px solid #bfd0e2; text-decoration:none; display:inline-flex; align-items:center; }
+        @page { size:A5 portrait; margin:7mm; }
+        @media print { body { background:#fff; } .lab-order-sheet { width:100%; margin:0; border:0; border-radius:0; box-shadow:none; } .lab-actions { display:none; } }
+        @media (max-width:620px) { .lab-order-head,.lab-patient-grid,.lab-footer { display:grid; grid-template-columns:1fr; } .lab-order-sheet { width:calc(100% - 14px); margin:7px auto; border-radius:10px; } .lab-order-head,.lab-section,.lab-footer { padding-left:14px; padding-right:14px; } .lab-order-badge { min-width:0; text-align:left; } }
+    </style>
+</head>
+<body>
+{% set order_no = order.order_no or order.invoice_no or ('LAB-' ~ order.id) %}
+{% set order_total = (order.total or order.net_total or order.subtotal or 0)|float %}
+{% set order_subtotal = (order.subtotal or order.total or order.net_total or 0)|float %}
+{% set payable_total = (rounded_total if rounded_total is defined else order_total)|float %}
+<main class="lab-order-sheet">
+    <header class="lab-order-head">
+        <div class="lab-brand">
+            <div class="lab-brand-mark">Laboratory services</div>
+            <div class="lab-brand-name">THE ENDO PHARMACY</div>
+            <div class="lab-brand-note">Lab test order and payment receipt. Please keep this document for sample collection and report follow-up.</div>
+        </div>
+        <div class="lab-order-badge">
+            <div class="lab-order-type">LAB ORDER</div>
+            <div class="lab-order-number">Order No: {{ order_no }}</div>
+            <div class="lab-order-date">{{ date }}{% if bill_time %} · {{ bill_time }}{% endif %}</div>
+        </div>
+    </header>
+
+    <section class="lab-section">
+        <div class="lab-patient-grid">
+            <div class="lab-info-card">
+                <span class="lab-label">Patient details</span>
+                <div class="lab-detail"><span>Patient name</span><strong>{{ order.customer or order.patient_name or '-' }}</strong></div>
+                <div class="lab-detail"><span>Mobile</span><strong>{{ order.mobile or '-' }}</strong></div>
+                <div class="lab-detail"><span>Gender</span><strong>{{ order.gender or '-' }}</strong></div>
+            </div>
+            <div class="lab-info-card">
+                <span class="lab-label">Order details</span>
+                <div class="lab-detail"><span>Referred by</span><strong>{{ order.doctor or '-' }}</strong></div>
+                <div class="lab-detail"><span>Status</span><strong>{{ order.status or 'ORDERED' }}</strong></div>
+                <div class="lab-detail"><span>Payment</span><strong>{{ payment_breakdown.display_mode if payment_breakdown else (order.payment_mode or '-') }}</strong></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="lab-section" style="padding-top:0;">
+        <div class="lab-table-wrap">
+            <table class="lab-table">
+                <thead><tr><th>Test</th><th>Specimen / preparation</th><th>Rate</th><th>Qty</th><th>Amount</th></tr></thead>
+                <tbody>
+                    {% for item in items %}
+                    {% set item_rate = (item.unit_price or item.rate or item.price or item.default_price or 0)|float %}
+                    {% set item_qty = (item.qty or 0)|int %}
+                    {% set item_amount = (item.amount or item.net_amount or (item_rate * item_qty))|float %}
+                    <tr>
+                        <td><div class="lab-item-name">{{ item.test_name or item.name or '-' }}</div><div class="lab-item-meta">{{ item.test_code or item.code or '' }}</div></td>
+                        <td>{{ item.specimen_type or '-' }}{% if item.preparation %}<div class="lab-item-meta">{{ item.preparation }}</div>{% endif %}</td>
+                        <td>₹{{ "%.2f"|format(item_rate) }}</td>
+                        <td>{{ item_qty }}</td>
+                        <td><span class="lab-money">₹{{ "%.2f"|format(item_amount) }}</span></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" style="text-align:center;color:#607089;">No lab tests were found for this order.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer class="lab-footer">
+        <div class="lab-note"><strong>Patient note</strong><br>Sample collection and report availability depend on the selected test. Follow any preparation instructions shown above. For corrections, please quote order number <strong>{{ order_no }}</strong>.</div>
+        <div class="lab-summary">
+            <div class="lab-summary-row"><span>Tests subtotal</span><strong>₹{{ "%.2f"|format(order_subtotal) }}</strong></div>
+            <div class="lab-summary-row"><span>Discount</span><strong>₹{{ "%.2f"|format((order.discount or 0)|float) }}</strong></div>
+            <div class="lab-summary-row grand"><span>Paid / payable</span><strong>₹{{ "%.2f"|format(payable_total) }}</strong></div>
+            {% if payment_breakdown and payment_breakdown.is_split_payment %}
+            <div class="lab-payment-details">
+                <p class="lab-payment-details-title">Payment split</p>
+                <div class="lab-summary-row"><span>Cash</span><strong>₹{{ "%.2f"|format((payment_breakdown.cash_amount or 0)|float) }}</strong></div>
+                <div class="lab-summary-row"><span>Online</span><strong>₹{{ "%.2f"|format((payment_breakdown.online_amount or 0)|float) }}</strong></div>
+            </div>
+            {% endif %}
+        </div>
+    </footer>
+    <div class="lab-actions"><button class="lab-button" type="button" onclick="window.print()">Print order</button><a class="lab-button secondary" href="/lab-order/{{ order.id }}/reports/upload">Upload / manage report{% if reports %} ({{ reports|length }}){% endif %}</a><a class="lab-button secondary" href="/lab-billing">Create another order</a></div>
+</main>
+</body>
+</html>

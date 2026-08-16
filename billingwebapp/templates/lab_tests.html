@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Lab Test Master{% endblock %}
+
+{% block body %}
+<style>
+    .lab-master-page { --ink:#14243a; --muted:#65748a; --line:#dce5f0; --blue:#1264c9; --blue-dark:#0b4e9d; --green:#0d7a55; --amber:#a66300; --red:#b42318; max-width:1440px; margin:0 auto; color:var(--ink); }
+    .lab-master-page *, .lab-master-page *::before, .lab-master-page *::after { box-sizing:border-box; }
+    .lab-master-head { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:18px; }
+    .lab-master-kicker { margin:0 0 4px; color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+    .lab-master-title { margin:0; font-size:clamp(24px,3vw,32px); letter-spacing:-.03em; }
+    .lab-master-copy { margin:7px 0 0; color:var(--muted); font-size:14px; line-height:1.5; }
+    .lab-master-add { display:inline-flex; align-items:center; justify-content:center; min-height:40px; border:1px solid var(--blue-dark); border-radius:8px; background:var(--blue); color:#fff; padding:0 15px; text-decoration:none; font-size:13px; font-weight:800; white-space:nowrap; box-shadow:0 6px 14px rgba(18,100,201,.2); }
+    .lab-master-surface { border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 8px 24px rgba(20,48,84,.055); overflow:hidden; }
+    .lab-master-toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:14px 16px; border-bottom:1px solid var(--line); background:#fbfdff; }
+    .lab-master-search { display:flex; gap:8px; flex:1 1 520px; max-width:650px; }
+    .lab-master-search input { width:100%; min-height:39px; border:1px solid #c9d7e7; border-radius:8px; padding:8px 10px; outline:none; color:var(--ink); }
+    .lab-master-search input:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(18,100,201,.12); }
+    .lab-master-search button { min-height:39px; border:1px solid #c4d1df; border-radius:8px; background:#fff; color:#36526f; padding:0 13px; font-size:12px; font-weight:800; cursor:pointer; }
+    .lab-master-count { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .lab-master-table-wrap { overflow-x:auto; }
+    .lab-master-table { width:100%; min-width:960px; border-collapse:collapse; }
+    .lab-master-table th { padding:12px 14px; background:#f5f9fd; border-bottom:1px solid var(--line); color:#61748d; font-size:10px; font-weight:800; letter-spacing:.07em; text-align:left; text-transform:uppercase; }
+    .lab-master-table td { padding:13px 14px; border-bottom:1px solid #edf2f7; font-size:13px; vertical-align:middle; }
+    .lab-master-table tr:last-child td { border-bottom:0; }
+    .lab-master-table tr:hover td { background:#fbfdff; }
+    .lab-test-code { color:#315a84; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; font-weight:800; }
+    .lab-test-name { font-weight:800; }
+    .lab-subtext { display:block; max-width:240px; margin-top:3px; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+    .lab-price { color:var(--green); font-size:14px; font-weight:800; white-space:nowrap; }
+    .lab-status { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+    .lab-status.active { background:#e8f7ef; color:#087545; }
+    .lab-status.inactive { background:#fff0ee; color:var(--red); }
+    .lab-actions-cell { display:flex; align-items:center; justify-content:flex-end; gap:7px; }
+    .lab-action { display:inline-flex; align-items:center; justify-content:center; min-height:31px; border:1px solid #c5d5e6; border-radius:7px; background:#fff; color:#2e5c88; padding:0 9px; text-decoration:none; font-size:11px; font-weight:800; cursor:pointer; }
+    .lab-action.deactivate { border-color:#f0c1bc; background:#fff7f6; color:var(--red); }
+    .lab-action-form { margin:0; }
+    .lab-empty { padding:48px 20px; text-align:center; }
+    .lab-empty strong { display:block; font-size:15px; }
+    .lab-empty p { margin:6px 0 14px; color:var(--muted); font-size:13px; }
+    @media (max-width:680px) { .lab-master-head { display:block; } .lab-master-add { margin-top:13px; } .lab-master-toolbar { align-items:stretch; flex-direction:column; } .lab-master-search { max-width:none; } .lab-master-count { white-space:normal; } }
+</style>
+
+{% set active_count = namespace(value=0) %}
+{% for test in tests %}{% if test.is_active %}{% set active_count.value = active_count.value + 1 %}{% endif %}{% endfor %}
+
+<main class="lab-master-page">
+    <div class="lab-master-head">
+        <div>
+            <p class="lab-master-kicker">Laboratory configuration</p>
+            <h1 class="lab-master-title">Lab Test Master</h1>
+            <p class="lab-master-copy">Maintain the controlled test catalogue and rate card that billing staff use while creating lab orders.</p>
+        </div>
+        <a class="lab-master-add" href="/lab-tests/add">+ Add lab test</a>
+    </div>
+
+    <section class="lab-master-surface">
+        <div class="lab-master-toolbar">
+            <form class="lab-master-search" method="GET" action="/lab-tests">
+                <input type="search" name="q" value="{{ search_query or '' }}" placeholder="Search test name, code, category, or specimen" aria-label="Search lab tests">
+                <button type="submit">Search</button>
+            </form>
+            <div class="lab-master-count">{{ active_count.value }} active of {{ tests|length }} shown</div>
+        </div>
+
+        {% if tests %}
+        <div class="lab-master-table-wrap">
+            <table class="lab-master-table">
+                <thead>
+                    <tr>
+                        <th>Test code</th>
+                        <th>Test name</th>
+                        <th>Category</th>
+                        <th>Specimen</th>
+                        <th>Preparation</th>
+                        <th>Rate</th>
+                        <th>Status</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for test in tests %}
+                    <tr>
+                        <td><span class="lab-test-code">{{ test.test_code or '-' }}</span></td>
+                        <td><span class="lab-test-name">{{ test.name }}</span></td>
+                        <td>{{ test.category or '-' }}</td>
+                        <td>{{ test.specimen_type or '-' }}</td>
+                        <td><span class="lab-subtext" title="{{ test.preparation or '' }}">{{ test.preparation or '-' }}</span></td>
+                        <td><span class="lab-price">₹{{ "%.2f"|format((test.default_price or 0)|float) }}</span></td>
+                        <td>
+                            <span class="lab-status {{ 'active' if test.is_active else 'inactive' }}">{{ 'Active' if test.is_active else 'Inactive' }}</span>
+                        </td>
+                        <td>
+                            <div class="lab-actions-cell">
+                                <a class="lab-action" href="/lab-tests/{{ test.id }}/edit">Edit</a>
+                                {% if test.is_active %}
+                                <form class="lab-action-form" method="POST" action="/lab-tests/{{ test.id }}/deactivate" onsubmit="return confirm('Deactivate this test? It will no longer appear in lab billing.');">
+                                    <button class="lab-action deactivate" type="submit">Deactivate</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="lab-empty">
+            <strong>No lab tests found</strong>
+            <p>{% if search_query %}No matching test is in the master list.{% else %}Add the first approved test and rate to begin lab billing.{% endif %}</p>
+            <a class="lab-master-add" href="/lab-tests/add">+ Add lab test</a>
+        </div>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

@@ -26,6 +26,7 @@ APP_ENV=production
 APP_TIMEZONE=Asia/Kolkata
 ENABLE_BACKGROUND_JOBS=1
 APP_STORAGE_ROOT=/data/uploads
+APP_PRIVATE_STORAGE_ROOT=/data/private
 APP_BACKUP_ROOT=/data/backups
 SESSION_IDLE_MINUTES=90
 SESSION_ABSOLUTE_HOURS=24
@@ -35,6 +36,30 @@ SENTRY_DSN=<optional>
 SLOW_REQUEST_MS=1200
 SLOW_QUERY_MS=250
 ```
+
+### Public patient portals
+
+The online lab-report portal and QR appointment page are public routes, so
+configure these before sharing them with patients:
+
+```text
+# Exact HTTPS origin printed inside the reception QR code.
+PUBLIC_BOOKING_BASE_URL=https://your-clinic-domain.example
+
+# Real OTP delivery. Development mode only writes a code to server logs.
+PUBLIC_PORTAL_OTP_MODE=twilio_whatsapp
+TWILIO_ACCOUNT_SID=<real-account-sid>
+TWILIO_AUTH_TOKEN=<real-auth-token>
+TWILIO_WHATSAPP_FROM=whatsapp:+<approved-sender>
+```
+
+`APP_PRIVATE_STORAGE_ROOT` must be on the persistent volume and must **not**
+be served by a web/static route. Lab-report PDFs are stored there and are
+available only through the OTP-protected download endpoint.
+
+The ₹1,000 priority-booking screen intentionally does not create a paid
+appointment from browser data. Before enabling that option for patients,
+connect a payment gateway with signed server-side webhook verification.
 
 ### 3. PostgreSQL-First Strategy
 

@@ -1808,6 +1808,67 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn("FINAL REFUND TOTAL", html)
         self.assertIn("₹50.0", html)
 
+    def test_summarize_invoice_collection_subtracts_sale_returns_from_current_collections(self):
+        invoice_cash = self.app_module.Invoice(total=300.0, payment_mode="CASH")
+        invoice_online = self.app_module.Invoice(total=200.0, payment_mode="ONLINE")
+        return_cash = self.app_module.Return(total_refund=50.0, payment_mode="CASH")
+        return_online = self.app_module.Return(total_refund=70.0, payment_mode="ONLINE")
+        return_adjustment = self.app_module.Return(total_refund=20.0, payment_mode="ADJUSTMENT")
+
+        summary = self.app_module.summarize_invoice_collection(
+            [invoice_cash, invoice_online],
+            [return_cash, return_online, return_adjustment],
+        )
+
+        self.assertEqual(summary["invoice_count"], 2)
+        self.assertEqual(summary["sale_total"], 500.0)
+        self.assertEqual(summary["refund_total"], 140.0)
+        self.assertEqual(summary["net_sale_total"], 360.0)
+        self.assertEqual(summary["cash_collection"], 250.0)
+        self.assertEqual(summary["online_collection"], 130.0)
+        self.assertEqual(summary["cash_refund_total"], 50.0)
+        self.assertEqual(summary["online_refund_total"], 70.0)
+        self.assertEqual(summary["return_count"], 3)
+
+    def test_daily_reports_include_today_return_adjustment_even_without_today_invoice(self):
+        with self.app.app_context():
+            patient = self._seed_patient()
+            old_invoice = self.app_module.Invoice(
+                invoice_no="INV-RET-1",
+                patient_id=patient.id,
+                customer=patient.name,
+                mobile=patient.mobile,
+                subtotal=250.0,
+                total=250.0,
+                payment_mode="CASH",
+                created_by="admin",
+                created_at=datetime.utcnow() - timedelta(days=2),
+            )
+            self.db.session.add(old_invoice)
+            self.db.session.flush()
+
+            self.db.session.add(
+                self.app_module.Return(
+                    invoice_id=old_invoice.id,
+                    invoice_no=old_invoice.invoice_no,
+                    customer=old_invoice.customer,
+                    mobile=old_invoice.mobile,
+                    total_refund=50.0,
+                    payment_mode="CASH",
+                    created_by="admin",
+                    created_at=datetime.utcnow(),
+                )
+            )
+            self.db.session.commit()
+
+        self.login()
+        response = self.client.get("/reports?report_type=daily")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("Refund Total", html)
+        self.assertIn("No invoices matched this filter. Refund adjustments, if any, are already reflected above.", html)
+        self.assertIn("Rs -50.0", html)
+
     def test_appointment_payment_flow_marks_paid_and_blocks_duplicate(self):
         with self.app.app_context():
             patient = self._seed_patient()

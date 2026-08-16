@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Lab Orders{% endblock %}
+
+{% block body %}
+<style>
+    .lab-orders-page { --ink:#14243a; --muted:#65748a; --line:#dce5f0; --blue:#1264c9; --green:#087b70; --amber:#a66300; --red:#b42318; max-width:1440px; margin:0 auto; color:var(--ink); }
+    .lab-orders-page *, .lab-orders-page *::before, .lab-orders-page *::after { box-sizing:border-box; }
+    .lab-orders-head { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:18px; }
+    .lab-orders-kicker { margin:0 0 4px; color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+    .lab-orders-title { margin:0; font-size:clamp(24px,3vw,32px); letter-spacing:-.03em; }
+    .lab-orders-copy { margin:7px 0 0; color:var(--muted); font-size:14px; line-height:1.5; }
+    .lab-orders-new { display:inline-flex; align-items:center; justify-content:center; min-height:40px; border:1px solid #0b4e9d; border-radius:8px; background:var(--blue); color:#fff; padding:0 15px; text-decoration:none; font-size:13px; font-weight:800; white-space:nowrap; box-shadow:0 6px 14px rgba(18,100,201,.2); }
+    .lab-orders-surface { overflow:hidden; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 8px 24px rgba(20,48,84,.055); }
+    .lab-orders-filter { display:grid; grid-template-columns:minmax(220px,1fr) 190px auto; gap:9px; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line); background:#fbfdff; }
+    .lab-orders-filter input,.lab-orders-filter select { width:100%; min-height:39px; border:1px solid #c9d7e7; border-radius:8px; padding:8px 10px; color:var(--ink); outline:none; font:inherit; }
+    .lab-orders-filter input:focus,.lab-orders-filter select:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(18,100,201,.12); }
+    .lab-orders-filter button { min-height:39px; border:1px solid #c4d1df; border-radius:8px; background:#fff; color:#36526f; padding:0 14px; font-size:12px; font-weight:800; cursor:pointer; }
+    .lab-orders-table-wrap { overflow-x:auto; }
+    .lab-orders-table { width:100%; min-width:960px; border-collapse:collapse; }
+    .lab-orders-table th { padding:12px 14px; background:#f5f9fd; border-bottom:1px solid var(--line); color:#61748d; font-size:10px; font-weight:800; letter-spacing:.07em; text-align:left; text-transform:uppercase; }
+    .lab-orders-table td { padding:13px 14px; border-bottom:1px solid #edf2f7; font-size:13px; vertical-align:middle; }
+    .lab-orders-table tr:last-child td { border-bottom:0; }
+    .lab-orders-table tr:hover td { background:#fbfdff; }
+    .lab-order-number { color:#315a84; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; font-weight:800; }
+    .lab-patient-name { font-weight:800; }
+    .lab-subtext { display:block; margin-top:3px; color:var(--muted); font-size:11px; }
+    .lab-total { color:var(--green); font-size:14px; font-weight:800; white-space:nowrap; }
+    .lab-status { display:inline-flex; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+    .lab-status.pending,.lab-status.ordered { background:#fff6df; color:var(--amber); }
+    .lab-status.collected,.lab-status.completed { background:#e8f7ef; color:#087545; }
+    .lab-status.cancelled { background:#fff0ee; color:var(--red); }
+    .lab-status.default { background:#edf3f9; color:#47627d; }
+    .lab-view { display:inline-flex; align-items:center; justify-content:center; min-height:31px; border:1px solid #bed0e2; border-radius:7px; background:#fff; color:#2e5c88; padding:0 10px; text-decoration:none; font-size:11px; font-weight:800; }
+    .lab-empty { padding:48px 20px; color:var(--muted); text-align:center; }
+    .lab-empty strong { display:block; color:var(--ink); font-size:15px; }
+    .lab-empty p { margin:6px 0 14px; font-size:13px; }
+    @media (max-width:720px) { .lab-orders-head { display:block; } .lab-orders-new { margin-top:13px; } .lab-orders-filter { grid-template-columns:1fr; } }
+</style>
+
+<main class="lab-orders-page">
+    <div class="lab-orders-head">
+        <div>
+            <p class="lab-orders-kicker">Laboratory services</p>
+            <h1 class="lab-orders-title">Lab Orders</h1>
+            <p class="lab-orders-copy">Review saved test orders, payment mode, and operational status from one place.</p>
+        </div>
+        <a class="lab-orders-new" href="/lab-billing">+ Create lab order</a>
+    </div>
+
+    <section class="lab-orders-surface">
+        <form class="lab-orders-filter" method="GET" action="/lab-orders">
+            <input type="search" name="search" value="{{ search_query or '' }}" placeholder="Search order, patient, mobile, or doctor" aria-label="Search lab orders">
+            <select name="status" aria-label="Filter lab orders by status">
+                <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+                {% for status in ['PENDING', 'ORDERED', 'COLLECTED', 'COMPLETED', 'CANCELLED'] %}
+                <option value="{{ status }}" {% if status_filter == status %}selected{% endif %}>{{ status|title }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit">Apply filters</button>
+        </form>
+
+        {% if orders %}
+        <div class="lab-orders-table-wrap">
+            <table class="lab-orders-table">
+                <thead><tr><th>Order</th><th>Patient</th><th>Tests</th><th>Payment</th><th>Status</th><th>Total</th><th>Date</th><th style="text-align:right;">View</th></tr></thead>
+                <tbody>
+                    {% for order in orders %}
+                    {% set order_no = order.order_no or order.invoice_no or ('LAB-' ~ order.id) %}
+                    {% set status = (order.status or 'ORDERED')|upper %}
+                    {% set status_class = status|lower if status|lower in ['pending','ordered','collected','completed','cancelled'] else 'default' %}
+                    <tr>
+                        <td><span class="lab-order-number">{{ order_no }}</span></td>
+                        <td><span class="lab-patient-name">{{ order.customer or order.patient_name or '-' }}</span><span class="lab-subtext">{{ order.mobile or 'No mobile' }}{% if order.doctor %} · {{ order.doctor }}{% endif %}</span></td>
+                        <td>{{ order.item_count or order.test_count or '-' }}</td>
+                        <td>{{ order.payment_mode or '-' }}</td>
+                        <td><span class="lab-status {{ status_class }}">{{ status }}</span></td>
+                        <td><span class="lab-total">₹{{ "%.2f"|format((order.total or order.net_total or order.subtotal or 0)|float) }}</span></td>
+                        <td>{{ order.created_at.strftime('%d-%m-%Y') if order.created_at else '-' }}<span class="lab-subtext">{{ order.created_at.strftime('%I:%M %p') if order.created_at else '' }}</span></td>
+                        <td style="text-align:right;"><a class="lab-view" href="/lab-order/{{ order.id }}">Open order</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="lab-empty"><strong>No lab orders found</strong><p>{% if search_query or status_filter %}Try a broader search or clear the status filter.{% else %}Create the first lab order when a patient needs testing.{% endif %}</p><a class="lab-orders-new" href="/lab-billing">+ Create lab order</a></div>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

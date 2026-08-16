@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f766e">
+    <title>Verify Mobile Number</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --ink:#142033; --muted:#64748b; --line:#dce6f1; --page:#f3f8fb; --brand:#0f766e; --brand-dark:#0b5f59; --danger:#b42318; }
+        * { box-sizing: border-box; }
+        body { min-width:320px; min-height:100vh; margin:0; display:grid; place-items:center; background:radial-gradient(circle at 12% 10%, #dff8f4 0, transparent 31%), var(--page); color:var(--ink); font-family:"Plus Jakarta Sans",ui-sans-serif,system-ui,sans-serif; }
+        main { width:min(100% - 28px, 485px); padding:26px 0; }
+        .brand { display:flex; justify-content:center; align-items:center; gap:10px; margin-bottom:18px; color:var(--brand); font-size:12px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+        .mark { display:grid; place-items:center; width:33px; height:33px; border-radius:11px; background:var(--brand); color:#fff; font-size:19px; }
+        .card { border:1px solid var(--line); border-radius:20px; background:#fff; box-shadow:0 17px 42px rgba(26,54,93,.11); padding:27px; }
+        h1 { margin:0; font-size:25px; line-height:1.2; letter-spacing:-.04em; text-align:center; }
+        .lead { margin:10px auto 0; max-width:360px; color:var(--muted); font-size:13px; line-height:1.6; text-align:center; }
+        .summary { display:grid; gap:5px; margin:23px 0; border:1px solid #cce9e5; border-radius:13px; background:#effaf8; padding:13px 14px; }
+        .summary span { color:#597287; font-size:11px; font-weight:800; letter-spacing:.055em; text-transform:uppercase; }
+        .summary strong { font-size:14px; }
+        .flash-list { display:grid; gap:8px; margin:0 0 16px; padding:0; list-style:none; }
+        .flash { border:1px solid #fecaca; border-radius:11px; background:#fff2f1; color:var(--danger); padding:10px 11px; font-size:12px; font-weight:700; }
+        .flash.success { border-color:#a7f3d0; background:#ecfdf5; color:#047857; }
+        .flash.info, .flash.warning { border-color:#fde68a; background:#fffbeb; color:#a16207; }
+        label { display:block; margin-bottom:7px; color:#40516a; font-size:12px; font-weight:800; }
+        input { width:100%; min-height:53px; border:1px solid #bcd0df; border-radius:12px; outline:none; padding:10px 14px; color:var(--ink); font:700 21px/1 "Plus Jakarta Sans",sans-serif; letter-spacing:.34em; text-align:center; transition:.15s ease; }
+        input:focus { border-color:var(--brand); box-shadow:0 0 0 3px rgba(15,118,110,.14); }
+        .hint { margin:8px 0 0; color:var(--muted); font-size:11px; text-align:center; }
+        button { width:100%; min-height:47px; margin-top:21px; border:0; border-radius:11px; background:var(--brand); color:#fff; font:800 14px "Plus Jakarta Sans",sans-serif; cursor:pointer; box-shadow:0 7px 14px rgba(15,118,110,.19); }
+        button:hover { background:var(--brand-dark); }
+        button:focus-visible { outline:3px solid rgba(15,118,110,.25); outline-offset:3px; }
+        .back { display:block; margin-top:17px; color:#527086; font-size:12px; font-weight:700; text-align:center; text-decoration:none; }
+        .back:hover { color:var(--brand); }
+        @media (max-width:420px) { main { width:min(100% - 20px, 485px); } .card { padding:21px 17px; } }
+    </style>
+</head>
+<body>
+{% set pending = booking|default({}, true) %}
+{% set pending_mobile = masked_mobile|default(pending.masked_mobile|default(pending.mobile|default(''))) %}
+{% set pending_name = pending.patient_name|default(pending.name|default('')) %}
+<main>
+    <div class="brand"><span class="mark" aria-hidden="true">+</span> Secure appointment booking</div>
+    <section class="card" aria-labelledby="verify-title">
+        <h1 id="verify-title">Verify your mobile number</h1>
+        <p class="lead">Enter the one-time password sent to <strong>{{ pending_mobile }}</strong> to continue with your appointment request.</p>
+
+        {% if pending_name or pending.appointment_date or pending.appointment_time %}
+        <div class="summary" aria-label="Appointment request summary">
+            <span>Appointment request</span>
+            <strong>{% if pending_name %}{{ pending_name }}{% endif %}{% if pending.appointment_date %}{% if pending_name %} · {% endif %}{{ pending.appointment_date }}{% endif %}{% if pending.appointment_time %} · {{ pending.appointment_time }}{% endif %}</strong>
+        </div>
+        {% endif %}
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <ul class="flash-list" aria-live="polite">
+            {% for category, message in messages %}<li class="flash {{ category|default('')|lower }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% endwith %}
+
+        <form method="post" action="/book-appointment/verify">
+            <label for="otp">6-digit verification code</label>
+            <input id="otp" name="otp_code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" minlength="6" required autofocus placeholder="000000" aria-describedby="otp-hint">
+            <p class="hint" id="otp-hint">For your security, the code expires shortly. Do not share it with anyone.</p>
+            <button type="submit">Verify and continue</button>
+        </form>
+        <a class="back" href="/book-appointment">← Change appointment details</a>
+    </section>
+</main>
+</body>
+</html>

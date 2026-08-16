@@ -9,3 +9,4 @@ psycopg2-binary
 pandas
 openpyxl
 sentry-sdk
+qrcode[pil]

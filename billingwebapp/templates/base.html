@@ -286,11 +286,17 @@
         }
 
         .sidebar h4 {
-            padding: 12px 20px;
+            padding: 13px 20px;
             margin: 0;
-            font-size: 14px;
-            color: #cfe2ff;
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            line-height: 1.2;
+            text-align: center;
+            color: #fff;
             text-transform: uppercase;
+            background: rgba(0, 0, 0, 0.14);
+            border-top: 1px solid rgba(255,255,255,0.22);
             border-bottom: 1px solid rgba(255,255,255,0.15);
         }
 
@@ -686,8 +692,11 @@
         }
 
         .sidebar h4 {
-            font-size: 12px !important;
-            padding: 10px 16px !important;
+            font-size: 16px !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.08em !important;
+            text-align: center !important;
+            padding: 13px 16px !important;
         }
 
         .sidebar a {
@@ -967,7 +976,13 @@
 
         <a href="/" class="{% if request.path == '/' %}active{% endif %}">🏠 Dashboard</a>
 
+        <h4>Appointments</h4>
         <a href="/appointments" class="{% if request.path.startswith('/appointments') %}active{% endif %}">&#128197; Appointments</a>
+        {% if session.get("role") == "admin" %}
+        <a href="/appointment-booking/qr" class="{% if request.path.startswith('/appointment-booking/qr') %}active{% endif %}">▣ Appointment QR</a>
+        <a href="/appointment-booking/priority-requests" class="{% if request.path.startswith('/appointment-booking/priority-requests') %}active{% endif %}">₹ Priority Requests</a>
+        <a href="/appointment-booking/settings" class="{% if request.path.startswith('/appointment-booking/settings') %}active{% endif %}">⚙ Appointment Settings</a>
+        {% endif %}
         {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
         <h4>Invoice</h4>
         <a href="/billing">🧾 POS Invoice</a>
@@ -978,9 +993,18 @@
         <a href="/stock-sale" class="{% if request.path.startswith('/stock-sale') %}active{% endif %}">📦 Stock Sale</a>
         {% endif %}
         {% endif %}
-       
+
+        {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
+        <h4>Lab</h4>
+        <a href="/lab-billing" class="{% if request.path.startswith('/lab-billing') %}active{% endif %}">🧪 Lab Billing</a>
+        <a href="/lab-orders" class="{% if request.path.startswith('/lab-orders') or request.path.startswith('/lab-order/') %}active{% endif %}">🧾 Lab Orders</a>
+        {% if session.get("role") == "admin" %}
+        <a href="/lab-tests" class="{% if request.path.startswith('/lab-tests') %}active{% endif %}">🧪 Lab Test Master</a>
+        {% endif %}
+        {% endif %}
+
         <h4>Master</h4>
-        {% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
+{% if session.get("role") == "admin" or session.get("can_view_medicine") or session.get("can_add_medicine") or session.get("can_edit_medicine") or session.get("can_delete_medicine") %}
 <a href="/medicines">💊 Medicine Master</a>
 {% endif %}
         {% if session.get("role") == "admin" or session.get("can_view_stock_history") %}

@@ -24,10 +24,9 @@ app = module.app
 
 
 if __name__ == "__main__":
-    try:
-        port = int((os.environ.get("PORT") or "5000").strip())
-    except (TypeError, ValueError):
-        port = 5000
     debug_flag = (os.environ.get("FLASK_DEBUG") or os.environ.get("DEBUG") or "1").strip().lower()
     debug = debug_flag not in {"0", "false", "no", "off"}
+    is_production = bool(getattr(module, "IS_PROD", False))
+    port = module.prepare_local_server(is_production=is_production)
+    module.schedule_browser_open(is_production=is_production)
     app.run(host="0.0.0.0", port=port, debug=debug)
