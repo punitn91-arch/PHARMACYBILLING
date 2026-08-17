@@ -122,6 +122,68 @@ def _send_msg91_sms(*, mobile, code):
     return False, "Unable to send the verification SMS right now. Please try again later."
 
 
+def _twofactor_sms_config():
+    """Return the configured 2Factor key without exposing it in logs.
+
+    The legacy 2Factor custom-OTP endpoint uses the approved template that is
+    configured in the 2Factor account.  It receives the generated six-digit
+    code in the URL path, so the secret must stay in an environment variable
+    and must never be logged.
+    """
+    api_key = (
+        os.environ.get("TWOFACTOR_API_KEY")
+        or os.environ.get("TWO_FACTOR_API_KEY")
+        or os.environ.get("TFACTOR_API_KEY")
+        or ""
+    ).strip()
+    if not api_key or api_key.lower().startswith(("your_", "replace_", "twofactor_", "2factor_")):
+        return None
+    return {"api_key": api_key}
+
+
+def _send_twofactor_sms(*, mobile, code):
+    """Submit our server-generated OTP through 2Factor's approved SMS template.
+
+    OTP generation, expiry, hashing, retry limits, and verification remain
+    local to this application.  2Factor is used only as the SMS transport.
+    """
+    config = _twofactor_sms_config()
+    recipient = _indian_mobile_with_country_code(mobile)
+    otp_code = str(code or "").strip()
+    if not config or not recipient or not re.fullmatch(r"\d{6}", otp_code):
+        return False, "SMS OTP delivery is not configured yet. Please contact the clinic."
+
+    # This is 2Factor's documented custom-code endpoint. Quote each path
+    # segment so a future key format cannot alter the fixed provider URL.
+    encoded_key = urllib.parse.quote(config["api_key"], safe="")
+    request = urllib.request.Request(
+        f"https://2factor.in/API/V1/{encoded_key}/SMS/{recipient}/{otp_code}",
+        data=None,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # nosec B310 - fixed 2Factor endpoint
+            status = int(getattr(response, "status", 200))
+            raw_body = response.read().decode("utf-8", errors="replace")
+            if not 200 <= status < 300:
+                return False, "Unable to send the verification SMS right now. Please try again later."
+            try:
+                body = json.loads(raw_body) if raw_body else {}
+            except (TypeError, ValueError):
+                body = {}
+            if isinstance(body, dict):
+                provider_status = str(body.get("Status") or body.get("status") or "").strip().lower()
+                if provider_status in {"error", "failed", "failure"}:
+                    LOGGER.warning("2Factor rejected public portal OTP for %s", mask_mobile(mobile))
+                    return False, "Unable to send the verification SMS right now. Please try again later."
+            return True, ""
+    except Exception:
+        # The API key is a path segment for this provider. Do not log the
+        # exception object or request URL, which could accidentally reveal it.
+        LOGGER.warning("Unable to deliver public portal OTP through 2Factor for %s", mask_mobile(mobile))
+    return False, "Unable to send the verification SMS right now. Please try again later."
+
+
 def send_portal_otp(*, mobile, code, purpose, is_production=False, testing=False):
     """Send an OTP by configured provider.
 
@@ -142,6 +204,10 @@ def send_portal_otp(*, mobile, code, purpose, is_production=False, testing=False
 
     if mode in {"msg91", "msg91_sms", "sms"}:
         sent, error_message = _send_msg91_sms(mobile=mobile, code=code)
+        return sent, "", error_message
+
+    if mode in {"twofactor", "twofactor_sms", "2factor", "2factor_sms"}:
+        sent, error_message = _send_twofactor_sms(mobile=mobile, code=code)
         return sent, "", error_message
 
     if mode != "twilio_whatsapp":

@@ -522,6 +522,119 @@ class PublicPatientPortalTests(unittest.TestCase):
         self.assertEqual(error_message, "SMS OTP delivery is not configured yet. Please contact the clinic.")
         urlopen.assert_not_called()
 
+    def test_twofactor_sms_otp_delivers_the_app_generated_code_to_the_approved_template(self):
+        """2Factor must receive our local six-digit OTP over its SMS-only endpoint."""
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self):
+                return b'{"Status":"Success","Details":"OTP sent"}'
+
+        delivery_module = importlib.import_module(self.app_module.send_portal_otp.__module__)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PUBLIC_PORTAL_OTP_MODE": "twofactor_sms",
+                    "TWOFACTOR_API_KEY": "test-2factor-key",
+                },
+                clear=False,
+            ),
+            patch.object(delivery_module.urllib.request, "urlopen", return_value=FakeResponse()) as urlopen,
+            self.app.test_request_context("/my-lab-reports/send-otp", method="POST"),
+        ):
+            challenge, development_code, error_message = self.app_module.create_portal_otp_challenge(
+                mobile="+91 (98765) 43210",
+                purpose="LAB_REPORTS",
+            )
+            challenge_hash = challenge.otp_hash if challenge else ""
+
+        self.assertIsNotNone(challenge)
+        self.assertEqual(development_code, "")
+        self.assertEqual(error_message, "")
+        urlopen.assert_called_once()
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertIsNone(request.data)
+        self.assertRegex(
+            request.full_url,
+            r"^https://2factor\.in/API/V1/test-2factor-key/SMS/919876543210/[0-9]{6}$",
+        )
+        delivered_code = request.full_url.rsplit("/", 1)[-1]
+        self.assertTrue(self.app_module.check_password_hash(challenge_hash, delivered_code))
+        self.assertNotIn("whatsapp", request.full_url.lower())
+
+    def test_twofactor_sms_otp_never_attempts_delivery_without_an_api_key(self):
+        delivery_module = importlib.import_module(self.app_module.send_portal_otp.__module__)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PUBLIC_PORTAL_OTP_MODE": "twofactor_sms",
+                    "TWOFACTOR_API_KEY": "",
+                    "TWO_FACTOR_API_KEY": "",
+                    "TFACTOR_API_KEY": "",
+                },
+                clear=False,
+            ),
+            patch.object(delivery_module.urllib.request, "urlopen") as urlopen,
+        ):
+            sent, development_code, error_message = self.app_module.send_portal_otp(
+                mobile="9876543210",
+                code="123456",
+                purpose="Public Appointment",
+                is_production=True,
+            )
+
+        self.assertFalse(sent)
+        self.assertEqual(development_code, "")
+        self.assertEqual(error_message, "SMS OTP delivery is not configured yet. Please contact the clinic.")
+        urlopen.assert_not_called()
+
+    def test_twofactor_sms_otp_rejects_provider_error_response(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self):
+                return b'{"Status":"Error","Details":"Template rejected"}'
+
+        delivery_module = importlib.import_module(self.app_module.send_portal_otp.__module__)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PUBLIC_PORTAL_OTP_MODE": "twofactor_sms",
+                    "TWOFACTOR_API_KEY": "test-2factor-key",
+                },
+                clear=False,
+            ),
+            patch.object(delivery_module.urllib.request, "urlopen", return_value=FakeResponse()),
+        ):
+            sent, development_code, error_message = self.app_module.send_portal_otp(
+                mobile="9876543210",
+                code="123456",
+                purpose="Public Appointment",
+                is_production=True,
+            )
+
+        self.assertFalse(sent)
+        self.assertEqual(development_code, "")
+        self.assertEqual(error_message, "Unable to send the verification SMS right now. Please try again later.")
+
     def test_staff_uploaded_private_pdf_is_available_only_after_matching_mobile_otp(self):
         order_id = self._create_lab_order()
         self._login_admin()
