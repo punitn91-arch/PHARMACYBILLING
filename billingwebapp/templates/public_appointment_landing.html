@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0d6570">
+    <meta name="description" content="Expert hormone, diabetes and thyroid care in Sanganer with Dr. Abhishek Prakash. Book a clinic appointment online.">
+    <title>Dr. Abhishek Prakash | Diabetes, Thyroid & Hormone Care in Sanganer</title>
+    <link rel="preload" as="image" href="{{ url_for('static', filename='lannding-image.jpg') }}">
+    <style>
+        :root {
+            color-scheme: light;
+            --ink: #13233c;
+            --ink-soft: #40516a;
+            --muted: #667991;
+            --brand: #0d7d78;
+            --brand-dark: #075e5b;
+            --brand-pale: #e8f8f5;
+            --orange: #f46c1b;
+            --orange-pale: #fff1e7;
+            --blue: #126db0;
+            --blue-pale: #eaf5fd;
+            --line: #d8e5ef;
+            --surface: #ffffff;
+            --page: #f6fafc;
+            --shadow: 0 22px 55px rgba(18, 54, 83, .12);
+        }
+
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; background: var(--page); }
+        body {
+            min-width: 320px;
+            margin: 0;
+            overflow-x: hidden;
+            background:
+                radial-gradient(circle at 0 0, rgba(41, 174, 202, .13), transparent 28rem),
+                radial-gradient(circle at 100% 38rem, rgba(244, 108, 27, .10), transparent 26rem),
+                var(--page);
+            color: var(--ink);
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.5;
+        }
+
+        a { color: inherit; }
+        .skip-link {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            transform: translateY(-180%);
+            border-radius: 10px;
+            background: var(--ink);
+            color: #fff;
+            padding: 10px 14px;
+            font-weight: 800;
+            text-decoration: none;
+        }
+        .skip-link:focus { transform: translateY(0); }
+
+        .container { width: min(100% - 40px, 1120px); margin: 0 auto; }
+        .site-header { padding: max(18px, env(safe-area-inset-top)) 0 15px; }
+        .nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--ink);
+            font-size: 14px;
+            font-weight: 850;
+            letter-spacing: .025em;
+            text-decoration: none;
+        }
+        .brand-mark {
+            display: grid;
+            width: 39px;
+            height: 39px;
+            place-items: center;
+            border-radius: 12px;
+            background: linear-gradient(145deg, #0d7d78, #149d97);
+            color: #fff;
+            box-shadow: 0 7px 16px rgba(13, 125, 120, .22);
+        }
+        .brand-mark svg { width: 22px; height: 22px; }
+        .nav-phone {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: var(--brand-dark);
+            font-size: 13px;
+            font-weight: 800;
+            text-decoration: none;
+        }
+        .nav-phone svg { width: 18px; height: 18px; }
+
+        .hero { padding: 30px 0 48px; }
+        .hero-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.16fr) minmax(300px, .84fr);
+            align-items: center;
+            gap: clamp(28px, 6vw, 76px);
+        }
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0 0 15px;
+            color: var(--brand-dark);
+            font-size: 12px;
+            font-weight: 850;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+        }
+        .eyebrow::before {
+            width: 28px;
+            height: 2px;
+            border-radius: 999px;
+            background: var(--orange);
+            content: "";
+        }
+        h1 {
+            max-width: 700px;
+            margin: 0;
+            color: var(--ink);
+            font-size: clamp(36px, 5.4vw, 66px);
+            font-weight: 850;
+            letter-spacing: -.065em;
+            line-height: 1.03;
+        }
+        .hero-lead {
+            max-width: 630px;
+            margin: 21px 0 0;
+            color: var(--ink-soft);
+            font-size: clamp(16px, 2vw, 19px);
+            line-height: 1.7;
+        }
+        .hindi-copy {
+            display: block;
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: .9em;
+            font-weight: 600;
+        }
+        .credential-list {
+            display: grid;
+            gap: 9px;
+            margin: 23px 0 0;
+            padding: 0;
+            list-style: none;
+        }
+        .credential-list li {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            color: var(--ink-soft);
+            font-size: 14px;
+        }
+        .credential-check {
+            display: grid;
+            width: 21px;
+            height: 21px;
+            flex: 0 0 auto;
+            place-items: center;
+            margin-top: 1px;
+            border-radius: 50%;
+            background: var(--brand-pale);
+            color: var(--brand-dark);
+        }
+        .credential-check svg { width: 13px; height: 13px; }
+        .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+        .clinic-hours {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 17px;
+            border: 1px solid #c8e6e1;
+            border-radius: 13px;
+            background: rgba(232, 248, 245, .76);
+            padding: 10px 13px;
+            color: var(--ink-soft);
+            font-size: 13px;
+        }
+        .clinic-hours-icon {
+            display: grid;
+            width: 29px;
+            height: 29px;
+            flex: 0 0 auto;
+            place-items: center;
+            border-radius: 9px;
+            background: var(--brand);
+            color: #fff;
+        }
+        .clinic-hours-icon svg { width: 16px; height: 16px; }
+        .clinic-hours strong { color: var(--brand-dark); font-size: 12px; }
+        .clinic-hours > div > span { margin-left: 5px; font-weight: 700; }
+        .button {
+            display: inline-flex;
+            min-height: 54px;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            border: 1px solid transparent;
+            border-radius: 14px;
+            padding: 0 20px;
+            font-size: 15px;
+            font-weight: 850;
+            text-align: center;
+            text-decoration: none;
+            transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+        }
+        .button:hover { transform: translateY(-2px); }
+        .button:focus-visible { outline: 3px solid rgba(13, 125, 120, .28); outline-offset: 3px; }
+        .button svg { width: 19px; height: 19px; }
+        .button-primary {
+            background: var(--brand);
+            color: #fff;
+            box-shadow: 0 12px 22px rgba(13, 125, 120, .25), 0 0 0 0 rgba(30, 190, 177, .28);
+            animation: booking-glow 2.4s ease-in-out infinite;
+        }
+        .button-primary:hover { background: var(--brand-dark); box-shadow: 0 15px 25px rgba(13, 125, 120, .32); }
+        .button-secondary { border-color: #b8d8de; background: rgba(255, 255, 255, .7); color: var(--brand-dark); }
+        .button-secondary:hover { background: #fff; box-shadow: 0 12px 22px rgba(21, 66, 83, .09); }
+        @keyframes booking-glow {
+            0%, 100% { box-shadow: 0 12px 22px rgba(13, 125, 120, .25), 0 0 0 0 rgba(30, 190, 177, .24); }
+            50% { box-shadow: 0 15px 28px rgba(13, 125, 120, .31), 0 0 0 9px rgba(30, 190, 177, 0); }
+        }
+
+        .doctor-card {
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            min-height: 510px;
+            border: 1px solid #d4e6ef;
+            border-radius: 30px;
+            background: linear-gradient(150deg, #d9f5fa, #f8fdff 70%);
+            box-shadow: var(--shadow);
+        }
+        .doctor-card::before,
+        .doctor-card::after {
+            position: absolute;
+            z-index: -1;
+            border-radius: 50%;
+            content: "";
+        }
+        .doctor-card::before {
+            top: -105px;
+            right: -120px;
+            width: 310px;
+            height: 310px;
+            border: 26px solid rgba(18, 109, 176, .12);
+        }
+        .doctor-card::after {
+            bottom: -165px;
+            left: -105px;
+            width: 350px;
+            height: 350px;
+            background: rgba(244, 108, 27, .13);
+        }
+        .portrait-wrap {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+        }
+        /* The supplied small flyer is used only as a tightly cropped portrait.
+           All readable copy on this page is native HTML, not image text. */
+        .portrait-wrap {
+            background-color: #bfe8f1;
+            background-image: url("{{ url_for('static', filename='lannding-image.jpg') }}");
+            background-position: right 22%;
+            background-repeat: no-repeat;
+            background-size: 250% auto;
+            filter: saturate(1.03);
+        }
+        .portrait-wash {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(232, 248, 250, .05) 35%, rgba(10, 53, 79, .58) 100%);
+        }
+        .doctor-caption {
+            position: absolute;
+            right: 22px;
+            bottom: 22px;
+            left: 22px;
+            border: 1px solid rgba(255, 255, 255, .55);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, .92);
+            padding: 17px 18px;
+            box-shadow: 0 12px 27px rgba(10, 42, 67, .12);
+            backdrop-filter: blur(10px);
+        }
+        .doctor-caption strong { display: block; font-size: 20px; letter-spacing: -.035em; }
+        .doctor-caption span { display: block; margin-top: 3px; color: var(--brand-dark); font-size: 13px; font-weight: 750; }
+        .doctor-caption small { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; font-weight: 600; }
+
+        .section { padding: 0 0 78px; }
+        .section-heading { max-width: 740px; margin: 0 auto 30px; text-align: center; }
+        .section-heading .eyebrow { justify-content: center; }
+        h2 { margin: 0; color: var(--ink); font-size: clamp(28px, 4vw, 42px); letter-spacing: -.052em; line-height: 1.1; }
+        .section-heading p { max-width: 650px; margin: 13px auto 0; color: var(--muted); font-size: 16px; }
+
+        .condition-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+        .condition-card {
+            min-height: 205px;
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: var(--surface);
+            padding: 22px;
+            box-shadow: 0 10px 25px rgba(18, 54, 83, .05);
+        }
+        .condition-icon {
+            display: grid;
+            width: 43px;
+            height: 43px;
+            place-items: center;
+            border-radius: 13px;
+            background: var(--brand-pale);
+            color: var(--brand-dark);
+        }
+        .condition-card:nth-child(2) .condition-icon { background: var(--blue-pale); color: var(--blue); }
+        .condition-card:nth-child(3) .condition-icon { background: var(--orange-pale); color: #c6510f; }
+        .condition-card:nth-child(4) .condition-icon { background: #f2edff; color: #7256b7; }
+        .condition-icon svg { width: 23px; height: 23px; }
+        .condition-card h3 { margin: 17px 0 0; color: var(--ink); font-size: 17px; letter-spacing: -.025em; line-height: 1.25; }
+        .condition-card p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+        .contact-section { padding-bottom: max(32px, env(safe-area-inset-bottom)); }
+        .contact-panel {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 30px;
+            align-items: center;
+            overflow: hidden;
+            border-radius: 28px;
+            background: linear-gradient(135deg, #123e58, #0d7d78);
+            color: #fff;
+            padding: clamp(28px, 5vw, 50px);
+            box-shadow: 0 20px 42px rgba(12, 73, 82, .22);
+        }
+        .contact-panel h2 { color: #fff; }
+        .contact-panel p { max-width: 640px; margin: 12px 0 0; color: rgba(255, 255, 255, .82); font-size: 16px; }
+        .contact-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 23px; }
+        .contact-panel .button-primary { background: #fff; color: var(--brand-dark); animation: none; box-shadow: none; }
+        .contact-panel .button-primary:hover { background: #e9ffff; }
+        .contact-panel .button-secondary { border-color: rgba(255,255,255,.5); background: transparent; color: #fff; }
+        .contact-panel .button-secondary:hover { background: rgba(255,255,255,.12); box-shadow: none; }
+        .contact-address {
+            width: min(100%, 294px);
+            border: 1px solid rgba(255,255,255,.2);
+            border-radius: 18px;
+            background: rgba(4, 43, 54, .26);
+            padding: 18px;
+        }
+        .contact-address span { display: block; color: #9ee6de; font-size: 11px; font-weight: 850; letter-spacing: .09em; text-transform: uppercase; }
+        .contact-address strong { display: block; margin-top: 7px; font-size: 15px; line-height: 1.45; }
+        .contact-address p { margin: 6px 0 0; color: rgba(255,255,255,.75); font-size: 13px; line-height: 1.55; }
+
+        .site-footer { padding: 24px 0 30px; color: var(--muted); font-size: 12px; text-align: center; }
+
+        @media (max-width: 900px) {
+            .hero-grid { grid-template-columns: minmax(0, 1fr) minmax(280px, .75fr); gap: 32px; }
+            .doctor-card { min-height: 440px; }
+            .condition-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .contact-panel { grid-template-columns: 1fr; }
+            .contact-address { width: 100%; }
+        }
+
+        @media (max-width: 680px) {
+            .container { width: min(100% - 28px, 1120px); }
+            .site-header { padding-bottom: 6px; }
+            .nav-phone span { display: none; }
+            .hero { padding: 28px 0 38px; }
+            .hero-grid { grid-template-columns: 1fr; }
+            .hero-copy { order: 1; }
+            .doctor-card { order: 2; min-height: 430px; }
+            h1 { font-size: clamp(35px, 10.5vw, 50px); }
+            .hero-lead { font-size: 16px; }
+            .hero-actions, .contact-actions { display: grid; grid-template-columns: 1fr; }
+            .button { width: 100%; }
+            .clinic-hours { display: flex; }
+            .clinic-hours > div > span { display: block; margin: 1px 0 0; }
+            .section { padding-bottom: 57px; }
+            .condition-grid { gap: 12px; }
+            .condition-card { min-height: 0; padding: 18px; }
+            .contact-panel { border-radius: 22px; }
+        }
+
+        @media (max-width: 430px) {
+            .container { width: min(100% - 22px, 1120px); }
+            .brand { font-size: 13px; }
+            .brand-mark { width: 36px; height: 36px; border-radius: 11px; }
+            .doctor-card { min-height: 390px; border-radius: 23px; }
+            .doctor-caption { right: 14px; bottom: 14px; left: 14px; padding: 14px; }
+            .doctor-caption strong { font-size: 18px; }
+            .condition-grid { grid-template-columns: 1fr; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+        }
+    </style>
+</head>
+<body>
+{% set public_settings = settings|default({}, true) %}
+{% set clinic_name = public_settings.clinic_name|default(public_settings.business_name|default('The Endo Clinic')) %}
+{% set booking_href = booking_url|default(url_for('public_appointment_booking')) %}
+{% set clinic_hours_start = arrival_window_start|default('5:30 PM') %}
+{% set clinic_hours_end = arrival_window_end|default('7:45 PM') %}
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+
+    <header class="site-header">
+        <div class="container nav">
+            <a class="brand" href="#main-content" aria-label="{{ clinic_name }} home">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg>
+                </span>
+                <span>{{ clinic_name }}</span>
+            </a>
+            <a class="nav-phone" href="tel:+919024648186" aria-label="Call The Endo Clinic on 90246 48186">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.79.62 2.65a2 2 0 0 1-.45 2.11L8.01 9.75a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.86.29 1.75.5 2.65.62A2 2 0 0 1 22 16.92z"/></svg>
+                <span>Call clinic</span>
+            </a>
+        </div>
+    </header>
+
+    <main id="main-content">
+        <section class="hero" aria-labelledby="hero-title">
+            <div class="container hero-grid">
+                <div class="hero-copy">
+                    <p class="eyebrow">Diabetology & Endocrinology</p>
+                    <h1 id="hero-title">Expert Hormone, Diabetes &amp; Thyroid Care in Sanganer</h1>
+                    <p class="hero-lead">
+                        Personalised specialist care for diabetes, thyroid, obesity and hormonal health.
+                        <span class="hindi-copy">डायबिटीज़, थायरॉयड और हार्मोन की समस्याओं के लिए विशेषज्ञ देखभाल।</span>
+                    </p>
+                    <ul class="credential-list" aria-label="Dr. Abhishek Prakash qualifications">
+                        <li><span class="credential-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg></span>MBBS, MD (General Medicine), SMS Hospital, Jaipur</li>
+                        <li><span class="credential-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg></span>DrNB (Endocrinology), Safdarjung Hospital, New Delhi</li>
+                    </ul>
+                    <div class="hero-actions">
+                        <a class="button button-primary" href="{{ booking_href }}">
+                            <span>Book Appointment</span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                        </a>
+                        <a class="button button-secondary" href="tel:+919024648186">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.79.62 2.65a2 2 0 0 1-.45 2.11L8.01 9.75a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.86.29 1.75.5 2.65.62A2 2 0 0 1 22 16.92z"/></svg>
+                            <span>Call 90246 48186</span>
+                        </a>
+                    </div>
+                    <div class="clinic-hours" aria-label="Clinic hours: Monday to Saturday, {{ clinic_hours_start }} to {{ clinic_hours_end }}">
+                        <span class="clinic-hours-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg></span>
+                        <div><strong>Clinic hours</strong><span>Monday–Saturday · {{ clinic_hours_start }}–{{ clinic_hours_end }}</span></div>
+                    </div>
+                </div>
+
+                <figure class="doctor-card" aria-labelledby="doctor-caption">
+                    <div class="portrait-wrap" role="img" aria-label="Dr. Abhishek Prakash, endocrinologist and diabetologist">
+                        <div class="portrait-wash" aria-hidden="true"></div>
+                    </div>
+                    <figcaption class="doctor-caption" id="doctor-caption">
+                        <strong>Dr. Abhishek Prakash</strong>
+                        <span>Endocrinologist &amp; Diabetologist</span>
+                        <small>Specialist care for adults, women and children</small>
+                    </figcaption>
+                </figure>
+            </div>
+        </section>
+
+        <section class="section" aria-labelledby="conditions-title">
+            <div class="container">
+                <header class="section-heading">
+                    <p class="eyebrow">Specialist care</p>
+                    <h2 id="conditions-title">Care for the conditions that matter</h2>
+                    <p>Clear, evidence-based care for common metabolic and hormone concerns.<br><span lang="hi">आपकी रोज़मर्रा की हार्मोन और मेटाबॉलिक समस्याओं के लिए विशेषज्ञ सलाह।</span></p>
+                </header>
+
+                <div class="condition-grid">
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h3l2-5 4 10 2-5h5"/><circle cx="12" cy="12" r="9"/></svg></span>
+                        <h3>Diabetes Management</h3>
+                        <p><span lang="hi">डायबिटीज़ नियंत्रण</span><br>Type 1, Type 2, gestational diabetes and long-term glucose care.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3c1.8 1.1 4.2 1.1 6 0M8 7c-1.6 1.1-2.7 2.9-2.7 5.1 0 3.7 3 6.7 6.7 6.7s6.7-3 6.7-6.7c0-2.2-1.1-4-2.7-5.1M8.5 11.5h7"/></svg></span>
+                        <h3>Thyroid &amp; Metabolism</h3>
+                        <p><span lang="hi">थायरॉयड व मेटाबॉलिज़्म</span><br>Thyroid disorders, obesity and cholesterol-related concerns.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.4-7-10.2C5 7.9 7 6 9.5 6c1.4 0 2.1.6 2.5 1.2C12.4 6.6 13.1 6 14.5 6 17 6 19 7.9 19 10.8 19 16.6 12 21 12 21z"/><path d="M12 10v5M9.5 12.5h5"/></svg></span>
+                        <h3>PCOD &amp; Women&rsquo;s Health</h3>
+                        <p><span lang="hi">PCOD व महिला हार्मोन स्वास्थ्य</span><br>PCOD, irregular periods, menopause and fertility support.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V4M12 4 8 8M12 4l4 4M5 17h14"/><path d="M7 17v3M17 17v3"/></svg></span>
+                        <h3>Growth &amp; Puberty</h3>
+                        <p><span lang="hi">बच्चों की वृद्धि व यौवन</span><br>Short stature, early or delayed puberty, and paediatric hormone concerns.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2M8 3.5 6.5 5M16 3.5 17.5 5"/></svg></span>
+                        <h3>Obesity &amp; Weight Care</h3>
+                        <p><span lang="hi">मोटापा व वजन नियंत्रण</span><br>Metabolic assessment and personalised support for healthy weight management.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-6.8-4.3-6.8-9.6C5.2 7.8 7 6 9.3 6c1.4 0 2.2.6 2.7 1.4C12.5 6.6 13.3 6 14.7 6 17 6 18.8 7.8 18.8 10.4 18.8 15.7 12 20 12 20z"/><path d="M12 10v4M10 12h4"/></svg></span>
+                        <h3>Infertility Support</h3>
+                        <p><span lang="hi">बांझपन व प्रजनन हार्मोन</span><br>Hormone evaluation and specialist guidance for fertility-related concerns.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h3l2-4 3 8 2-4h6"/><path d="M4 6.5h16M4 17.5h16"/></svg></span>
+                        <h3>Fatty Liver &amp; Lipid Health</h3>
+                        <p><span lang="hi">फैटी लिवर व लिपिड स्वास्थ्य</span><br>Support for fatty liver, high cholesterol and metabolic health concerns.</p>
+                    </article>
+                    <article class="condition-card">
+                        <span class="condition-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8.3 5.1 6.6 3.4M15.7 5.1l1.7-1.7M9 19l-1.6 1.6M15 19l1.6 1.6"/><path d="M9.2 7.2c1.6-1.6 4-1.6 5.6 0l1.1 1.1c1.6 1.6 1.6 4 0 5.6l-1.1 1.1c-1.6 1.6-4 1.6-5.6 0l-1.1-1.1c-1.6-1.6-1.6-4 0-5.6z"/></svg></span>
+                        <h3>Bone Health &amp; Osteoporosis</h3>
+                        <p><span lang="hi">हड्डियों का स्वास्थ्य</span><br>Assessment and care for osteoporosis and bone metabolism concerns.</p>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="contact-section" aria-labelledby="visit-title">
+            <div class="container">
+                <div class="contact-panel">
+                    <div>
+                        <h2 id="visit-title">Plan your clinic visit</h2>
+                        <p>Book your appointment online, call the clinic directly, or get directions with one tap.</p>
+                        <div class="contact-actions">
+                            <a class="button button-primary" href="{{ booking_href }}">Book Appointment</a>
+                            <a class="button button-secondary" href="https://www.google.com/maps/search/?api=1&amp;query=Shop%20No.%20FF12%2C%20Second%20Floor%2C%20Manglam%20Aananda%20Plaza%2C%20Behind%20Rampura%20Road%2C%20Sanganer%2C%20Jaipur" target="_blank" rel="noopener noreferrer">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z"/><circle cx="12" cy="10" r="2.5"/></svg>
+                                <span>View on Google Maps</span>
+                            </a>
+                        </div>
+                    </div>
+                    <address class="contact-address">
+                        <span>The Endo Clinic</span>
+                        <strong>Shop No. FF12, 2nd Floor,<br>Manglam Aananda Plaza, Sanganer</strong>
+                        <p>Behind Rampura Road, Jaipur<br><a href="tel:+919024648186">+91 90246 48186</a></p>
+                    </address>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">{{ clinic_name }} &middot; Specialist diabetes, thyroid and hormone care</div>
+    </footer>
+</body>
+</html>

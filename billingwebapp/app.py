@@ -13058,12 +13058,24 @@ def public_appointment_confirmation():
     )
 
 
+@app.route("/appointment")
+def public_appointment_landing():
+    """Public QR destination with a clear hand-off to the booking form."""
+    settings = get_public_appointment_booking_settings()
+    return render_template(
+        "public_appointment_landing.html",
+        settings=settings,
+        booking_url=url_for("public_appointment_booking"),
+        **public_appointment_arrival_window_context(settings),
+    )
+
+
 def public_appointment_booking_url():
     """Use the configured public HTTPS origin when sharing a reception QR."""
     configured_base = (os.environ.get("PUBLIC_BOOKING_BASE_URL") or "").strip().rstrip("/")
     if configured_base.startswith(("https://", "http://")):
-        return f"{configured_base}{url_for('public_appointment_booking')}", True
-    return f"{request.url_root.rstrip('/')}{url_for('public_appointment_booking')}", False
+        return f"{configured_base}{url_for('public_appointment_landing')}", True
+    return f"{request.url_root.rstrip('/')}{url_for('public_appointment_landing')}", False
 
 
 def appointment_qr_library():

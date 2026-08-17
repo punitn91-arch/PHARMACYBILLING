@@ -40,15 +40,9 @@
             position: sticky;
             top: 0;
             z-index: 20;
-            padding: 20px 0 14px;
+            padding: 0 0 14px;
             background: var(--page);
             box-shadow: 0 14px 20px -22px rgba(26, 54, 93, .72);
-        }
-        .masthead {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            margin-bottom: 12px;
         }
         .appointment-doctor-banner {
             overflow: hidden;
@@ -66,21 +60,6 @@
             object-fit: contain;
             object-position: center;
         }
-        .mark {
-            width: 48px;
-            height: 48px;
-            display: grid;
-            place-items: center;
-            flex: 0 0 auto;
-            border-radius: 15px;
-            background: linear-gradient(135deg, var(--brand), #14b8a6);
-            color: #fff;
-            font-size: 23px;
-            font-weight: 800;
-            box-shadow: 0 8px 18px rgba(15, 118, 110, .22);
-        }
-        .eyebrow { margin: 0 0 2px; color: var(--brand); font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
-        h1 { margin: 0; font-size: clamp(21px, 4vw, 30px); letter-spacing: -.04em; line-height: 1.15; }
         .intro { max-width: 720px; margin: 22px 0; color: var(--muted); font-size: 14px; }
         .flash-list { display: grid; gap: 9px; margin: 0 0 18px; padding: 0; list-style: none; }
         .flash { border: 1px solid #fecaca; border-radius: 12px; background: var(--danger-soft); color: var(--danger); padding: 11px 13px; font-size: 13px; font-weight: 600; }
@@ -169,11 +148,9 @@
         .footer { margin-top: 17px; color: #718096; font-size: 11px; text-align: center; }
         @media (max-width: 600px) {
             .shell { width: min(100% - 20px, 960px); }
-            .sticky-clinic-intro { padding: max(12px, env(safe-area-inset-top)) 0 11px; }
-            .masthead { margin-bottom: 9px; }
+            .sticky-clinic-intro { padding: 0 0 11px; }
             .appointment-doctor-banner { border-radius: 15px; }
             .appointment-doctor-banner img { max-height: min(29svh, 190px); }
-            .mark { width: 42px; height: 42px; border-radius: 13px; }
             .card-head, .booking-form { padding: 17px; }
             .field { grid-column: 1 / -1; }
             .availability, .type-options { grid-template-columns: 1fr; }
@@ -201,14 +178,6 @@
 {% set saved_type = form_data.booking_type|default(form_data.appointment_type|default('NORMAL')) if form_data else 'NORMAL' %}
 <main class="shell">
     <div class="sticky-clinic-intro">
-        <header class="masthead">
-            <div class="mark" aria-hidden="true">+</div>
-            <div>
-                <p class="eyebrow">Online appointment</p>
-                <h1>{{ public_settings.clinic_name|default(public_settings.business_name|default('Clinic Appointment Booking')) }}</h1>
-            </div>
-        </header>
-
         <figure class="appointment-doctor-banner">
             <img src="{{ url_for('static', filename='doctor-appointment-banner.png') }}" alt="Dr. Abhishek Prakash — Diabetologist and Endocrinologist" width="1983" height="793" fetchpriority="high" decoding="async">
         </figure>

@@ -387,13 +387,19 @@ class PublicPatientPortalTests(unittest.TestCase):
         with patch.dict(os.environ, {"PUBLIC_BOOKING_BASE_URL": "https://clinic.example"}, clear=False):
             page_response = self.client.get("/appointment-booking/qr")
             self.assertEqual(page_response.status_code, 200)
-            self.assertIn(b"https://clinic.example/book-appointment", page_response.data)
+            self.assertIn(b"https://clinic.example/appointment", page_response.data)
             self.assertNotIn(b"patient_name", page_response.data)
 
             png_response = self.client.get("/appointment-booking/qr.png")
             self.assertEqual(png_response.status_code, 200)
             self.assertEqual(png_response.mimetype, "image/png")
             self.assertEqual(png_response.data[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_public_appointment_landing_links_to_booking_form(self):
+        response = self.client.get("/appointment")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Book Appointment", response.data)
+        self.assertIn(b'href="/book-appointment"', response.data)
 
     def test_admin_can_manage_public_booking_controls(self):
         self._login_admin()
