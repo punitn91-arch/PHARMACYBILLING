@@ -39,14 +39,9 @@
 
     <form method="POST" class="lab-form-surface">
         <section class="lab-form-section">
-            <h2 class="lab-form-section-title">Test identity</h2>
-            <p class="lab-form-section-note">Use a short, unique code so test search stays fast and unambiguous at the counter.</p>
+            <h2 class="lab-form-section-title">Test details</h2>
+            <p class="lab-form-section-note">Add the test name and category that staff will see while billing.</p>
             <div class="lab-form-grid">
-                <div class="lab-form-field">
-                    <label for="labTestCode">Test code</label>
-                    <input id="labTestCode" name="test_code" type="text" maxlength="40" required value="{{ test.test_code if test else '' }}" placeholder="e.g. CBC-01" oninput="this.value=this.value.toUpperCase()">
-                    <span class="hint">Codes are stored in uppercase.</span>
-                </div>
                 <div class="lab-form-field">
                     <label for="labTestName">Test name</label>
                     <input id="labTestName" name="name" type="text" maxlength="150" required value="{{ test.name if test else '' }}" placeholder="e.g. Complete Blood Count">
@@ -54,10 +49,6 @@
                 <div class="lab-form-field">
                     <label for="labTestCategory">Category</label>
                     <input id="labTestCategory" name="category" type="text" maxlength="80" value="{{ test.category if test else '' }}" placeholder="e.g. Hematology">
-                </div>
-                <div class="lab-form-field">
-                    <label for="labSpecimenType">Specimen type</label>
-                    <input id="labSpecimenType" name="specimen_type" type="text" maxlength="80" value="{{ test.specimen_type if test else '' }}" placeholder="e.g. EDTA whole blood">
                 </div>
             </div>
         </section>

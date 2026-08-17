@@ -3790,6 +3790,21 @@ def normalize_lab_test_code(value):
     return normalized.strip("-_")[:40]
 
 
+def generate_internal_lab_test_code():
+    """Allocate an opaque catalog code when staff do not need to enter one.
+
+    Codes remain required internally for audit trails, search and immutable order
+    snapshots, but they are not part of the simplified Lab Test Master form.
+    """
+    for _attempt in range(12):
+        candidate = f"LAB-{secrets.token_hex(8).upper()}"
+        if not LabTest.query.filter_by(test_code=candidate).first():
+            return candidate
+    # A collision is exceptionally unlikely, but do not silently save a
+    # duplicate if the catalog is being edited concurrently.
+    return ""
+
+
 def assign_lab_order_number(order):
     if not order:
         return ""
@@ -7006,16 +7021,25 @@ def lab_tests():
     return render_template("lab_tests.html", tests=tests, search_query=search_query)
 
 
-def validate_lab_test_master_form(form_data):
+def validate_lab_test_master_form(form_data, *, existing_test=None):
     test_code = normalize_lab_test_code(form_data.get("test_code"))
     name = (form_data.get("name") or "").strip()
     category = (form_data.get("category") or "").strip()
-    specimen_type = (form_data.get("specimen_type") or "").strip()
+    if "specimen_type" in form_data:
+        specimen_type = (form_data.get("specimen_type") or "").strip()
+    else:
+        # Editing the simplified form must not erase specimen information
+        # already stored for legacy catalog rows.
+        specimen_type = ((existing_test.specimen_type if existing_test else "") or "").strip()
     preparation = (form_data.get("preparation") or "").strip()
     default_price, price_error = parse_optional_money(form_data.get("default_price"))
 
     if not test_code:
-        return None, "Test code is required."
+        test_code = normalize_lab_test_code(
+            existing_test.test_code if existing_test else generate_internal_lab_test_code()
+        )
+    if not test_code:
+        return None, "Unable to allocate an internal test code. Please try again."
     if not name:
         return None, "Test name is required."
     if default_price is None or price_error:
@@ -7112,7 +7136,7 @@ def edit_lab_test(id):
     lab_test = LabTest.query.get_or_404(id)
     if request.method == "POST":
         before_snapshot = build_lab_test_audit_snapshot(lab_test)
-        payload, error = validate_lab_test_master_form(request.form)
+        payload, error = validate_lab_test_master_form(request.form, existing_test=lab_test)
         if error:
             flash(error, "danger")
             return render_template(

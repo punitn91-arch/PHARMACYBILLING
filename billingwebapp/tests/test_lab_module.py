@@ -145,6 +145,55 @@ class LabModuleTests(unittest.TestCase):
             self.assertEqual(float(lab_test.default_price), 450.0)
             self.assertTrue(lab_test.is_active)
 
+    def test_admin_can_add_lab_test_without_legacy_code_or_specimen_fields(self):
+        self._login_as("admin", "Admin@123")
+
+        response = self.client.post(
+            "/lab-tests/add",
+            data={
+                "name": "Thyroid Profile",
+                "category": "Endocrinology",
+                "preparation": "Fasting sample preferred",
+                "default_price": "600.00",
+                "is_active": "on",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        with self.app.app_context():
+            lab_test = self.app_module.LabTest.query.filter_by(name="Thyroid Profile").one()
+            self.assertTrue(lab_test.test_code.startswith("LAB-"))
+            self.assertTrue(lab_test.test_code)
+            self.assertEqual(lab_test.specimen_type, "")
+
+    def test_simplified_lab_test_edit_preserves_legacy_code_and_specimen(self):
+        lab_test_id = self._create_lab_test(
+            code="LEGACY-CBC",
+            name="Legacy Complete Blood Count",
+            price="450.00",
+        )
+
+        response = self.client.post(
+            f"/lab-tests/{lab_test_id}/edit",
+            data={
+                "name": "Complete Blood Count",
+                "category": "Hematology",
+                "preparation": "No fasting required",
+                "default_price": "525.00",
+                "is_active": "on",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        with self.app.app_context():
+            lab_test = self.db.session.get(self.app_module.LabTest, lab_test_id)
+            self.assertEqual(lab_test.test_code, "LEGACY-CBC")
+            self.assertEqual(lab_test.specimen_type, "Blood")
+            self.assertEqual(lab_test.name, "Complete Blood Count")
+            self.assertEqual(float(lab_test.default_price), 525.0)
+
     def test_billing_staff_uses_catalog_price_and_creates_no_pharmacy_rows(self):
         lab_test_id = self._create_lab_test(price="450.00")
         self._logout()
