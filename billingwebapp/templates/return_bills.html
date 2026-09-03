@@ -91,6 +91,9 @@
             <a href="/return-invoice/{{ r.id }}" title="View Return Bill">View</a>
             <a href="/return-invoice/{{ r.id }}?print=1" target="_blank" title="Print Return Bill">Print</a>
             {% if not r.is_cancelled %}
+            {% if session.get("role") == "admin" %}
+            <a href="{{ url_for('edit_return_bill', id=r.id) }}" title="Edit Name and Payment Mode">Edit</a>
+            {% endif %}
             <form method="POST"
                   action="/return-bill/delete/{{ r.id }}"
                   data-async-action="true"

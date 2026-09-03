@@ -1808,6 +1808,145 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn("FINAL REFUND TOTAL", html)
         self.assertIn("₹50.0", html)
 
+    def test_admin_can_edit_only_return_name_and_payment_mode(self):
+        original_created_at = datetime(2026, 8, 15, 10, 30)
+        with self.app.app_context():
+            patient = self._seed_patient()
+            invoice = self.app_module.Invoice(
+                invoice_no="INV-RET-EDIT-1",
+                patient_id=patient.id,
+                customer=patient.name,
+                mobile=patient.mobile,
+                total=500.0,
+                payment_mode="CASH",
+                created_by="admin",
+            )
+            self.db.session.add(invoice)
+            self.db.session.flush()
+            ret = self.app_module.Return(
+                return_no="RB-EDIT-1",
+                invoice_id=invoice.id,
+                invoice_no=invoice.invoice_no,
+                customer="Old Name",
+                mobile=patient.mobile,
+                total_refund=125.50,
+                payment_mode="CASH",
+                created_by="admin",
+                created_at=original_created_at,
+            )
+            self.db.session.add(ret)
+            self.db.session.commit()
+            return_id = ret.id
+
+        self.login()
+        list_response = self.client.get("/return-bills")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertIn(f"/return-bill/edit/{return_id}", list_response.get_data(as_text=True))
+
+        edit_response = self.client.get(f"/return-bill/edit/{return_id}")
+        self.assertEqual(edit_response.status_code, 200)
+        edit_html = edit_response.get_data(as_text=True)
+        self.assertIn('name="customer"', edit_html)
+        self.assertIn('name="payment_mode"', edit_html)
+        self.assertNotIn('name="total_refund"', edit_html)
+        self.assertNotIn('name="created_at"', edit_html)
+
+        response = self.client.post(
+            f"/return-bill/edit/{return_id}",
+            data={
+                "customer": "Corrected Name",
+                "payment_mode": "UPI",
+                "total_refund": "1.00",
+                "created_at": "2035-01-01",
+                "invoice_no": "TAMPERED",
+                "mobile": "0000000000",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"/return-invoice/{return_id}", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            updated = self.db.session.get(self.app_module.Return, return_id)
+            self.assertEqual(updated.customer, "Corrected Name")
+            self.assertEqual(updated.payment_mode, "UPI")
+            self.assertEqual(float(updated.total_refund), 125.50)
+            self.assertEqual(updated.created_at, original_created_at)
+            self.assertEqual(updated.invoice_no, "INV-RET-EDIT-1")
+            self.assertEqual(updated.mobile, "9876543210")
+            audit = self.app_module.AuditLog.query.filter_by(
+                entity_type="RETURN_BILL",
+                entity_id=return_id,
+            ).one()
+            self.assertIn("Old Name", audit.before_json)
+            self.assertIn("Corrected Name", audit.after_json)
+
+    def test_cancelled_return_bill_cannot_be_edited(self):
+        with self.app.app_context():
+            ret = self.app_module.Return(
+                return_no="RB-CANCELLED-EDIT",
+                invoice_id=1,
+                invoice_no="INV-LOCKED",
+                customer="Locked Name",
+                total_refund=90.0,
+                payment_mode="CASH",
+                is_cancelled=True,
+                created_by="admin",
+            )
+            self.db.session.add(ret)
+            self.db.session.commit()
+            return_id = ret.id
+
+        self.login()
+        response = self.client.post(
+            f"/return-bill/edit/{return_id}",
+            data={"customer": "Changed Name", "payment_mode": "CARD"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/return-bills", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            unchanged = self.db.session.get(self.app_module.Return, return_id)
+            self.assertEqual(unchanged.customer, "Locked Name")
+            self.assertEqual(unchanged.payment_mode, "CASH")
+
+    def test_non_admin_cannot_edit_return_bill(self):
+        with self.app.app_context():
+            staff = self.app_module.User(
+                username="return_staff",
+                role="staff",
+                access_profile="custom",
+                can_invoice_action=True,
+                is_active=True,
+            )
+            staff.set_password("Password@123")
+            ret = self.app_module.Return(
+                return_no="RB-STAFF-EDIT",
+                invoice_id=1,
+                customer="Original Name",
+                total_refund=40.0,
+                payment_mode="CASH",
+                created_by="admin",
+            )
+            self.db.session.add_all([staff, ret])
+            self.db.session.commit()
+            return_id = ret.id
+
+        self.login_as("return_staff", "Password@123")
+        response = self.client.post(
+            f"/return-bill/edit/{return_id}",
+            data={"customer": "Unauthorized", "payment_mode": "ONLINE"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/return-bills", response.headers.get("Location", ""))
+
+        with self.app.app_context():
+            unchanged = self.db.session.get(self.app_module.Return, return_id)
+            self.assertEqual(unchanged.customer, "Original Name")
+            self.assertEqual(unchanged.payment_mode, "CASH")
+
     def test_summarize_invoice_collection_subtracts_sale_returns_from_current_collections(self):
         invoice_cash = self.app_module.Invoice(total=300.0, payment_mode="CASH")
         invoice_online = self.app_module.Invoice(total=200.0, payment_mode="ONLINE")

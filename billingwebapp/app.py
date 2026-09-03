@@ -3747,6 +3747,22 @@ def build_invoice_audit_snapshot(inv):
     }
 
 
+def build_return_audit_snapshot(return_bill):
+    if not return_bill:
+        return None
+    return {
+        "id": return_bill.id,
+        "return_no": (return_bill.return_no or "").strip(),
+        "invoice_id": return_bill.invoice_id,
+        "invoice_no": (return_bill.invoice_no or "").strip(),
+        "customer": (return_bill.customer or "").strip(),
+        "payment_mode": normalize_payment_mode(return_bill.payment_mode or "CASH"),
+        "total_refund": round(to_float_safe(return_bill.total_refund, 0), 2),
+        "created_at": return_bill.created_at.isoformat() if return_bill.created_at else None,
+        "is_cancelled": bool(return_bill.is_cancelled),
+    }
+
+
 def build_lab_test_audit_snapshot(lab_test):
     if not lab_test:
         return None
@@ -8201,6 +8217,65 @@ def return_invoice(id):
         subtotal=subtotal,
         total_refund=total_refund,
         date=ret.created_at.strftime("%d-%m-%Y")
+    )
+
+
+@app.route("/return-bill/edit/<int:id>", methods=["GET", "POST"])
+@login_required
+@invoice_access_required
+def edit_return_bill(id):
+    user = active_user_by_id(session.get("user_id"))
+    if not user or user.role != "admin":
+        flash("Only an administrator can edit a return bill.", "danger")
+        return redirect("/return-bills")
+
+    return_bill = Return.query.get_or_404(id)
+    if return_bill.is_cancelled:
+        flash("A cancelled return bill cannot be edited.", "warning")
+        return redirect("/return-bills")
+
+    if request.method == "POST":
+        customer = (request.form.get("customer") or "").strip()
+        payment_mode = (request.form.get("payment_mode") or "").strip().upper()
+
+        if not customer:
+            flash("Patient name is required.", "danger")
+            return redirect(url_for("edit_return_bill", id=return_bill.id))
+        if len(customer) > 100:
+            flash("Patient name cannot exceed 100 characters.", "danger")
+            return redirect(url_for("edit_return_bill", id=return_bill.id))
+        if payment_mode not in POS_PAYMENT_MODES:
+            flash("Invalid payment mode selected.", "danger")
+            return redirect(url_for("edit_return_bill", id=return_bill.id))
+
+        before_snapshot = build_return_audit_snapshot(return_bill)
+        return_bill.customer = customer
+        return_bill.payment_mode = payment_mode
+
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Return bill edit failed for id=%s", return_bill.id)
+            flash("Return bill could not be updated. Please try again.", "danger")
+            return redirect(url_for("edit_return_bill", id=return_bill.id))
+
+        record_audit_event(
+            action="Updated return bill details",
+            entity_type="RETURN_BILL",
+            entity_id=return_bill.id,
+            ref_code=return_bill.return_no or f"RB-{return_bill.id:06d}",
+            before=before_snapshot,
+            after=build_return_audit_snapshot(return_bill),
+            extra={"editable_fields": ["customer", "payment_mode"]},
+        )
+        flash("Return bill name and payment mode updated successfully.", "success")
+        return redirect(url_for("return_invoice", id=return_bill.id))
+
+    return render_template(
+        "edit_return_bill.html",
+        return_bill=return_bill,
+        payment_modes=POS_PAYMENT_MODES,
     )
 
 # ---------------- HOLD BILL ----------------
