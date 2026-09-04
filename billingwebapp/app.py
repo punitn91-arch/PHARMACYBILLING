@@ -1463,6 +1463,130 @@ def build_return_payment_breakdown(return_bill, refund_amount=None):
     }
 
 
+def build_return_invoice_context(return_bill):
+    """Build one authoritative, presentation-ready return invoice snapshot.
+
+    ReturnItem rows are the source of truth for what was returned. The linked
+    Invoice contributes only metadata that Return does not store (print profile,
+    doctor, gender and party GST). This prevents later invoice edits from
+    changing historical return quantities or refund values.
+    """
+    linked_invoice = None
+    if to_int_safe(getattr(return_bill, "invoice_id", 0), 0) > 0:
+        linked_invoice = db.session.get(Invoice, return_bill.invoice_id)
+
+    return_items = ReturnItem.query.filter_by(return_id=return_bill.id).order_by(ReturnItem.id.asc()).all()
+    prepared_items = []
+    gross_total = 0.0
+    discount_total = 0.0
+    net_total = 0.0
+
+    for item in return_items:
+        qty = max(to_int_safe(item.qty, 0), 0)
+        selling_rate = max(
+            to_float_safe(
+                item.selling_rate
+                if item.selling_rate not in (None, "", 0)
+                else item.price,
+                0,
+            ),
+            0.0,
+        )
+        amount = max(
+            to_float_safe(
+                item.amount if item.amount is not None else qty * selling_rate,
+                qty * selling_rate,
+            ),
+            0.0,
+        )
+        discount_percent = max(to_float_safe(item.discount_percent, 0), 0.0)
+        stored_net = item.net_amount
+        if stored_net is None:
+            net_amount = max(amount - (amount * discount_percent / 100), 0.0)
+        else:
+            net_amount = max(to_float_safe(stored_net, 0), 0.0)
+
+        stored_discount = to_float_safe(item.discount_amount, 0)
+        if stored_discount > 0:
+            discount_amount = stored_discount
+        else:
+            # amount - net is the most reliable legacy fallback because both
+            # values were snapshotted when the return was created.
+            discount_amount = max(amount - net_amount, 0.0)
+
+        gst_percent = max(to_float_safe(item.gst_percent, 0), 0.0)
+        cgst_amount = round_currency(net_amount * gst_percent / 200)
+        sgst_amount = round_currency(net_amount * gst_percent / 200)
+
+        prepared_items.append({
+            "id": item.id,
+            "medicine_name": (item.medicine_name or "").strip(),
+            "qty": qty,
+            "batch": (item.batch or "").strip(),
+            "expiry": (item.expiry or "").strip(),
+            "selling_rate": round_currency(selling_rate),
+            "amount": round_currency(amount),
+            "discount_percent": discount_percent,
+            "discount_amount": round_currency(discount_amount),
+            "net_amount": round_currency(net_amount),
+            "gst_percent": gst_percent,
+            "cgst_amount": cgst_amount,
+            "sgst_amount": sgst_amount,
+            "reason": (item.reason or "").strip(),
+        })
+        gross_total += amount
+        discount_total += discount_amount
+        net_total += net_amount
+
+    refund_total = round_currency(
+        return_bill.total_refund
+        if return_bill.total_refund is not None
+        else net_total
+    )
+    payment_breakdown = build_return_payment_breakdown(return_bill, refund_total)
+
+    return_at = storage_datetime_to_local(return_bill.created_at) or return_bill.created_at
+    original_at = None
+    if linked_invoice and linked_invoice.created_at:
+        original_at = storage_datetime_to_local(linked_invoice.created_at) or linked_invoice.created_at
+
+    if linked_invoice:
+        print_profile = resolve_invoice_print_profile(linked_invoice)
+    else:
+        print_profile = get_invoice_print_profile_for_date(return_bill.created_at)
+
+    return {
+        "ret": return_bill,
+        "original_invoice": linked_invoice,
+        "items": prepared_items,
+        "print_profile": print_profile,
+        "return_no": return_bill.return_no or f"RB-{return_bill.id:06d}",
+        "invoice_no": (return_bill.invoice_no or (linked_invoice.invoice_no if linked_invoice else "") or "Manual"),
+        "customer": (return_bill.customer or "").strip(),
+        "customer_gst_no": ((linked_invoice.customer_gst_no if linked_invoice else "") or "").strip(),
+        "mobile": (return_bill.mobile or "").strip(),
+        "doctor": ((linked_invoice.doctor if linked_invoice else "") or "").strip(),
+        "gender": ((linked_invoice.gender if linked_invoice else "") or "").strip(),
+        "payment_breakdown": payment_breakdown,
+        "return_date": return_at.strftime("%d-%m-%Y") if return_at else "-",
+        "return_time": return_at.strftime("%I:%M %p") if return_at else "",
+        "original_invoice_date": original_at.strftime("%d-%m-%Y") if original_at else "-",
+        "gross_total": round_currency(gross_total),
+        "discount_total": round_currency(discount_total),
+        "net_total": round_currency(net_total),
+        "refund_total": refund_total,
+        "cgst_total": round_currency(return_bill.cgst),
+        "sgst_total": round_currency(return_bill.sgst),
+        "is_cancelled": bool(return_bill.is_cancelled),
+        "cancelled_by": (return_bill.cancelled_by or "").strip(),
+        "cancelled_at": (
+            (storage_datetime_to_local(return_bill.cancelled_at) or return_bill.cancelled_at).strftime("%d-%m-%Y %I:%M %p")
+            if return_bill.cancelled_at
+            else ""
+        ),
+    }
+
+
 def resolve_invoice_edit_payment_update(invoice, requested_payment_mode):
     normalized_mode = normalize_payment_mode(requested_payment_mode)
     current_breakdown = build_invoice_payment_breakdown(invoice)
@@ -8204,20 +8328,7 @@ def return_medicine():
 @invoice_access_required
 def return_invoice(id):
     ret = Return.query.get_or_404(id)
-    items = ReturnItem.query.filter_by(return_id=id).all()
-    return_no = ret.return_no or f"RB-{ret.id:06d}"
-    subtotal = sum((i.net_amount or 0) for i in items)
-    total_refund = ret.total_refund if ret.total_refund is not None else round(subtotal, 2)
-
-    return render_template(
-        "return_invoice.html",
-        ret=ret,
-        items=items,
-        return_no=return_no,
-        subtotal=subtotal,
-        total_refund=total_refund,
-        date=ret.created_at.strftime("%d-%m-%Y")
-    )
+    return render_template("return_invoice.html", **build_return_invoice_context(ret))
 
 
 @app.route("/return-bill/edit/<int:id>", methods=["GET", "POST"])

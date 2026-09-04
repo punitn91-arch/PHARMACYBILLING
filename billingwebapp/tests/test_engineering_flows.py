@@ -1803,10 +1803,183 @@ class EngineeringFlowTests(unittest.TestCase):
         response = self.client.get(f"/return-invoice/{return_id}")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("CGST SNAPSHOT (REF)", html)
-        self.assertIn("SGST SNAPSHOT (REF)", html)
-        self.assertIn("FINAL REFUND TOTAL", html)
-        self.assertIn("₹50.0", html)
+        self.assertIn("RETURN INVOICE", html)
+        self.assertIn("CGST Snapshot", html)
+        self.assertIn("SGST Snapshot", html)
+        self.assertIn("Final Refund Amount", html)
+        self.assertIn("₹50.00", html)
+        self.assertIn("DRUG/2026-27/154505", html)
+        self.assertIn("SHOP NO. FF12, 2ND FLOOR", html)
+        self.assertIn("/static/endo-pharmacy-logo.png", html)
+
+    def test_return_invoice_uses_return_snapshots_and_linked_invoice_print_metadata(self):
+        with self.app.app_context():
+            patient = self._seed_patient(name="Pooja Sharma", mobile="9876501234")
+            invoice = self.app_module.Invoice(
+                invoice_no="INV-RETURN-PREMIUM",
+                patient_id=patient.id,
+                customer=patient.name,
+                mobile=patient.mobile,
+                customer_gst_no="08ABCDE1234F1Z5",
+                doctor="Dr. Abhishek Prakash",
+                gender="FEMALE",
+                total=500.0,
+                payment_mode="UPI",
+                print_profile_code="return-test-profile",
+                print_address_line_1="SAVED PHARMACY ADDRESS",
+                print_address_line_2="JAIPUR, RAJASTHAN",
+                print_mobile="9024600000",
+                print_gst_no="08RETURNTEST1Z1",
+                print_licence_no="DRUG/RETURN/001",
+                print_logo_path="/static/endo-pharmacy-logo.png",
+                created_by="admin",
+                created_at=datetime(2026, 9, 1, 8, 0),
+            )
+            self.db.session.add(invoice)
+            self.db.session.flush()
+            ret = self.app_module.Return(
+                return_no="RB-PREMIUM-1",
+                invoice_id=invoice.id,
+                invoice_no=invoice.invoice_no,
+                customer="Corrected Return Name",
+                mobile=invoice.mobile,
+                total_refund=230.0,
+                cgst=7.5,
+                sgst=7.5,
+                payment_mode="CARD",
+                created_by="admin",
+                created_at=datetime(2026, 9, 2, 9, 30),
+            )
+            self.db.session.add(ret)
+            self.db.session.flush()
+            self.db.session.add_all([
+                self.app_module.ReturnItem(
+                    return_id=ret.id,
+                    invoice_item_id=101,
+                    medicine_name="MEDICINE A",
+                    batch="BATCH-A",
+                    expiry="2028-01-31",
+                    qty=2,
+                    price=100.0,
+                    selling_rate=100.0,
+                    amount=200.0,
+                    discount_percent=10.0,
+                    discount_amount=20.0,
+                    net_amount=180.0,
+                    gst_percent=5.0,
+                    reason="Wrong batch supplied",
+                ),
+                self.app_module.ReturnItem(
+                    return_id=ret.id,
+                    invoice_item_id=102,
+                    medicine_name="MEDICINE B",
+                    batch="BATCH-B",
+                    expiry="2029-02-28",
+                    qty=1,
+                    price=50.0,
+                    selling_rate=50.0,
+                    amount=50.0,
+                    discount_percent=0.0,
+                    discount_amount=0.0,
+                    net_amount=50.0,
+                    gst_percent=12.0,
+                    reason="Damaged pack",
+                ),
+            ])
+            self.db.session.commit()
+            return_id = ret.id
+
+            context = self.app_module.build_return_invoice_context(ret)
+            self.assertEqual(context["gross_total"], 250.0)
+            self.assertEqual(context["discount_total"], 20.0)
+            self.assertEqual(context["net_total"], 230.0)
+            self.assertEqual(context["refund_total"], 230.0)
+            self.assertEqual(context["cgst_total"], 7.5)
+            self.assertEqual(context["sgst_total"], 7.5)
+            self.assertEqual(context["items"][0]["cgst_amount"], 4.5)
+            self.assertEqual(context["items"][0]["sgst_amount"], 4.5)
+            self.assertEqual(context["items"][1]["cgst_amount"], 3.0)
+            self.assertEqual(context["items"][1]["sgst_amount"], 3.0)
+            self.assertEqual(context["customer"], "Corrected Return Name")
+            self.assertEqual(context["doctor"], "Dr. Abhishek Prakash")
+            self.assertEqual(context["gender"], "FEMALE")
+            self.assertEqual(context["customer_gst_no"], "08ABCDE1234F1Z5")
+            self.assertEqual(context["print_profile"]["address_line_1"], "SAVED PHARMACY ADDRESS")
+            self.assertEqual(context["print_profile"]["licence_no"], "DRUG/RETURN/001")
+
+        self.login()
+        response = self.client.get(f"/return-invoice/{return_id}")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        for expected in (
+            "RETURN INVOICE",
+            "RB-PREMIUM-1",
+            "INV-RETURN-PREMIUM",
+            "SAVED PHARMACY ADDRESS",
+            "DRUG/RETURN/001",
+            "Corrected Return Name",
+            "Dr. Abhishek Prakash",
+            "Wrong batch supplied",
+            "Damaged pack",
+            "₹250.00",
+            "₹20.00",
+            "₹230.00",
+            "₹4.50",
+            "₹3.00",
+        ):
+            self.assertIn(expected, html)
+
+    def test_manual_and_cancelled_return_invoice_render_safely(self):
+        with self.app.app_context():
+            ret = self.app_module.Return(
+                return_no="RB-MANUAL-CANCELLED",
+                invoice_id=0,
+                invoice_no="",
+                customer="Manual Patient",
+                mobile="9876512345",
+                total_refund=80.0,
+                cgst=2.0,
+                sgst=2.0,
+                payment_mode="CASH",
+                is_cancelled=True,
+                cancelled_by="admin",
+                cancelled_at=datetime(2026, 9, 3, 11, 0),
+                created_by="admin",
+                created_at=datetime(2026, 9, 3, 10, 0),
+            )
+            self.db.session.add(ret)
+            self.db.session.flush()
+            self.db.session.add(self.app_module.ReturnItem(
+                return_id=ret.id,
+                invoice_item_id=0,
+                medicine_name="MANUAL MEDICINE",
+                qty=1,
+                price=80.0,
+                selling_rate=80.0,
+                amount=80.0,
+                net_amount=80.0,
+                gst_percent=5.0,
+                reason="Manual return",
+            ))
+            self.db.session.commit()
+            return_id = ret.id
+
+            context = self.app_module.build_return_invoice_context(ret)
+            self.assertIsNone(context["original_invoice"])
+            self.assertEqual(context["invoice_no"], "Manual")
+            self.assertEqual(context["original_invoice_date"], "-")
+            self.assertEqual(context["print_profile"]["profile_code"], "endo_pharmacy_2026_07")
+
+        self.login()
+        response = self.client.get(f"/return-invoice/{return_id}")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('class="invoice-sheet is-cancelled"', html)
+        self.assertIn("RB-MANUAL-CANCELLED", html)
+        self.assertIn("Manual", html)
+        self.assertIn("CANCELLED", html)
+        self.assertIn("MANUAL MEDICINE", html)
+        self.assertNotIn(f'href="/return-bill/edit/{return_id}"', html)
 
     def test_admin_can_edit_only_return_name_and_payment_mode(self):
         original_created_at = datetime(2026, 8, 15, 10, 30)

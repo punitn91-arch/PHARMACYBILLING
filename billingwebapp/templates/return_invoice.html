@@ -1,168 +1,451 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>Return Bill</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Return Invoice {{ return_no }}</title>
 
 <style>
+:root {
+    --brand-blue: #173f91;
+    --brand-orange: #f57b15;
+    --ink: #16263a;
+    --muted: #5c6a7e;
+    --line: #d8e1ec;
+    --line-strong: #aebac9;
+    --panel: #f7fafd;
+    --paper: #ffffff;
+    --danger: #b42318;
+}
+
+* { box-sizing: border-box; }
+
 body {
-    font-family: Arial;
-    margin: 25px;
-    font-size: 12px;
-    color: #000;
+    font-family: "Segoe UI", Arial, sans-serif;
+    margin: 0;
+    font-size: 10px;
+    color: var(--ink);
+    background: #eef3f8;
 }
 
 @media print {
-    .action-btns { display:none !important; }
-    body { margin: 10px; }
+    .action-btns { display: none !important; }
+    body { margin: 0; background: #fff; }
+    .invoice-sheet {
+        margin: 0;
+        width: 100%;
+        max-width: none;
+        min-height: auto;
+        padding: 4.5mm;
+        box-shadow: none;
+    }
+    body, .invoice-sheet {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
 }
 
-.header {
-    text-align:center;
-    line-height:1.4;
-    margin-bottom:20px;
-}
+@page { size: A5 portrait; margin: 7mm; }
 
-.info-table, .bill-table, .totals-table {
+.invoice-sheet {
     width: 100%;
-    border-collapse: collapse;
+    max-width: 148mm;
+    min-height: auto;
+    margin: 12px auto;
+    padding: 5.5mm;
+    position: relative;
+    overflow: hidden;
+    background: var(--paper);
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    box-shadow: 0 18px 46px rgba(17, 38, 67, 0.14);
 }
 
-.info-table td {
+.invoice-sheet > * { position: relative; z-index: 1; }
+
+.cancelled-watermark {
+    display: none;
+    position: absolute;
+    z-index: 0;
+    inset: 42% auto auto 50%;
+    transform: translate(-50%, -50%) rotate(-24deg);
+    color: rgba(180, 35, 24, 0.10);
+    font-size: 46px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    white-space: nowrap;
+}
+
+.invoice-sheet.is-cancelled .cancelled-watermark { display: block; }
+
+.invoice-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding-bottom: 6px;
+    margin-bottom: 7px;
+    border-bottom: 1px solid var(--line);
+}
+
+.brand-panel { flex: 1 1 56%; min-width: 0; }
+.brand-logo-wrap { width: 44mm; height: 21mm; overflow: hidden; margin-bottom: 3px; }
+.brand-logo {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+}
+
+.brand-meta {
+    font-size: 7.8px;
+    line-height: 1.32;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.brand-meta strong { color: var(--ink); }
+
+.invoice-badge {
+    flex: 0 0 40%;
+    min-width: 0;
+    padding: 7px 9px;
+    border-radius: 12px;
+    border: 1px solid rgba(23, 63, 145, 0.14);
+    background: linear-gradient(180deg, rgba(245, 249, 255, 0.98), rgba(255, 255, 255, 0.98));
+    text-align: right;
+}
+
+.invoice-title {
+    margin-top: 0;
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--brand-blue);
+    letter-spacing: 0.05em;
+}
+
+.invoice-meta-list { margin-top: 5px; display: grid; gap: 3px; }
+.invoice-meta-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 7.7px;
+    color: var(--muted);
+}
+.invoice-meta-row span { text-transform: uppercase; letter-spacing: 0.06em; }
+.invoice-meta-row strong { color: var(--ink); text-align: right; word-break: break-word; }
+
+.status-pill {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #e8f7ee;
+    color: #18794e;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+.status-pill.cancelled { background: #fee4e2; color: var(--danger); }
+
+.section-card {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(247, 250, 253, 0.94);
+    padding: 7px 10px;
+    margin-bottom: 8px;
+}
+
+.patient-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.section-label {
+    margin-bottom: 4px;
+    font-size: 7.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    color: var(--brand-blue);
+}
+.detail-list { display: grid; gap: 3px; }
+.detail-row {
+    display: grid;
+    grid-template-columns: 42% minmax(0, 1fr);
+    align-items: baseline;
+    gap: 8px;
+    padding-bottom: 2px;
+    border-bottom: 1px dashed rgba(92, 106, 126, 0.24);
+    font-size: 8.5px;
+}
+.detail-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.detail-row span { color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.detail-row strong { color: var(--ink); text-align: left; word-break: break-word; }
+
+.table-shell {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fff;
+}
+.bill-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.bill-table thead th {
+    background: var(--brand-blue);
+    color: #fff;
+    padding: 8px 4px;
+    font-size: 7.2px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 0;
+}
+.bill-table tbody td {
+    padding: 8px 4px;
+    font-size: 8px;
+    border: 0;
+    border-bottom: 1px solid #e5ebf3;
+    color: var(--ink);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+.bill-table tbody tr:last-child td { border-bottom: 0; }
+.bill-table th:nth-child(1), .bill-table td:nth-child(1),
+.bill-table th:nth-child(3), .bill-table td:nth-child(3) { text-align: left; }
+.bill-table th:nth-child(4), .bill-table td:nth-child(4) { text-align: center; }
+.bill-table th:nth-child(2), .bill-table td:nth-child(2),
+.bill-table th:nth-child(5), .bill-table td:nth-child(5),
+.bill-table th:nth-child(6), .bill-table td:nth-child(6),
+.bill-table th:nth-child(7), .bill-table td:nth-child(7),
+.bill-table th:nth-child(8), .bill-table td:nth-child(8),
+.bill-table th:nth-child(9), .bill-table td:nth-child(9),
+.bill-table th:nth-child(10), .bill-table td:nth-child(10) { text-align: right; }
+.bill-table th:nth-child(1), .bill-table td:nth-child(1) { width: 26%; }
+.bill-table th:nth-child(2), .bill-table td:nth-child(2) { width: 6%; }
+.bill-table th:nth-child(3), .bill-table td:nth-child(3) { width: 12%; }
+.bill-table th:nth-child(4), .bill-table td:nth-child(4) { width: 10%; }
+.bill-table th:nth-child(5), .bill-table td:nth-child(5) { width: 8%; }
+.bill-table th:nth-child(6), .bill-table td:nth-child(6) { width: 8%; }
+.bill-table th:nth-child(7), .bill-table td:nth-child(7) { width: 8%; }
+.bill-table th:nth-child(8), .bill-table td:nth-child(8) { width: 9%; }
+.bill-table th:nth-child(9), .bill-table td:nth-child(9) { width: 6%; }
+.bill-table th:nth-child(10), .bill-table td:nth-child(10) { width: 9%; }
+.product-name { font-weight: 700; color: var(--ink); word-break: break-word; }
+.return-reason { margin-top: 3px; color: var(--muted); font-size: 6.9px; line-height: 1.25; }
+.return-reason strong { color: var(--brand-blue); text-transform: uppercase; }
+.empty-row { padding: 18px !important; text-align: center !important; color: var(--muted) !important; }
+
+.footer-zone {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 52%);
+    gap: 12px;
+    align-items: start;
+    margin-top: 8px;
+}
+.return-record {
+    border-top: 1px solid var(--line-strong);
+    padding-top: 7px;
+    font-size: 7.2px;
+    line-height: 1.45;
+    color: #556274;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+.record-title {
+    margin-bottom: 4px;
+    font-size: 7.8px;
+    font-weight: 800;
+    color: var(--brand-blue);
+    letter-spacing: 0.1em;
+}
+.record-row { display: flex; justify-content: space-between; gap: 8px; }
+.record-row strong { color: var(--ink); text-align: right; }
+.summary-stack { display: grid; gap: 8px; }
+.summary-card {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(247, 250, 253, 0.96);
+    padding: 8px 10px;
+}
+.summary-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
     padding: 4px 0;
+    font-size: 9px;
+    border-bottom: 1px dashed rgba(92, 106, 126, 0.24);
 }
-
-.bill-table th, .bill-table td {
-    border:1px solid #000;
-    padding:5px;
-    text-align:center;
-    font-size: 11px;
-}
-
-.bill-table th {
-    background:#f2f2f2;
-    font-weight:bold;
-}
-
-.totals-table {
-    margin-top:20px;
-    float:right;
-    width:360px;
-}
-
-.totals-table td {
-    padding:5px;
-    font-size:12px;
-}
+.summary-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.summary-row span { color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.summary-row strong { color: var(--ink); text-align: right; }
+.summary-row.grand { padding-top: 6px; font-size: 10.8px; }
+.summary-row.grand span, .summary-row.grand strong { color: var(--brand-blue); font-weight: 800; }
+.tax-note { margin-top: 5px; color: var(--muted); font-size: 6.7px; line-height: 1.35; }
 
 .btn {
-    margin-top:15px;
-    padding:8px 18px;
-    font-size:13px;
-    cursor:pointer;
-    border:none;
-    border-radius:5px;
+    display: inline-block;
+    margin-top: 15px;
+    padding: 8px 18px;
+    font-size: 13px;
+    cursor: pointer;
+    border: none;
+    border-radius: 5px;
+    text-decoration: none;
 }
+.print-btn { background: #007bff; color: #fff; }
+.pdf-btn { background: #198754; color: #fff; }
+.edit-btn { background: #f59e0b; color: #fff; }
+.action-links { margin-top: 12px; font-size: 12px; }
+.action-links a { color: var(--brand-blue); }
 
-.print-btn { background:#007bff; color:white; }
-.pdf-btn { background:#198754; color:white; }
-
-.clearfix { clear:both; }
+@media (max-width: 720px) {
+    .invoice-top, .patient-grid, .footer-zone { grid-template-columns: 1fr; display: grid; }
+    .invoice-badge, .summary-stack { width: 100%; margin-left: 0; }
+    .brand-logo-wrap { width: 100%; max-width: 48mm; }
+    .invoice-sheet { margin: 0; border-radius: 0; padding: 12px; }
+    .table-shell { overflow-x: auto; }
+    .bill-table { min-width: 680px; }
+}
 </style>
 </head>
 
 <body>
+<main class="invoice-sheet{% if is_cancelled %} is-cancelled{% endif %}">
+    <div class="cancelled-watermark" aria-hidden="true">CANCELLED</div>
 
-<!-- HEADER -->
-<div class="header">
-    <div style="font-size:18px; font-weight:bold;">DR. ABHISHEK PRAKASH</div>
-    <div style="font-size:14px; font-weight:bold;">THE ENDO CLINIC & HEALTH CENTRE</div>
-    <div>FF22 SECOND FLOOR, MANGALAM ANANDA PLAZA, SANGANER</div>
-    <div>JAIPUR, RAJASTHAN</div>
-    <div style="font-weight:bold;">MOBILE : 9024648186</div>
-</div>
+    <header class="invoice-top">
+        <div class="brand-panel">
+            <div class="brand-logo-wrap">
+                <img class="brand-logo" src="{{ print_profile.logo_path or '/static/endo-pharmacy-logo.png' }}" alt="The Endo Pharmacy Logo">
+            </div>
+            <div class="brand-meta">
+                <div>{{ print_profile.address_line_1 }}</div>
+                <div>{{ print_profile.address_line_2 }}</div>
+                <div><strong>Mobile:</strong> {{ print_profile.mobile }}</div>
+            </div>
+        </div>
 
-<!-- INFO -->
-<table class="info-table">
-<tr>
-    <td><b>GST No:</b> A8BPWPP5023C1ZP</td>
-    <td style="text-align:right;"><b>Date:</b> {{ date }}</td>
-</tr>
-<tr>
-    <td><b>Return No:</b> {{ return_no }}</td>
-    <td style="text-align:right;"><b>Invoice No:</b> {{ ret.invoice_no if ret.invoice_no else "Manual" }}</td>
-</tr>
-<tr><td><b>Patient:</b> {{ ret.customer }}</td></tr>
-<tr><td><b>Mobile:</b> {{ ret.mobile }}</td></tr>
-<tr><td><b>Payment Mode:</b> {{ ret.payment_mode or "CASH" }}</td></tr>
-</table>
+        <div class="invoice-badge">
+            <div class="invoice-title">RETURN INVOICE</div>
+            <div class="invoice-meta-list">
+                {% if print_profile.licence_no %}
+                <div class="invoice-meta-row"><span>Licence No</span><strong>{{ print_profile.licence_no }}</strong></div>
+                {% endif %}
+                <div class="invoice-meta-row"><span>GST No</span><strong>{{ print_profile.gst_no or '-' }}</strong></div>
+                <div class="invoice-meta-row"><span>Return No</span><strong>{{ return_no }}</strong></div>
+                <div class="invoice-meta-row"><span>Invoice No</span><strong>{{ invoice_no }}</strong></div>
+            </div>
+            <span class="status-pill{% if is_cancelled %} cancelled{% endif %}">{{ 'CANCELLED' if is_cancelled else 'ACTIVE' }}</span>
+        </div>
+    </header>
 
-<br>
+    <section class="section-card">
+        <div class="patient-grid">
+            <div>
+                <div class="section-label">{{ 'Party Details' if customer_gst_no else 'Patient Details' }}</div>
+                <div class="detail-list">
+                    <div class="detail-row">
+                        <span>{{ 'Party Name' if customer_gst_no else 'Patient Name' }}</span>
+                        <strong>{{ customer or '-' }}</strong>
+                    </div>
+                    <div class="detail-row">
+                        <span>{{ 'GST No' if customer_gst_no else 'Gender' }}</span>
+                        <strong>{{ customer_gst_no or gender or '-' }}</strong>
+                    </div>
+                    <div class="detail-row"><span>Mobile</span><strong>{{ mobile or '-' }}</strong></div>
+                </div>
+            </div>
+            <div>
+                <div class="section-label">Return Details</div>
+                <div class="detail-list">
+                    <div class="detail-row"><span>Ref. By</span><strong>{{ doctor or '-' }}</strong></div>
+                    <div class="detail-row"><span>Refund Mode</span><strong>{{ payment_breakdown.display_mode }}</strong></div>
+                    <div class="detail-row"><span>Return Date</span><strong>{{ return_date }}{% if return_time %} Time {{ return_time }}{% endif %}</strong></div>
+                </div>
+            </div>
+        </div>
+    </section>
 
-<!-- ITEMS -->
-<table class="bill-table">
-<tr>
-    <th>PRODUCT</th>
-    <th>QTY</th>
-    <th>BATCH</th>
-    <th>EXP</th>
-    <th>SELLING</th>
-    <th>PURCHASE</th>
-    <th>GST %</th>
-    <th>AMOUNT</th>
-    <th>DISC %</th>
-    <th>NET</th>
-    <th>REASON</th>
-</tr>
+    <div class="table-shell">
+        <table class="bill-table">
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Batch</th>
+                    <th>Exp</th>
+                    <th>{{ 'MRP' if original_invoice else 'Rate' }}</th>
+                    <th>CGST</th>
+                    <th>SGST</th>
+                    <th>Amount</th>
+                    <th>Disc %</th>
+                    <th>Net</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>
+                        <div class="product-name">{{ item.medicine_name or '-' }}</div>
+                        {% if item.reason %}<div class="return-reason"><strong>Reason:</strong> {{ item.reason }}</div>{% endif %}
+                    </td>
+                    <td>{{ item.qty }}</td>
+                    <td>{{ item.batch or '-' }}</td>
+                    <td>{{ item.expiry or '-' }}</td>
+                    <td>₹{{ "%.2f"|format(item.selling_rate) }}</td>
+                    <td>₹{{ "%.2f"|format(item.cgst_amount) }}</td>
+                    <td>₹{{ "%.2f"|format(item.sgst_amount) }}</td>
+                    <td>₹{{ "%.2f"|format(item.amount) }}</td>
+                    <td>{{ "%.2f"|format(item.discount_percent) }}%</td>
+                    <td><strong>₹{{ "%.2f"|format(item.net_amount) }}</strong></td>
+                </tr>
+                {% else %}
+                <tr><td class="empty-row" colspan="10">No returned medicine lines are available for this record.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 
-{% for item in items %}
-<tr>
-    <td>{{ item.medicine_name }}</td>
-    <td>{{ item.qty }}</td>
-    <td>{{ item.batch }}</td>
-    <td>{{ item.expiry }}</td>
-    <td>{{ item.selling_rate if item.selling_rate else item.price }}</td>
-    <td>{{ item.purchase_rate if item.purchase_rate else "-" }}</td>
-    <td>{{ item.gst_percent if item.gst_percent else 0 }}</td>
-    <td>₹{{ item.amount }}</td>
-    <td>{{ item.discount_percent }}%</td>
-    <td><b>₹{{ item.net_amount }}</b></td>
-    <td>{{ item.reason if item.reason else "-" }}</td>
-</tr>
-{% endfor %}
-</table>
+    <section class="footer-zone">
+        <div class="return-record">
+            <div class="record-title">Return Record</div>
+            <div class="record-row"><span>Original Bill Date</span><strong>{{ original_invoice_date }}</strong></div>
+            <div class="record-row"><span>Returned By</span><strong>{{ ret.created_by or '-' }}</strong></div>
+            <div class="record-row"><span>Status</span><strong>{{ 'Cancelled' if is_cancelled else 'Active' }}</strong></div>
+            {% if is_cancelled %}
+            <div class="record-row"><span>Cancelled By</span><strong>{{ cancelled_by or '-' }}</strong></div>
+            <div class="record-row"><span>Cancelled At</span><strong>{{ cancelled_at or '-' }}</strong></div>
+            {% endif %}
+        </div>
 
-<!-- TOTAL -->
-<table class="totals-table">
-    <tr>
-        <td><b>REFUNDABLE NET VALUE</b></td>
-        <td><b>₹{{ subtotal }}</b></td>
-    </tr>
-    <tr>
-        <td><b>CGST SNAPSHOT (REF)</b></td>
-        <td><b>₹{{ ret.cgst or 0 }}</b></td>
-    </tr>
-    <tr>
-        <td><b>SGST SNAPSHOT (REF)</b></td>
-        <td><b>₹{{ ret.sgst or 0 }}</b></td>
-    </tr>
-    <tr>
-        <td><b>FINAL REFUND TOTAL</b></td>
-        <td><b>₹{{ total_refund }}</b></td>
-    </tr>
-</table>
+        <div class="summary-stack">
+            <div class="summary-card">
+                <div class="summary-row"><span>Total Amount</span><strong>₹{{ "%.2f"|format(gross_total) }}</strong></div>
+                <div class="summary-row"><span>Total Discount</span><strong>₹{{ "%.2f"|format(discount_total) }}</strong></div>
+                <div class="summary-row"><span>Net Return Value</span><strong>₹{{ "%.2f"|format(net_total) }}</strong></div>
+                <div class="summary-row grand"><span>Final Refund Amount</span><strong>₹{{ "%.2f"|format(refund_total) }}</strong></div>
+            </div>
+            <div class="summary-card">
+                <div class="section-label">Tax & Refund Reference</div>
+                <div class="summary-row"><span>CGST Snapshot</span><strong>₹{{ "%.2f"|format(cgst_total) }}</strong></div>
+                <div class="summary-row"><span>SGST Snapshot</span><strong>₹{{ "%.2f"|format(sgst_total) }}</strong></div>
+                <div class="summary-row"><span>Refund Type</span><strong>{{ payment_breakdown.refund_type }}</strong></div>
+                <div class="tax-note">GST values are reference snapshots from the return transaction. They are not added again to the final refund amount.</div>
+            </div>
+        </div>
+    </section>
 
-<div class="clearfix"></div>
-<div style="margin-top:8px; font-size:11px; text-align:right; color:#333;">
-    GST snapshot is shown for reporting reference. Final refund total follows the original invoice refund basis.
-</div>
-
-<!-- ACTION BUTTONS -->
-<div class="action-btns" style="text-align:center; margin-top:40px;">
-    <button class="btn print-btn" onclick="window.print()">PRINT</button>
-    <button class="btn pdf-btn" onclick="window.print()">DOWNLOAD PDF</button>
-    <br><br>
-    <a href="/return-medicine">Return Another</a> | <a href="/">Home</a>
-</div>
-
+    <div class="action-btns" style="text-align:center; margin-top:28px;">
+        <button class="btn print-btn" type="button" onclick="window.print()">🖨 PRINT</button>
+        <button class="btn pdf-btn" type="button" onclick="window.print()">⬇ DOWNLOAD PDF</button>
+        {% if session.get('role') == 'admin' and not is_cancelled %}
+        <a class="btn edit-btn" href="{{ url_for('edit_return_bill', id=ret.id) }}">EDIT</a>
+        {% endif %}
+        <div class="action-links">
+            {% if original_invoice %}<a href="{{ url_for('view_invoice', id=original_invoice.id) }}">View Original Invoice</a> | {% endif %}
+            <a href="{{ url_for('return_bills') }}">Return Bills</a> |
+            <a href="{{ url_for('return_medicine') }}">New Return</a> |
+            <a href="/">Home</a>
+        </div>
+    </div>
+</main>
 </body>
 </html>
