@@ -2181,6 +2181,21 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertIn("No invoices matched this filter. Refund adjustments, if any, are already reflected above.", html)
         self.assertIn("Rs -50.0", html)
 
+    def test_reports_return_filter_is_postgresql_boolean_safe(self):
+        """Regression guard for Railway's native PostgreSQL BOOLEAN column."""
+        from sqlalchemy import or_
+        from sqlalchemy.dialects import postgresql
+        from services.reports import _active_return_filter
+
+        with self.app.app_context():
+            statement = self.app_module.Return.query.filter(
+                _active_return_filter(or_)
+            ).statement
+            compiled_sql = str(statement.compile(dialect=postgresql.dialect()))
+
+        self.assertIn("CAST(return_bill.is_cancelled AS VARCHAR)", compiled_sql)
+        self.assertNotIn("return_bill.is_cancelled =", compiled_sql)
+
     def test_appointment_payment_flow_marks_paid_and_blocks_duplicate(self):
         with self.app.app_context():
             patient = self._seed_patient()

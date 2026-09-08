@@ -5,6 +5,24 @@ try:
 except ImportError:  # pragma: no cover - script/local fallback
     from models import Invoice, Return, db
 
+from sqlalchemy import String, cast
+
+
+def _active_return_filter(or_):
+    """Include returns that have not been cancelled across supported databases.
+
+    Older SQLite databases may store this flag as 0/1 or text, while Railway's
+    PostgreSQL database stores it as a native BOOLEAN.  Comparing a PostgreSQL
+    BOOLEAN directly to integer ``0`` raises ``operator does not exist:
+    boolean = integer``.  Normalising the value to text keeps the report query
+    portable without losing legacy return records.
+    """
+    normalized = db.func.lower(db.func.trim(cast(Return.is_cancelled, String)))
+    return or_(
+        Return.is_cancelled.is_(None),
+        normalized.in_(("0", "false", "f", "no", "off", "")),
+    )
+
 
 def default_report_filters(fresh_start_date=None, current_date=None):
     from_date = ""
@@ -107,7 +125,7 @@ def build_reports_page_state(
             returns = Return.query.filter(
                 Return.created_at >= start_bound,
                 Return.created_at < end_bound,
-                or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                _active_return_filter(or_),
             ).all()
         elif report_type == "monthly":
             month = to_int_safe(form_data.get("month"), 0)
@@ -130,7 +148,7 @@ def build_reports_page_state(
                 returns = Return.query.filter(
                     Return.created_at >= start_bound,
                     Return.created_at < end_bound,
-                    or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                    _active_return_filter(or_),
                 ).all()
         elif report_type == "custom":
             from_date = report_filters["from_date"]
@@ -151,7 +169,7 @@ def build_reports_page_state(
                     returns = Return.query.filter(
                         Return.created_at >= from_dt,
                         Return.created_at < to_dt,
-                        or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                        _active_return_filter(or_),
                     ).all()
             else:
                 messages.append(("danger", "Please select both from date and to date."))
@@ -163,7 +181,7 @@ def build_reports_page_state(
                 invoices = Invoice.query.filter(Invoice.customer.ilike(f"%{patient}%")).all()
                 returns = Return.query.filter(
                     Return.customer.ilike(f"%{patient}%"),
-                    or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                    _active_return_filter(or_),
                 ).all()
         elif report_type == "mobile":
             mobile_raw = (form_data.get("mobile") or "").strip()
@@ -225,13 +243,13 @@ def build_reports_page_state(
                             normalized_return_mobile.like(f"%{mobile_digits}%"),
                             Return.mobile.ilike(f"%{mobile_raw}%"),
                         ),
-                        or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                        _active_return_filter(or_),
                     ).all()
                 else:
                     invoices = Invoice.query.filter(Invoice.mobile.ilike(f"%{mobile_raw}%")).all()
                     returns = Return.query.filter(
                         Return.mobile.ilike(f"%{mobile_raw}%"),
-                        or_(Return.is_cancelled.is_(False), Return.is_cancelled.is_(None), Return.is_cancelled == 0),
+                        _active_return_filter(or_),
                     ).all()
         elif report_type == "patient_medicine":
             (
