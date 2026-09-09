@@ -1,4 +1,5 @@
 Flask
+python-dotenv
 Flask-Migrate
 Flask-SQLAlchemy
 Werkzeug

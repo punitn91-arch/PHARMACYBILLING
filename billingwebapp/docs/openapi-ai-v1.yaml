@@ -1,0 +1,279 @@
+openapi: 3.0.3
+info:
+  title: Clinic AI Integration API
+  version: 1.0.0
+  description: Secure server-to-server API for the separate Call Assistant. Direct database access is unsupported.
+servers:
+  - url: /api/v1/ai
+security:
+  - bearerAuth: []
+paths:
+  /auth/token:
+    post:
+      summary: Exchange AI client credentials for a short-lived opaque token
+      security: [{basicAuth: []}, {}]
+      requestBody:
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/TokenRequest'}}
+          application/x-www-form-urlencoded: {schema: {$ref: '#/components/schemas/TokenRequest'}}
+      responses: {'200': {$ref: '#/components/responses/Success'}, '401': {$ref: '#/components/responses/Unauthorized'}, '429': {$ref: '#/components/responses/RateLimited'}}
+  /integration/status:
+    get:
+      summary: Validate connectivity and authenticated client context
+      x-required-scope: clinic:read
+      responses: {'200': {$ref: '#/components/responses/Success'}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /clinic/info:
+    get:
+      summary: Approved clinic information, locations, services and policies
+      x-required-scope: clinic:read
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /clinic:
+    get:
+      deprecated: true
+      summary: Compatibility alias for /clinic/info
+      x-required-scope: clinic:read
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /clinic/status:
+    get:
+      summary: Effective live status for one or all active locations
+      x-required-scope: clinic:read
+      parameters: [{name: location_id, in: query, schema: {type: integer, minimum: 1}}]
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /locations:
+    get:
+      summary: Active public clinic locations
+      x-required-scope: clinic:read
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /locations/{location_id}/share:
+    get:
+      summary: Public location and map information
+      x-required-scope: clinic:read
+      parameters: [{$ref: '#/components/parameters/LocationId'}]
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /locations/{location_id}/send:
+    post:
+      summary: Send approved CLINIC_LOCATION template to the verified patient
+      x-required-scope: notification:send
+      parameters: [{$ref: '#/components/parameters/LocationId'}, {$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/Channel'}
+      responses: {'202': {$ref: '#/components/responses/Success'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /doctors:
+    get:
+      summary: Active public doctors only
+      x-required-scope: doctor:read
+      parameters:
+        - {name: specialty, in: query, schema: {type: string, maxLength: 120}}
+        - {name: location_id, in: query, schema: {type: integer, minimum: 1}}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /doctors/{doctor_id}/schedule:
+    get:
+      summary: Effective clinic plus doctor schedule
+      x-required-scope: doctor:read
+      parameters: [{$ref: '#/components/parameters/DoctorId'}, {$ref: '#/components/parameters/LocationQuery'}, {$ref: '#/components/parameters/DateQuery'}]
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /doctors/{doctor_id}/availability:
+    get:
+      summary: Effective availability and next available date
+      x-required-scope: doctor:read
+      parameters: [{$ref: '#/components/parameters/DoctorId'}, {$ref: '#/components/parameters/LocationQuery'}, {$ref: '#/components/parameters/DateQuery'}]
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /knowledge:
+    get:
+      summary: Approved active non-clinical knowledge
+      x-required-scope: clinic:read
+      parameters:
+        - {name: category, in: query, schema: {type: string, maxLength: 80}}
+        - {name: language, in: query, schema: {type: string, maxLength: 12}}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /reception/status:
+    get:
+      summary: Live reception status, next opening and approved transfer destination
+      x-required-scope: clinic:read
+      parameters: [{$ref: '#/components/parameters/LocationQuery'}]
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /patients/identify:
+    post:
+      summary: Create enumeration-safe patient identification intent
+      x-required-scope: patient:identify
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [mobile], properties: {mobile: {type: string, maxLength: 40}, name: {type: string, minLength: 2, maxLength: 120, description: Required only when registering a new patient}}}}}
+      responses: {'202': {$ref: '#/components/responses/Success'}, '429': {$ref: '#/components/responses/RateLimited'}}
+  /verification/otp/send:
+    post:
+      summary: Send one-time OTP for an identification intent
+      x-required-scope: patient:verify
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Identification'}}}
+      responses: {'202': {$ref: '#/components/responses/Success'}, '429': {$ref: '#/components/responses/RateLimited'}}
+  /verification/otp/verify:
+    post:
+      summary: Verify OTP and issue temporary server-owned patient session
+      x-required-scope: patient:verify
+      requestBody:
+        required: true
+        content: {application/json: {schema: {allOf: [{$ref: '#/components/schemas/Identification'}, {type: object, required: [otp], properties: {otp: {type: string, pattern: '^\\d{6}$'}}}]}}}
+      responses: {'200': {$ref: '#/components/responses/Success'}, '400': {$ref: '#/components/responses/Invalid'}}
+  /appointments/slots:
+    get:
+      summary: Bookable slots after schedules, overrides, blocks and capacity
+      x-required-scope: appointment:read
+      parameters:
+        - {name: doctor_id, in: query, required: true, schema: {type: integer, minimum: 1}}
+        - {$ref: '#/components/parameters/LocationQuery'}
+        - {$ref: '#/components/parameters/DateQuery'}
+        - {name: start_time, in: query, schema: {type: string, pattern: '^\\d{2}:\\d{2}$'}}
+        - {name: end_time, in: query, schema: {type: string, pattern: '^\\d{2}:\\d{2}$'}}
+        - {name: period, in: query, schema: {type: string, enum: [morning, afternoon, evening]}}
+      responses: {'200': {$ref: '#/components/responses/Success'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /appointments:
+    get:
+      summary: Appointments owned by the verified patient
+      x-required-scope: appointment:read
+      parameters: [{$ref: '#/components/parameters/PatientSession'}, {name: appointment_no, in: query, schema: {type: string}}, {$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Offset'}]
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+    post:
+      summary: Transactionally book a verified patient's slot
+      x-required-scope: appointment:create
+      parameters: [{$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AppointmentWrite'}}}}
+      responses: {'201': {$ref: '#/components/responses/Success'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /appointments/{appointment_no}/cancel:
+    post:
+      summary: Cancel an owned appointment without deleting history
+      x-required-scope: appointment:update
+      parameters: [{$ref: '#/components/parameters/AppointmentNo'}, {$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'200': {$ref: '#/components/responses/Success'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /appointments/{appointment_no}/reschedule:
+    post:
+      summary: Transactionally move an owned appointment to a validated slot
+      x-required-scope: appointment:update
+      parameters: [{$ref: '#/components/parameters/AppointmentNo'}, {$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AppointmentWrite'}}}}
+      responses: {'200': {$ref: '#/components/responses/Success'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /appointments/{appointment_no}/late-arrival:
+    post:
+      summary: Record verified late-arrival state
+      x-required-scope: appointment:update
+      parameters: [{$ref: '#/components/parameters/AppointmentNo'}, {$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, properties: {status: {type: string, enum: [RUNNING_LATE, ARRIVED_LATE]}}}}}
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /appointments/waitlist:
+    post:
+      summary: Add verified patient to optional waitlist
+      x-required-scope: appointment:create
+      parameters: [{$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'201': {$ref: '#/components/responses/Success'}}
+  /reports/status:
+    get:
+      summary: Minimum report status for the verified patient
+      x-required-scope: report:read
+      parameters:
+        - {$ref: '#/components/parameters/PatientSession'}
+        - {name: report_id, in: query, schema: {type: integer, minimum: 1}}
+        - {name: test_name, in: query, schema: {type: string, maxLength: 120}}
+        - {name: date_from, in: query, schema: {type: string, format: date}}
+        - {name: date_to, in: query, schema: {type: string, format: date}}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses: {'200': {$ref: '#/components/responses/Success'}}
+  /reports/{report_id}/secure-link:
+    post:
+      summary: Generate a short-lived one-time patient-owned report link
+      x-required-scope: report:read
+      parameters: [{$ref: '#/components/parameters/ReportId'}, {$ref: '#/components/parameters/PatientSession'}]
+      responses: {'201': {$ref: '#/components/responses/Success'}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /reports/{report_id}/send:
+    post:
+      summary: Send an approved REPORT_LINK template idempotently
+      x-required-scope: report:send
+      parameters: [{$ref: '#/components/parameters/ReportId'}, {$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/Channel'}
+      responses: {'202': {$ref: '#/components/responses/Success'}, '409': {$ref: '#/components/responses/Conflict'}}
+  /documents/{token}:
+    get:
+      summary: Consume a short-lived one-time document token
+      security: []
+      parameters: [{name: token, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Private report stream}, '403': {$ref: '#/components/responses/Forbidden'}}
+  /callbacks:
+    post:
+      summary: Create idempotent callback request
+      x-required-scope: callback:create
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'201': {$ref: '#/components/responses/Success'}}
+  /complaints:
+    post:
+      summary: Create idempotent complaint record
+      x-required-scope: complaint:create
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'201': {$ref: '#/components/responses/Success'}}
+  /notifications:
+    post:
+      summary: Send an approved template only to verified patient number
+      x-required-scope: notification:send
+      parameters: [{$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'202': {$ref: '#/components/responses/Success'}}
+  /notifications/appointment:
+    post:
+      summary: Send approved APPOINTMENT_CONFIRMATION for owned appointment
+      x-required-scope: notification:send
+      parameters: [{$ref: '#/components/parameters/PatientSession'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'202': {$ref: '#/components/responses/Success'}}
+components:
+  securitySchemes:
+    basicAuth: {type: http, scheme: basic}
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: opaque}
+  parameters:
+    DoctorId: {name: doctor_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+    LocationId: {name: location_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+    LocationQuery: {name: location_id, in: query, required: true, schema: {type: integer, minimum: 1}}
+    DateQuery: {name: date, in: query, required: true, schema: {type: string, format: date}}
+    AppointmentNo: {name: appointment_no, in: path, required: true, schema: {type: string}}
+    ReportId: {name: report_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+    PatientSession: {name: X-Patient-Session, in: header, required: true, schema: {type: string}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 8, maxLength: 128}}
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
+    Offset: {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+  requestBodies:
+    Channel:
+      required: true
+      content: {application/json: {schema: {type: object, properties: {channel: {type: string, enum: [SMS, WHATSAPP, EMAIL]}, language: {type: string, default: en}}}}}
+  schemas:
+    TokenRequest:
+      type: object
+      required: [client_id, client_secret]
+      properties: {client_id: {type: string}, client_secret: {type: string, format: password}, scope: {type: string}}
+    Identification:
+      type: object
+      required: [identification_ref]
+      properties: {identification_ref: {type: string}}
+    AppointmentWrite:
+      type: object
+      required: [doctor_id, location_id, start_at]
+      properties: {doctor_id: {type: integer}, location_id: {type: integer}, start_at: {type: string, format: date-time}, reason: {type: string, maxLength: 255}}
+    Success:
+      type: object
+      required: [success, data, request_id]
+      properties: {success: {type: boolean, enum: [true]}, data: {type: object}, request_id: {type: string}}
+    Error:
+      type: object
+      required: [success, error, request_id]
+      properties:
+        success: {type: boolean, enum: [false]}
+        error: {type: object, required: [code, message], properties: {code: {type: string}, message: {type: string}}}
+        request_id: {type: string}
+  responses:
+    Success: {description: Standard success envelope, content: {application/json: {schema: {$ref: '#/components/schemas/Success'}}}}
+    Invalid: {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Unauthorized: {description: Invalid or expired authentication, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Forbidden: {description: Scope or ownership check failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Conflict: {description: State, capacity or idempotency conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    RateLimited: {description: Rate limit exceeded, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}

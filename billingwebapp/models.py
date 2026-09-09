@@ -246,6 +246,16 @@ class Appointment(db.Model):
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
     doctor_name = db.Column(db.String(120), nullable=False)
+    clinician_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinician.id", ondelete="SET NULL"),
+        index=True,
+    )
+    location_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinic_location.id", ondelete="SET NULL"),
+        index=True,
+    )
 
     appointment_date = db.Column(db.Date, nullable=False, index=True)
     appointment_time = db.Column(db.Time, nullable=False)
@@ -265,6 +275,21 @@ class Appointment(db.Model):
     checked_in_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
     cancelled_at = db.Column(db.DateTime)
+    source = db.Column(db.String(30), nullable=False, default="ADMIN", index=True)
+    external_call_id = db.Column(db.String(128), index=True)
+    external_session_id = db.Column(db.String(128), index=True)
+    external_request_id = db.Column(db.String(80), index=True)
+    slot_start_at = db.Column(db.DateTime, index=True)
+    slot_end_at = db.Column(db.DateTime, index=True)
+    idempotency_key_hash = db.Column(db.String(64), index=True)
+    cancellation_reason = db.Column(db.String(255))
+    cancelled_by_source = db.Column(db.String(30))
+    rescheduled_from_id = db.Column(db.Integer, index=True)
+    previous_appointment_date = db.Column(db.Date, index=True)
+    previous_appointment_time = db.Column(db.Time)
+    rescheduled_at = db.Column(db.DateTime, index=True)
+    late_arrival_status = db.Column(db.String(30), index=True)
+    late_arrival_at = db.Column(db.DateTime, index=True)
     is_deleted = db.Column(db.Boolean, default=False, index=True)
     deleted_at = db.Column(db.DateTime, index=True)
     deleted_by = db.Column(db.String(50))
@@ -292,6 +317,10 @@ class LabTest(db.Model):
     specimen_type = db.Column(db.String(100))
     preparation = db.Column(db.String(500))
     default_price = db.Column(db.Float, nullable=False, default=0)
+    # JSON array of alternate spoken/search names, e.g. ["CBC", "complete blood count"].
+    aliases_json = db.Column(db.Text, nullable=False, default="[]")
+    fasting_required = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    turnaround_text = db.Column(db.String(120))
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
     created_by = db.Column(db.String(50))
     updated_by = db.Column(db.String(50))
@@ -377,6 +406,8 @@ class LabReport(db.Model):
     revoke_reason = db.Column(db.String(500))
     download_count = db.Column(db.Integer, nullable=False, default=0)
     last_downloaded_at = db.Column(db.DateTime, index=True)
+    delivery_status = db.Column(db.String(30), nullable=False, default="NOT_SENT", index=True)
+    last_delivery_at = db.Column(db.DateTime, index=True)
 
 
 class PortalOtpChallenge(db.Model):
@@ -468,6 +499,149 @@ class PublicAppointmentDayLock(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     appointment_date = db.Column(db.Date, nullable=False, unique=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ================= CLINIC SCHEDULE =================
+class ClinicLocation(db.Model):
+    """A clinic branch whose public operating information can be configured."""
+
+    __tablename__ = "clinic_location"
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    display_name = db.Column(db.String(120), nullable=False, index=True)
+    public_address = db.Column(db.String(255))
+    public_phone = db.Column(db.String(30))
+    location_type = db.Column(db.String(30), nullable=False, default="CLINIC", index=True)
+    landmark = db.Column(db.String(160))
+    city = db.Column(db.String(100), index=True)
+    state = db.Column(db.String(100))
+    postal_code = db.Column(db.String(12), index=True)
+    latitude = db.Column(db.Numeric(10, 7))
+    longitude = db.Column(db.Numeric(10, 7))
+    maps_url = db.Column(db.String(500))
+    parking_information = db.Column(db.String(500))
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Clinician(db.Model):
+    """A public-facing clinician record; it does not imply a booked slot."""
+
+    __tablename__ = "clinician"
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    display_name = db.Column(db.String(120), nullable=False, index=True)
+    public_title = db.Column(db.String(80))
+    specialty = db.Column(db.String(120), index=True)
+    qualification = db.Column(db.String(180))
+    consultation_fee = db.Column(db.Numeric(10, 2))
+    follow_up_fee = db.Column(db.Numeric(10, 2))
+    follow_up_days = db.Column(db.Integer)
+    public_bio = db.Column(db.String(500))
+    # Admin-approved public JSON arrays of short text values. Kept as text
+    # columns (matching ClinicProfile.available_services_json) instead of a
+    # separate lookup table, since these are simple caller-facing lists.
+    sub_specialties_json = db.Column(db.Text, nullable=False, default="[]")
+    languages_json = db.Column(db.Text, nullable=False, default="[]")
+    conditions_treated_json = db.Column(db.Text, nullable=False, default="[]")
+    services_offered_json = db.Column(db.Text, nullable=False, default="[]")
+    default_location_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinic_location.id", ondelete="SET NULL"),
+        index=True,
+    )
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ClinicScheduleRule(db.Model):
+    """An admin-managed recurring public schedule rule.
+
+    A rule with no clinician applies to the whole location. These rules expose
+    an arrival window and capacity only; they never create individual patient
+    time slots.
+    """
+
+    __tablename__ = "clinic_schedule_rule"
+
+    id = db.Column(db.Integer, primary_key=True)
+    location_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinic_location.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    clinician_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinician.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    weekday = db.Column(db.Integer, nullable=False, index=True)  # Monday=0 ... Sunday=6
+    booking_enabled = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    arrival_window_start = db.Column(db.String(5), nullable=False, default="17:30")
+    arrival_window_end = db.Column(db.String(5), nullable=False, default="19:45")
+    normal_daily_limit = db.Column(db.Integer)
+    priority_daily_limit = db.Column(db.Integer)
+    slot_duration_minutes = db.Column(db.Integer, nullable=False, default=20)
+    max_patients_per_slot = db.Column(db.Integer, nullable=False, default=1)
+    # True (FIXED_SLOT): the arrival window is divided into discrete bookable
+    # times. False (ARRIVAL_WINDOW): the window is one FCFS capacity pool with
+    # no individual promised time. Shared by public, admin and AI booking.
+    individual_time_slots = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    effective_from = db.Column(db.Date, index=True)
+    effective_to = db.Column(db.Date, index=True)
+    public_note = db.Column(db.String(240))
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ClinicScheduleException(db.Model):
+    """A date-specific closure, leave, holiday, or approved schedule override.
+
+    ``public_note`` must be a patient-safe explanation. Internal leave reasons
+    are intentionally not stored in this public-call configuration table.
+    """
+
+    __tablename__ = "clinic_schedule_exception"
+
+    id = db.Column(db.Integer, primary_key=True)
+    location_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinic_location.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    clinician_id = db.Column(
+        db.Integer,
+        db.ForeignKey("clinician.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    schedule_date = db.Column(db.Date, nullable=False, index=True)
+    exception_type = db.Column(db.String(20), nullable=False, index=True)
+    booking_enabled = db.Column(db.Boolean, index=True)
+    arrival_window_start = db.Column(db.String(5))
+    arrival_window_end = db.Column(db.String(5))
+    normal_daily_limit = db.Column(db.Integer)
+    priority_daily_limit = db.Column(db.Integer)
+    slot_duration_minutes = db.Column(db.Integer)
+    max_patients_per_slot = db.Column(db.Integer)
+    public_note = db.Column(db.String(240))
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -707,3 +881,503 @@ class LoginSecurityEvent(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
+# ================= AI CALL RECEPTIONIST =================
+class VoiceCall(db.Model):
+    """Minimum necessary state for one incoming AI-reception call.
+
+    The source phone number is deliberately not stored here. The telephony
+    boundary persists only a keyed fingerprint and last four digits, so a call
+    can be correlated for support without turning the call log into a patient
+    directory. Audio, transcript, OTP, and report contents do not belong in
+    this table.
+    """
+
+    __tablename__ = "voice_call"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "provider", "provider_call_id", name="uq_voice_call_provider_call_id"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    provider = db.Column(db.String(64), nullable=False, index=True)
+    provider_call_id = db.Column(db.String(128), nullable=False, index=True)
+    caller_fingerprint = db.Column(db.String(64), index=True)
+    caller_last4 = db.Column(db.String(4))
+    direction = db.Column(db.String(16), nullable=False, default="INBOUND", index=True)
+    status = db.Column(db.String(32), nullable=False, default="RECEIVED", index=True)
+    language = db.Column(db.String(12), index=True)
+    current_intent = db.Column(db.String(80), index=True)
+    current_stage = db.Column(db.String(80), index=True)
+    # This contains only allow-listed state such as a selected date or opaque
+    # internal identifier. It must never contain caller speech, a name, mobile
+    # number, OTP, report result, or recording URL.
+    context_json = db.Column(db.Text)
+    patient_id = db.Column(db.Integer, index=True)
+    public_booking_id = db.Column(db.Integer, index=True)
+    verified_at = db.Column(db.DateTime, index=True)
+    transfer_status = db.Column(db.String(32), index=True)
+    outcome = db.Column(db.String(48), index=True)
+    error_code = db.Column(db.String(80), index=True)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    ended_at = db.Column(db.DateTime, index=True)
+    duration_seconds = db.Column(db.Integer)
+    last_event_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class VoiceCallEvent(db.Model):
+    """Append-only, idempotent provider-event inbox for an incoming call."""
+
+    __tablename__ = "voice_call_event"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "provider", "provider_event_id", name="uq_voice_call_event_provider_event_id"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    voice_call_id = db.Column(
+        db.Integer,
+        db.ForeignKey("voice_call.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    provider = db.Column(db.String(64), nullable=False, index=True)
+    provider_event_id = db.Column(db.String(128), nullable=False, index=True)
+    event_type = db.Column(db.String(64), nullable=False, index=True)
+    occurred_at = db.Column(db.DateTime, nullable=False, index=True)
+    # Keyed fingerprint of normalized, non-sensitive event facts. This is not
+    # a plain hash of the raw provider body, which could contain caller data.
+    event_fingerprint = db.Column(db.String(64), nullable=False, index=True)
+    sequence_number = db.Column(db.Integer)
+    processing_status = db.Column(db.String(32), nullable=False, default="ACCEPTED", index=True)
+    error_code = db.Column(db.String(80), index=True)
+    received_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    processed_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+# ================= AI INTEGRATION API =================
+class AIAPIClient(db.Model):
+    """A machine identity allowed to call the versioned AI integration API.
+
+    Only a slow password hash of the client secret is stored. ``client_id`` is
+    public identification material; it is intentionally separate from the
+    numeric database primary key used by relationships and audit records.
+    """
+
+    __tablename__ = "ai_api_client"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    client_id = db.Column(db.String(80), nullable=False, unique=True, index=True)
+    secret_hash = db.Column(db.String(512), nullable=False)
+    allowed_scopes_json = db.Column(db.Text, nullable=False, default="[]")
+    allowed_ips_json = db.Column(db.Text, nullable=False, default="[]")
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    secret_version = db.Column(db.Integer, nullable=False, default=1)
+    last_used_at = db.Column(db.DateTime, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class AIAccessToken(db.Model):
+    """Short-lived opaque bearer token; the raw token is never persisted."""
+
+    __tablename__ = "ai_access_token"
+
+    id = db.Column(db.Integer, primary_key=True)
+    api_client_id = db.Column(
+        db.Integer,
+        db.ForeignKey("ai_api_client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    scopes_json = db.Column(db.Text, nullable=False, default="[]")
+    secret_version = db.Column(db.Integer, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    revoked_at = db.Column(db.DateTime, index=True)
+    last_used_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class AIAPIRequestAudit(db.Model):
+    """Privacy-minimized request metadata for support and security review."""
+
+    __tablename__ = "ai_api_request_audit"
+
+    id = db.Column(db.Integer, primary_key=True)
+    api_client_id = db.Column(
+        db.Integer,
+        db.ForeignKey("ai_api_client.id", ondelete="SET NULL"),
+        index=True,
+    )
+    request_id = db.Column(db.String(80), nullable=False, index=True)
+    call_id = db.Column(db.String(128), index=True)
+    session_id = db.Column(db.String(128), index=True)
+    method = db.Column(db.String(10), nullable=False)
+    endpoint = db.Column(db.String(255), nullable=False, index=True)
+    status_code = db.Column(db.Integer, nullable=False, index=True)
+    outcome = db.Column(db.String(20), nullable=False, index=True)
+    error_code = db.Column(db.String(80), index=True)
+    action = db.Column(db.String(80), index=True)
+    resource_type = db.Column(db.String(50), index=True)
+    resource_id = db.Column(db.String(80), index=True)
+    latency_ms = db.Column(db.Integer, nullable=False, default=0)
+    client_ip_fingerprint = db.Column(db.String(64), index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class AIIdempotencyRecord(db.Model):
+    """Reusable replay protection for consequential AI API operations."""
+
+    __tablename__ = "ai_idempotency_record"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "api_client_id",
+            "operation",
+            "idempotency_key_hash",
+            name="uq_ai_idempotency_client_operation_key",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    api_client_id = db.Column(
+        db.Integer,
+        db.ForeignKey("ai_api_client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    operation = db.Column(db.String(80), nullable=False, index=True)
+    idempotency_key_hash = db.Column(db.String(64), nullable=False, index=True)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    state = db.Column(db.String(20), nullable=False, default="IN_PROGRESS", index=True)
+    response_status = db.Column(db.Integer)
+    response_json = db.Column(db.Text)
+    resource_type = db.Column(db.String(50))
+    resource_id = db.Column(db.String(80), index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class ClinicProfile(db.Model):
+    """Structured, admin-approved public clinic information."""
+
+    __tablename__ = "clinic_profile"
+
+    id = db.Column(db.Integer, primary_key=True)
+    clinic_name = db.Column(db.String(160), nullable=False)
+    phone = db.Column(db.String(30))
+    email = db.Column(db.String(160))
+    reception_phone = db.Column(db.String(30))
+    website_url = db.Column(db.String(500))
+    emergency_wording = db.Column(db.String(500))
+    consultation_information = db.Column(db.Text)
+    general_policies = db.Column(db.Text)
+    payment_methods_json = db.Column(db.Text, nullable=False, default="[]")
+    available_services_json = db.Column(db.Text, nullable=False, default="[]")
+    # Compatibility column retained for installations that had the original
+    # draft AI schema before the finalized ``timezone_name`` field existed.
+    # Both values are written together; the public service reads
+    # ``timezone_name``. Removing the legacy NOT NULL column would require a
+    # destructive SQLite table rebuild, so keeping it mapped is safer.
+    legacy_timezone = db.Column(
+        "timezone", db.String(64), nullable=False, default="Asia/Kolkata"
+    )
+    timezone_name = db.Column(db.String(64), nullable=False, default="Asia/Kolkata")
+    late_grace_minutes = db.Column(db.Integer, nullable=False, default=15)
+    auto_reschedule_after_minutes = db.Column(db.Integer)
+    late_staff_notification_required = db.Column(db.Boolean, nullable=False, default=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class AppointmentSlotLock(db.Model):
+    """Deterministic row locked while one clinician slot is booked."""
+
+    __tablename__ = "appointment_slot_lock"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "clinician_id",
+            "location_id",
+            "appointment_date",
+            "slot_time",
+            name="uq_appointment_slot_lock_identity",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    clinician_id = db.Column(db.Integer, nullable=False, index=True)
+    location_id = db.Column(db.Integer, nullable=False, index=True)
+    appointment_date = db.Column(db.Date, nullable=False, index=True)
+    slot_time = db.Column(db.Time, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AppointmentSlotBlock(db.Model):
+    __tablename__ = "appointment_slot_block"
+
+    id = db.Column(db.Integer, primary_key=True)
+    clinician_id = db.Column(db.Integer, db.ForeignKey("clinician.id"), index=True)
+    location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), index=True)
+    block_date = db.Column(db.Date, nullable=False, index=True)
+    start_time = db.Column(db.Time, index=True)
+    end_time = db.Column(db.Time, index=True)
+    all_day = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    public_reason = db.Column(db.String(240))
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class AppointmentWaitlist(db.Model):
+    __tablename__ = "appointment_waitlist"
+
+    id = db.Column(db.Integer, primary_key=True)
+    waitlist_ref = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), nullable=False, index=True)
+    clinician_id = db.Column(db.Integer, db.ForeignKey("clinician.id"), nullable=False, index=True)
+    location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), nullable=False, index=True)
+    preferred_date = db.Column(db.Date, nullable=False, index=True)
+    preferred_start_time = db.Column(db.Time)
+    preferred_end_time = db.Column(db.Time)
+    status = db.Column(db.String(30), nullable=False, default="WAITING", index=True)
+    source = db.Column(db.String(30), nullable=False, default="AI_CALL", index=True)
+    external_call_id = db.Column(db.String(128), index=True)
+    external_session_id = db.Column(db.String(128), index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class PatientVerificationSession(db.Model):
+    """Server-owned authorization after successful OTP verification."""
+
+    __tablename__ = "patient_verification_session"
+
+    id = db.Column(db.Integer, primary_key=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    api_client_id = db.Column(db.Integer, db.ForeignKey("ai_api_client.id"), nullable=False, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), nullable=False, index=True)
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    purpose = db.Column(db.String(40), nullable=False, default="AI_PATIENT_ACCESS", index=True)
+    otp_challenge_id = db.Column(db.Integer, db.ForeignKey("portal_otp_challenge.id"), index=True)
+    external_call_id = db.Column(db.String(128), index=True)
+    external_session_id = db.Column(db.String(128), index=True)
+    # Kept for compatibility with earlier clinic databases where a verified
+    # session requires this timestamp. New sessions always set it explicitly
+    # in the OTP verification service below.
+    verified_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    last_used_at = db.Column(db.DateTime, index=True)
+    revoked_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class PatientVerificationIntent(db.Model):
+    """Opaque, short-lived bridge between identification and OTP delivery."""
+
+    __tablename__ = "patient_verification_intent"
+
+    id = db.Column(db.Integer, primary_key=True)
+    reference_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    api_client_id = db.Column(db.Integer, db.ForeignKey("ai_api_client.id"), nullable=False, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), index=True)
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    claimed_name = db.Column(db.String(120))
+    external_call_id = db.Column(db.String(128), index=True)
+    external_session_id = db.Column(db.String(128), index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    used_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class SecureDocumentToken(db.Model):
+    __tablename__ = "secure_document_token"
+
+    id = db.Column(db.Integer, primary_key=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    report_id = db.Column(db.Integer, db.ForeignKey("lab_report.id"), nullable=False, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), nullable=False, index=True)
+    verification_session_id = db.Column(
+        db.Integer, db.ForeignKey("patient_verification_session.id"), nullable=False, index=True
+    )
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    max_downloads = db.Column(db.Integer, nullable=False, default=1)
+    download_count = db.Column(db.Integer, nullable=False, default=0)
+    last_downloaded_at = db.Column(db.DateTime, index=True)
+    revoked_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class ClinicKnowledgeEntry(db.Model):
+    __tablename__ = "clinic_knowledge_entry"
+
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(80), nullable=False, index=True)
+    question = db.Column(db.String(240), nullable=False, index=True)
+    answer = db.Column(db.Text, nullable=False)
+    language = db.Column(db.String(12), nullable=False, default="en", index=True)
+    keywords_json = db.Column(db.Text, nullable=False, default="[]")
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ReceptionSchedule(db.Model):
+    __tablename__ = "reception_schedule"
+
+    id = db.Column(db.Integer, primary_key=True)
+    location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), nullable=False, index=True)
+    weekday = db.Column(db.Integer, nullable=False, index=True)
+    is_open = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    open_time = db.Column(db.Time)
+    close_time = db.Column(db.Time)
+    public_note = db.Column(db.String(240))
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ReceptionScheduleOverride(db.Model):
+    __tablename__ = "reception_schedule_override"
+
+    id = db.Column(db.Integer, primary_key=True)
+    location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), nullable=False, index=True)
+    schedule_date = db.Column(db.Date, nullable=False, index=True)
+    is_open = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    open_time = db.Column(db.Time)
+    close_time = db.Column(db.Time)
+    public_note = db.Column(db.String(240))
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class CallbackRequest(db.Model):
+    __tablename__ = "callback_request"
+
+    id = db.Column(db.Integer, primary_key=True)
+    callback_ref = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), index=True)
+    caller_name = db.Column(db.String(120))
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    reason = db.Column(db.String(500), nullable=False)
+    category = db.Column(db.String(80), index=True)
+    priority = db.Column(db.String(20), nullable=False, default="NORMAL", index=True)
+    ai_summary = db.Column(db.String(1000))
+    preferred_at = db.Column(db.DateTime, index=True)
+    status = db.Column(db.String(30), nullable=False, default="PENDING", index=True)
+    source = db.Column(db.String(30), nullable=False, default="AI_CALL", index=True)
+    external_call_id = db.Column(db.String(128), index=True)
+    external_session_id = db.Column(db.String(128), index=True)
+    assigned_to = db.Column(db.String(50), index=True)
+    resolution_note = db.Column(db.String(500))
+    contacted_at = db.Column(db.DateTime, index=True)
+    completed_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class Complaint(db.Model):
+    __tablename__ = "complaint"
+
+    id = db.Column(db.Integer, primary_key=True)
+    complaint_ref = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), index=True)
+    caller_name = db.Column(db.String(120))
+    mobile = db.Column(db.String(20), nullable=False, index=True)
+    category = db.Column(db.String(80), nullable=False, index=True)
+    summary = db.Column(db.String(240), nullable=False)
+    details = db.Column(db.Text)
+    priority = db.Column(db.String(20), nullable=False, default="NORMAL", index=True)
+    status = db.Column(db.String(30), nullable=False, default="OPEN", index=True)
+    source = db.Column(db.String(30), nullable=False, default="AI_CALL", index=True)
+    external_call_id = db.Column(db.String(128), index=True)
+    external_session_id = db.Column(db.String(128), index=True)
+    assigned_to = db.Column(db.String(50), index=True)
+    resolution_note = db.Column(db.String(1000))
+    resolved_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class NotificationTemplate(db.Model):
+    __tablename__ = "notification_template"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "event_code", "channel", "language", name="uq_notification_template_identity"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    event_code = db.Column(db.String(80), nullable=False, index=True)
+    channel = db.Column(db.String(20), nullable=False, index=True)
+    language = db.Column(db.String(12), nullable=False, default="en", index=True)
+    body_template = db.Column(db.Text, nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(50))
+    updated_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(
+        db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class NotificationDelivery(db.Model):
+    __tablename__ = "notification_delivery"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "api_client_id",
+            "idempotency_key_hash",
+            name="uq_notification_delivery_client_idempotency",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    api_client_id = db.Column(db.Integer, db.ForeignKey("ai_api_client.id"), nullable=False, index=True)
+    template_id = db.Column(db.Integer, db.ForeignKey("notification_template.id"), nullable=False, index=True)
+    channel = db.Column(db.String(20), nullable=False, index=True)
+    recipient_masked = db.Column(db.String(30), nullable=False)
+    recipient_fingerprint = db.Column(db.String(64), nullable=False, index=True)
+    idempotency_key_hash = db.Column(db.String(64), nullable=False, index=True)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="PENDING", index=True)
+    provider = db.Column(db.String(40))
+    provider_reference = db.Column(db.String(120), index=True)
+    error_code = db.Column(db.String(80), index=True)
+    sent_at = db.Column(db.DateTime, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)

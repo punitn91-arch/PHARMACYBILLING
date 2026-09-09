@@ -6,4 +6,6 @@ instance/
 *.db
 .env
 .env.*
+!.env.example
+!billingwebapp/.env.example
 static/uploads/

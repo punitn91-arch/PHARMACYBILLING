@@ -1035,6 +1035,9 @@
 <a href="/system-center" class="{% if request.path.startswith('/system-center') %}active{% endif %}">System Center</a>
 <a href="/users" class="{% if request.path.startswith('/users') %}active{% endif %}">Users</a>
 {% endif %}
+{% if session.get("role") == "admin" %}
+<a href="/admin/ai-integration" class="{% if request.path.startswith('/admin/ai-integration') %}active{% endif %}">AI Integration</a>
+{% endif %}
 {% if session.get("role") == "admin" or session.get("can_view_audit_logs") or session.get("can_manage_users") %}
 <a href="/audit-logs" class="{% if request.path.startswith('/audit-logs') %}active{% endif %}">Audit Logs</a>
 {% endif %}

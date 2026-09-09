@@ -70,6 +70,28 @@
             <div class="lab-rate-callout"><span aria-hidden="true">ⓘ</span><span><strong>Rate control:</strong> changing this rate affects future orders only. Existing orders retain their original saved rate.</span></div>
         </section>
 
+        <section class="lab-form-section">
+            <h2 class="lab-form-section-title">Search and fasting (AI/call lookup)</h2>
+            <p class="lab-form-section-note">Used when a caller or the AI assistant searches for this test by a common short name.</p>
+            <div class="lab-form-grid">
+                <div class="lab-form-field wide">
+                    <label for="labAliases">Search aliases (comma separated)</label>
+                    <input id="labAliases" name="aliases" type="text" maxlength="500" value="{{ test_aliases_display if test else '' }}" placeholder="e.g. CBC, complete blood count">
+                    <span class="hint">Common abbreviations like CBC, TFT, HbA1c are already recognized; add clinic-specific names here.</span>
+                </div>
+                <div class="lab-form-field">
+                    <label for="labTurnaround">Turnaround time</label>
+                    <input id="labTurnaround" name="turnaround_text" type="text" maxlength="120" value="{{ test.turnaround_text if test else '' }}" placeholder="e.g. Same day by 6 PM">
+                </div>
+                <div class="lab-form-field">
+                    <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-weight:600;">
+                        <input type="checkbox" name="fasting_required" style="width:auto;min-height:0;" {% if test and test.fasting_required %}checked{% endif %}>
+                        Fasting required
+                    </label>
+                </div>
+            </div>
+        </section>
+
         <div class="lab-form-actions">
             <a class="lab-form-button cancel" href="/lab-tests">Cancel</a>
             <button class="lab-form-button save" type="submit">{{ submit_label or 'Save Lab Test' }}</button>

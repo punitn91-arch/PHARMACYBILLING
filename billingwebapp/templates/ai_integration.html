@@ -1,0 +1,814 @@
+{% extends "base.html" %}
+
+{% block title %}AI Integration{% endblock %}
+
+{% block body %}
+<style>
+    #aiIntegrationPage .ai-schedule-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+    }
+    #aiIntegrationPage .ai-schedule-row {
+        border: 1px solid #dbe4f0;
+        border-radius: 10px;
+        padding: 12px;
+        background: #fff;
+    }
+    #aiIntegrationPage .ai-schedule-summary {
+        display: grid;
+        grid-template-columns: minmax(150px, 1.2fr) minmax(110px, .8fr) minmax(135px, .9fr) minmax(100px, .7fr) auto;
+        gap: 12px;
+        align-items: center;
+    }
+    #aiIntegrationPage .ai-schedule-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    #aiIntegrationPage .ai-schedule-edit {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #e5ebf3;
+    }
+    #aiIntegrationPage .ai-location-address {
+        color: #607089;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+    }
+    #aiIntegrationPage .ai-location-policy {
+        font-weight: 700;
+        color: #176b43;
+    }
+    #aiIntegrationPage .ai-location-policy.information-only {
+        color: #8a5a00;
+    }
+    #aiIntegrationPage .ai-inline-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+    }
+    #aiIntegrationPage button[disabled] {
+        cursor: wait;
+        opacity: .65;
+    }
+    #aiIntegrationPage .ai-saving {
+        opacity: .72;
+    }
+    #aiToastStack {
+        position: fixed;
+        top: 78px;
+        right: 22px;
+        z-index: 6000;
+        width: min(380px, calc(100vw - 32px));
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        pointer-events: none;
+    }
+    #aiToastStack .app-toast {
+        box-shadow: 0 12px 34px rgba(15, 23, 42, .24);
+    }
+    @media (max-width: 900px) {
+        #aiIntegrationPage .ai-schedule-summary,
+        #aiIntegrationPage .ai-inline-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+        #aiIntegrationPage .ai-schedule-actions {
+            justify-content: flex-start;
+        }
+    }
+</style>
+
+<div id="aiToastStack" aria-live="polite" aria-atomic="true"></div>
+<div id="aiIntegrationPage">
+<div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:18px;">
+    <div>
+        <h1 style="margin:0 0 6px;">AI Integration</h1>
+        <p style="margin:0;color:#607089;">Secure machine identities for the external Clinic Call Assistant.</p>
+    </div>
+    <span class="badge {{ 'badge-active' if api_enabled else 'badge-inactive' }}">
+        API {{ 'Enabled' if api_enabled else 'Disabled' }}
+    </span>
+</div>
+
+<div id="aiSecretRegion">
+{% if new_secret %}
+<section class="card" style="border:2px solid #198754;margin-bottom:18px;">
+    <h2 style="margin-top:0;">Copy this secret now</h2>
+    <p>This plaintext secret is shown once and is not stored by the application.</p>
+    <label>Client ID</label>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="newAiClientId" readonly value="{{ secret_client_id }}" autocomplete="off">
+        <button type="button" class="btn btn-secondary" onclick="copyAIValue('newAiClientId')">Copy</button>
+    </div>
+    <label>Client secret</label>
+    <div style="display:flex;gap:8px;">
+        <input id="newAiClientSecret" readonly value="{{ new_secret }}" autocomplete="new-password">
+        <button type="button" class="btn btn-secondary" onclick="copyAIValue('newAiClientSecret')">Copy</button>
+    </div>
+</section>
+{% endif %}
+</div>
+
+<div id="aiSummaryCards" class="grid" data-ai-component style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:18px;">
+    <div class="card"><strong>API status</strong><div style="font-size:22px;margin-top:8px;">{{ 'Enabled' if api_enabled else 'Disabled' }}</div></div>
+    <div class="card"><strong>Active clients</strong><div style="font-size:22px;margin-top:8px;">{{ active_client_count }}</div></div>
+    <div class="card"><strong>Recent failed requests</strong><div style="font-size:22px;margin-top:8px;">{{ failed_request_count }}</div></div>
+</div>
+
+<details id="aiClinicCard" class="card" data-ai-component style="margin-bottom:18px;" open>
+    <summary style="cursor:pointer;font-weight:800;font-size:16px;">Clinic information and locations</summary>
+    <form method="post" action="{{ url_for('ai_admin.save_clinic_profile') }}" style="margin-top:14px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;">
+            <div><label>Clinic name</label><input name="clinic_name" required value="{{ clinic_profile.clinic_name if clinic_profile else '' }}"></div>
+            <div><label>Phone</label><input name="phone" value="{{ clinic_profile.phone if clinic_profile else '' }}"></div>
+            <div><label>Reception phone</label><input name="reception_phone" value="{{ clinic_profile.reception_phone if clinic_profile else '' }}"></div>
+            <div><label>Email</label><input name="email" type="email" value="{{ clinic_profile.email if clinic_profile else '' }}"></div>
+            <div><label>Website</label><input name="website_url" value="{{ clinic_profile.website_url if clinic_profile else '' }}"></div>
+            <div><label>Timezone</label><input name="timezone_name" value="{{ clinic_profile.timezone_name if clinic_profile else 'Asia/Kolkata' }}"></div>
+            <div><label>Payment methods (comma separated)</label><input name="payment_methods" placeholder="Cash, UPI, Card"></div>
+            <div><label>Available services</label><input name="available_services" placeholder="Consultation, Lab, Pharmacy"></div>
+            <div><label>Emergency wording</label><input name="emergency_wording" value="{{ clinic_profile.emergency_wording if clinic_profile else '' }}"></div>
+            <div><label>Late grace (minutes)</label><input name="late_grace_minutes" type="number" min="0" max="240" value="{{ clinic_profile.late_grace_minutes if clinic_profile else 15 }}"></div>
+            <div><label>Auto-reschedule after (optional minutes)</label><input name="auto_reschedule_after_minutes" type="number" min="1" max="1440" value="{{ clinic_profile.auto_reschedule_after_minutes if clinic_profile and clinic_profile.auto_reschedule_after_minutes else '' }}"></div>
+            <div><label><input type="checkbox" name="late_staff_notification_required" {% if not clinic_profile or clinic_profile.late_staff_notification_required %}checked{% endif %}> Notify staff for late arrival</label></div>
+        </div>
+        <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+            <div><label>Consultation information</label><textarea name="consultation_information">{{ clinic_profile.consultation_information if clinic_profile else '' }}</textarea></div>
+            <div><label>General policies</label><textarea name="general_policies">{{ clinic_profile.general_policies if clinic_profile else '' }}</textarea></div>
+        </div>
+        <button class="btn add-btn" type="submit" style="margin-top:10px;">Save clinic information</button>
+    </form>
+    <hr style="border:0;border-top:1px solid #dbe4f0;margin:18px 0;">
+    <form method="post" action="{{ url_for('ai_admin.create_location') }}" data-ai-refresh-target="#aiLocationsList,#aiSchedulingCard" data-ai-reset-on-success>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <h3>Create location</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+            <div><label>Code</label><input name="code" required placeholder="MAIN"></div>
+            <div><label>Name</label><input name="display_name" required></div>
+            <div><label>Type</label><select name="location_type"><option>CLINIC</option><option>HOSPITAL</option><option>BRANCH</option></select></div>
+            <div><label>Phone</label><input name="public_phone"></div>
+            <div style="grid-column:span 2;"><label>Address</label><input name="public_address"></div>
+            <div><label>Landmark</label><input name="landmark"></div>
+            <div><label>City</label><input name="city"></div>
+            <div><label>State</label><input name="state"></div>
+            <div><label>PIN code</label><input name="postal_code"></div>
+            <div style="grid-column:span 2;"><label>Google Maps URL</label><input name="maps_url"></div>
+            <div style="grid-column:span 3;"><label>Parking information</label><input name="parking_information"></div>
+            <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="is_default"> Default location</label>
+        </div>
+        <button class="btn add-btn" type="submit" style="margin-top:10px;">Create location</button>
+    </form>
+    <h3 style="margin:18px 0 8px;">Configured locations</h3>
+    <div id="aiLocationsList" class="ai-schedule-list" data-ai-component>
+        {% for row in locations %}
+        <article id="aiLocation{{ row.id }}" class="ai-schedule-row" data-ai-component>
+            <div class="ai-schedule-summary">
+                <div>
+                    <strong>{{ row.display_name }}</strong><br>
+                    <small>{{ row.code }} · {{ row.location_type or 'CLINIC' }}</small>
+                </div>
+                <div class="ai-location-address">
+                    {{ row.public_address or 'Address not added' }}
+                    {% if row.city %}<br><small>{{ row.city }}{% if row.state %}, {{ row.state }}{% endif %}{% if row.postal_code %} {{ row.postal_code }}{% endif %}</small>{% endif %}
+                </div>
+                <div>
+                    <strong>{{ row.public_phone or 'No phone' }}</strong><br>
+                    <small>{{ row.landmark or 'No landmark' }}</small>
+                </div>
+                <div>
+                    <span class="badge {{ 'badge-active' if row.is_active else 'badge-inactive' }}">{{ 'Active' if row.is_active else 'Disabled' }}</span>
+                    {% if row.is_default %}<span class="badge badge-active">Default</span>{% endif %}<br>
+                    {% if (row.location_type or 'CLINIC')|upper == 'HOSPITAL' %}
+                    <small class="ai-location-policy information-only">Timing/info only · no booking</small>
+                    {% else %}
+                    <small class="ai-location-policy">Appointments allowed</small>
+                    {% endif %}
+                </div>
+                <div class="ai-schedule-actions">
+                    <button class="btn btn-secondary" type="button" data-ai-edit-toggle="aiLocationEdit{{ row.id }}">Edit</button>
+                    <form method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='location', row_id=row.id) }}" data-ai-refresh-target="#aiLocationsList,#aiSchedulingCard">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="btn {{ 'btn-danger' if row.is_active else 'add-btn' }}" type="submit">{{ 'Disable' if row.is_active else 'Enable' }}</button>
+                    </form>
+                </div>
+            </div>
+            <form id="aiLocationEdit{{ row.id }}" class="ai-schedule-edit" method="post" action="{{ url_for('ai_admin.edit_location', row_id=row.id) }}" data-ai-refresh-target="#aiLocationsList,#aiSchedulingCard" hidden>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="ai-inline-grid">
+                    <div><label>Code</label><input name="code" required maxlength="40" value="{{ row.code }}"></div>
+                    <div><label>Name</label><input name="display_name" required maxlength="120" value="{{ row.display_name }}"></div>
+                    <div><label>Type</label><select name="location_type"><option {% if row.location_type == 'CLINIC' %}selected{% endif %}>CLINIC</option><option {% if row.location_type == 'HOSPITAL' %}selected{% endif %}>HOSPITAL</option><option {% if row.location_type == 'BRANCH' %}selected{% endif %}>BRANCH</option></select></div>
+                    <div><label>Phone</label><input name="public_phone" value="{{ row.public_phone or '' }}"></div>
+                    <div><label>Landmark</label><input name="landmark" value="{{ row.landmark or '' }}"></div>
+                    <div style="grid-column:span 2;"><label>Address</label><input name="public_address" value="{{ row.public_address or '' }}"></div>
+                    <div><label>City</label><input name="city" value="{{ row.city or '' }}"></div>
+                    <div><label>State</label><input name="state" value="{{ row.state or '' }}"></div>
+                    <div><label>PIN code</label><input name="postal_code" value="{{ row.postal_code or '' }}"></div>
+                    <div style="grid-column:span 2;"><label>Google Maps URL</label><input name="maps_url" value="{{ row.maps_url or '' }}"></div>
+                    <div style="grid-column:span 2;"><label>Parking information</label><input name="parking_information" value="{{ row.parking_information or '' }}"></div>
+                    <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="is_default" {% if row.is_default %}checked{% endif %}> Default booking location</label>
+                </div>
+                <div class="ai-schedule-actions" style="margin-top:10px;justify-content:flex-start;">
+                    <button class="btn add-btn" type="submit">Save changes</button>
+                    <button class="btn btn-secondary" type="button" data-ai-edit-cancel="aiLocationEdit{{ row.id }}">Cancel</button>
+                </div>
+            </form>
+        </article>
+        {% else %}
+        <p>No locations configured.</p>
+        {% endfor %}
+    </div>
+</details>
+
+<details id="aiSchedulingCard" class="card" data-ai-component style="margin-bottom:18px;">
+    <summary style="cursor:pointer;font-weight:800;font-size:16px;">Doctors, schedules, holidays and blocked slots</summary>
+    <form method="post" action="{{ url_for('ai_admin.create_clinician') }}" style="margin-top:14px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <h3>Create doctor</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+            <div><label>Code</label><input name="code" required></div><div><label>Name</label><input name="display_name" required></div>
+            <div><label>Public title</label><input name="public_title" placeholder="Dr."></div><div><label>Specialty</label><input name="specialty"></div>
+            <div><label>Qualification</label><input name="qualification"></div><div><label>Consultation fee</label><input name="consultation_fee" type="number" step="0.01"></div>
+            <div><label>Follow-up fee</label><input name="follow_up_fee" type="number" step="0.01"></div><div><label>Follow-up days</label><input name="follow_up_days" type="number" min="0"></div>
+            <div><label>Primary location</label><select name="default_location_id"><option value="">Select</option>{% for row in locations if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select></div>
+            <div><label>Languages (comma separated)</label><input name="languages" placeholder="Hindi, English"></div>
+            <div><label>Sub-specialties</label><input name="sub_specialties" placeholder="Thyroid, Diabetes"></div>
+            <div><label>Conditions treated</label><input name="conditions_treated" placeholder="Diabetes, PCOS"></div>
+            <div><label>Services offered</label><input name="services_offered" placeholder="Consultation, Follow-up"></div>
+            <div style="grid-column:span 3;"><label>Public bio</label><input name="public_bio"></div>
+        </div><button class="btn add-btn" type="submit" style="margin-top:10px;">Create doctor</button>
+    </form>
+    <h3 style="margin-bottom:8px;">Doctors</h3>
+    <div id="aiCliniciansList" class="ai-schedule-list">
+        {% for doctor in clinicians[:20] %}
+        <article id="aiClinician{{ doctor.id }}" class="ai-schedule-row" data-ai-component>
+            <div class="ai-schedule-summary">
+                <div><strong>{{ doctor.display_name }}</strong><br><small>{{ doctor.code }} · {{ doctor.specialty or 'No specialty set' }}</small></div>
+                <div><strong>{{ doctor.public_title or '-' }}</strong><br><small>{{ doctor.qualification or 'No qualification set' }}</small></div>
+                <div><strong>{{ '₹%.0f'|format(doctor.consultation_fee) if doctor.consultation_fee else '-' }}</strong><br><small>Consultation fee</small></div>
+                <div>
+                    <span class="badge {{ 'badge-active' if doctor.is_active else 'badge-inactive' }}">{{ 'Active' if doctor.is_active else 'Disabled' }}</span>
+                </div>
+                <div class="ai-schedule-actions">
+                    <button class="btn btn-secondary" type="button" data-ai-edit-toggle="aiClinicianEdit{{ doctor.id }}">Edit</button>
+                    <form method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='clinician', row_id=doctor.id) }}" data-ai-refresh-target="#aiClinician{{ doctor.id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="btn {{ 'btn-danger' if doctor.is_active else 'add-btn' }}" type="submit">{{ 'Disable' if doctor.is_active else 'Enable' }}</button>
+                    </form>
+                </div>
+            </div>
+            <form id="aiClinicianEdit{{ doctor.id }}" class="ai-schedule-edit" method="post" action="{{ url_for('ai_admin.edit_clinician', row_id=doctor.id) }}" data-ai-refresh-target="#aiClinician{{ doctor.id }}" hidden>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="ai-inline-grid">
+                    <div><label>Code</label><input name="code" required value="{{ doctor.code }}"></div>
+                    <div><label>Name</label><input name="display_name" required value="{{ doctor.display_name }}"></div>
+                    <div><label>Public title</label><input name="public_title" value="{{ doctor.public_title or '' }}"></div>
+                    <div><label>Specialty</label><input name="specialty" value="{{ doctor.specialty or '' }}"></div>
+                    <div><label>Qualification</label><input name="qualification" value="{{ doctor.qualification or '' }}"></div>
+                    <div><label>Consultation fee</label><input name="consultation_fee" type="number" step="0.01" value="{{ doctor.consultation_fee or '' }}"></div>
+                    <div><label>Follow-up fee</label><input name="follow_up_fee" type="number" step="0.01" value="{{ doctor.follow_up_fee or '' }}"></div>
+                    <div><label>Follow-up days</label><input name="follow_up_days" type="number" min="0" value="{{ doctor.follow_up_days if doctor.follow_up_days is not none else '' }}"></div>
+                    <div><label>Primary location</label><select name="default_location_id"><option value="">Select</option>{% for row in locations if row.is_active %}<option value="{{ row.id }}" {% if row.id == doctor.default_location_id %}selected{% endif %}>{{ row.display_name }}</option>{% endfor %}</select></div>
+                    <div><label>Languages</label><input name="languages" value="{{ clinician_detail_display[doctor.id].languages }}"></div>
+                    <div><label>Sub-specialties</label><input name="sub_specialties" value="{{ clinician_detail_display[doctor.id].sub_specialties }}"></div>
+                    <div><label>Conditions treated</label><input name="conditions_treated" value="{{ clinician_detail_display[doctor.id].conditions_treated }}"></div>
+                    <div><label>Services offered</label><input name="services_offered" value="{{ clinician_detail_display[doctor.id].services_offered }}"></div>
+                    <div style="grid-column:span 3;"><label>Public bio</label><input name="public_bio" value="{{ doctor.public_bio or '' }}"></div>
+                </div>
+                <div class="ai-schedule-actions" style="margin-top:10px;justify-content:flex-start;">
+                    <button class="btn add-btn" type="submit">Save changes</button>
+                    <button class="btn btn-secondary" type="button" data-ai-edit-cancel="aiClinicianEdit{{ doctor.id }}">Cancel</button>
+                </div>
+            </form>
+        </article>
+        {% endfor %}
+    </div>
+    <hr style="border:0;border-top:1px solid #dbe4f0;margin:18px 0;">
+    <form method="post" action="{{ url_for('ai_admin.create_schedule_rule') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="slot_duration_minutes" value="20">
+        <input type="hidden" name="max_patients_per_slot" value="1">
+        <h3>Create doctor availability</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;">
+            <div><label>Location</label><select name="location_id" required>{% for row in locations if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select></div>
+            <div><label>Doctor (blank = clinic)</label><select name="clinician_id"><option value="">Clinic-wide</option>{% for row in clinicians if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select></div>
+            <div><label>Weekday</label><select name="weekday">{% for label in ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}<option value="{{ loop.index0 }}">{{ label }}</option>{% endfor %}</select></div>
+            <div><label>Available from</label><input name="arrival_window_start" type="time" required></div><div><label>Available until</label><input name="arrival_window_end" type="time" required></div>
+            <div><label>Normal daily limit</label><input name="normal_daily_limit" type="number" min="0" value="15"></div><div><label>Priority limit</label><input name="priority_daily_limit" type="number" min="0" value="0"></div>
+            <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="booking_enabled" checked> Publish availability</label>
+            <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="individual_time_slots" checked> Individual time slots (off = one arrival-window FCFS pool)</label>
+            <div><label>Effective from</label><input name="effective_from" type="date"></div><div><label>Effective to</label><input name="effective_to" type="date"></div><div style="grid-column:span 3;"><label>Public note</label><input name="public_note"></div>
+        </div><button class="btn add-btn" type="submit" style="margin-top:10px;">Save availability</button>
+    </form>
+    <hr style="border:0;border-top:1px solid #dbe4f0;margin:18px 0;">
+    <form method="post" action="{{ url_for('ai_admin.create_schedule_exception') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h3>Create holiday/leave/override</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;">
+            <div><label>Location</label><select name="location_id">{% for row in locations if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select></div>
+            <div><label>Doctor</label><select name="clinician_id"><option value="">Clinic-wide</option>{% for row in clinicians if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select></div>
+            <div><label>Date</label><input name="schedule_date" type="date" required></div><div><label>Type</label><select name="exception_type"><option>CLOSED</option><option>HOLIDAY</option><option>LEAVE</option><option>OVERRIDE</option></select></div>
+            <div><label>Public note</label><input name="public_note"></div><div><label>Override start</label><input name="arrival_window_start" type="time"></div><div><label>Override end</label><input name="arrival_window_end" type="time"></div>
+            <div><label>Normal limit</label><input name="normal_daily_limit" type="number" min="0"></div>
+        </div><button class="btn add-btn" type="submit" style="margin-top:10px;">Create exception</button>
+    </form>
+    <form method="post" action="{{ url_for('ai_admin.create_slot_block') }}" style="margin-top:18px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h3>Block appointment slots</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;">
+            <select name="location_id">{% for row in locations if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select>
+            <select name="clinician_id">{% for row in clinicians if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select>
+            <input name="block_date" type="date" required><input name="start_time" type="time"><input name="end_time" type="time"><input name="public_reason" placeholder="Public reason">
+            <label><input type="checkbox" name="all_day"> All day</label>
+        </div><button class="btn btn-secondary" type="submit">Create block</button>
+    </form>
+    <p style="color:#607089;">Weekly rules: {{ schedule_rules|length }} · Exceptions: {{ schedule_exceptions|length }} · Slot blocks: {{ slot_blocks|length }}</p>
+    <h3 style="margin-bottom:8px;">Doctor availability</h3>
+    <div id="aiScheduleRules" class="ai-schedule-list">
+        {% for row in schedule_rules[:20] %}
+        <article id="aiScheduleRule{{ row.id }}" class="ai-schedule-row" data-ai-component>
+            <div class="ai-schedule-summary">
+                <div>
+                    <strong>{{ clinicians_by_id[row.clinician_id].display_name if row.clinician_id in clinicians_by_id else 'Clinic-wide' }}</strong><br>
+                    <small>{{ locations_by_id[row.location_id].display_name if row.location_id in locations_by_id else 'Location #' ~ row.location_id }}</small>
+                </div>
+                <div><strong>{{ weekday_names[row.weekday] }}</strong><br><small>Rule #{{ row.id }}</small></div>
+                <div><strong>{{ format_clock_12h(row.arrival_window_start) }}–{{ format_clock_12h(row.arrival_window_end) }}</strong><br><small>Appointment window</small></div>
+                <div>
+                    <span class="badge {{ 'badge-active' if row.is_active else 'badge-inactive' }}">{{ 'Active' if row.is_active else 'Disabled' }}</span><br>
+                    {% set schedule_location = locations_by_id.get(row.location_id) %}
+                    {% if schedule_location and (schedule_location.location_type or 'CLINIC')|upper == 'HOSPITAL' %}
+                    <small>Timing/info only · no booking</small>
+                    {% else %}
+                    <small>{{ 'Booking on' if row.booking_enabled else 'Booking off' }} · {{ 'Fixed slots' if row.individual_time_slots else 'Arrival window' }}</small>
+                    {% endif %}
+                </div>
+                <div class="ai-schedule-actions">
+                    <button class="btn btn-secondary" type="button" data-ai-edit-toggle="aiScheduleEdit{{ row.id }}">Edit</button>
+                    <form method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='schedule-rule', row_id=row.id) }}" data-ai-refresh-target="#aiScheduleRule{{ row.id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="btn {{ 'btn-danger' if row.is_active else 'add-btn' }}" type="submit">{{ 'Disable' if row.is_active else 'Enable' }}</button>
+                    </form>
+                    {% if not row.is_active %}
+                    <form method="post" action="{{ url_for('ai_admin.delete_schedule_rule', row_id=row.id) }}" data-ai-refresh-target="#aiScheduleRule{{ row.id }}" onsubmit="return confirm('Delete this disabled schedule rule permanently? Existing booked appointments will not be changed.');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="btn btn-danger" type="submit">Delete</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            <form id="aiScheduleEdit{{ row.id }}" class="ai-schedule-edit" method="post" action="{{ url_for('ai_admin.edit_schedule_rule', row_id=row.id) }}" data-ai-refresh-target="#aiScheduleRule{{ row.id }}" hidden>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="slot_duration_minutes" value="{{ row.slot_duration_minutes or 20 }}">
+                <input type="hidden" name="max_patients_per_slot" value="{{ row.max_patients_per_slot or 1 }}">
+                <div class="ai-inline-grid">
+                    <div><label>Location</label><select name="location_id" required>{% for location in locations if location.is_active %}<option value="{{ location.id }}" {% if location.id == row.location_id %}selected{% endif %}>{{ location.display_name }}</option>{% endfor %}</select></div>
+                    <div><label>Doctor</label><select name="clinician_id"><option value="" {% if not row.clinician_id %}selected{% endif %}>Clinic-wide</option>{% for doctor in clinicians if doctor.is_active %}<option value="{{ doctor.id }}" {% if doctor.id == row.clinician_id %}selected{% endif %}>{{ doctor.display_name }}</option>{% endfor %}</select></div>
+                    <div><label>Weekday</label><select name="weekday">{% for label in weekday_names %}<option value="{{ loop.index0 }}" {% if loop.index0 == row.weekday %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+                    <div><label>Available from</label><input name="arrival_window_start" type="time" required value="{{ row.arrival_window_start }}"></div>
+                    <div><label>Available until</label><input name="arrival_window_end" type="time" required value="{{ row.arrival_window_end }}"></div>
+                    <div><label>Normal daily limit</label><input name="normal_daily_limit" type="number" min="0" max="1000" value="{{ row.normal_daily_limit if row.normal_daily_limit is not none else 0 }}"></div>
+                    <div><label>Priority limit</label><input name="priority_daily_limit" type="number" min="0" max="1000" value="{{ row.priority_daily_limit if row.priority_daily_limit is not none else 0 }}"></div>
+                    <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="booking_enabled" {% if row.booking_enabled %}checked{% endif %}> Publish availability</label>
+                    <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" name="individual_time_slots" {% if row.individual_time_slots %}checked{% endif %}> Individual time slots</label>
+                    <div><label>Effective from</label><input name="effective_from" type="date" value="{{ row.effective_from.isoformat() if row.effective_from else '' }}"></div>
+                    <div><label>Effective to</label><input name="effective_to" type="date" value="{{ row.effective_to.isoformat() if row.effective_to else '' }}"></div>
+                    <div style="grid-column:span 3;"><label>Public note</label><input name="public_note" maxlength="240" value="{{ row.public_note or '' }}"></div>
+                </div>
+                <div class="ai-schedule-actions" style="margin-top:10px;justify-content:flex-start;">
+                    <button class="btn add-btn" type="submit">Save changes</button>
+                    <button class="btn btn-secondary" type="button" data-ai-edit-cancel="aiScheduleEdit{{ row.id }}">Cancel</button>
+                </div>
+            </form>
+        </article>
+        {% else %}
+        <p>No weekly schedules configured.</p>
+        {% endfor %}
+    </div>
+    {% if schedule_exceptions or slot_blocks %}
+    <h3 style="margin:16px 0 8px;">Exceptions and slot blocks</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        {% for row in schedule_exceptions[:20] %}<form id="aiScheduleException{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='schedule-exception', row_id=row.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-secondary" type="submit">Exception {{ row.schedule_date }}: {{ 'Disable' if row.is_active else 'Enable' }}</button></form>{% endfor %}
+        {% for row in slot_blocks[:20] %}<form id="aiSlotBlock{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='slot-block', row_id=row.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-secondary" type="submit">Block {{ row.block_date }}: {{ 'Disable' if row.is_active else 'Enable' }}</button></form>{% endfor %}
+    </div>
+    {% endif %}
+</details>
+
+<details id="aiLabCard" class="card" data-ai-component style="margin-bottom:18px;">
+    <summary style="cursor:pointer;font-weight:800;font-size:16px;">Lab tests</summary>
+    <p style="margin-top:12px;color:#607089;">
+        {{ lab_test_count }} active lab test(s) configured, {{ lab_test_alias_count }} with AI search aliases.
+        The AI lab search, detail and category endpoints read this same price master &mdash;
+        add or edit tests, prices, fasting requirements and search aliases from the
+        <a href="{{ url_for('lab_tests') }}">Lab Test Price Master</a>.
+    </p>
+</details>
+
+<details id="aiReceptionCard" class="card" data-ai-component style="margin-bottom:18px;">
+    <summary style="cursor:pointer;font-weight:800;font-size:16px;">Reception hours and knowledge base</summary>
+    <form method="post" action="{{ url_for('ai_admin.create_reception_schedule') }}" style="margin-top:14px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h3>Reception weekly schedule</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;">
+            <select name="location_id">{% for row in locations if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select>
+            <select name="weekday">{% for label in ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}<option value="{{ loop.index0 }}">{{ label }}</option>{% endfor %}</select>
+            <input name="open_time" type="time"><input name="close_time" type="time"><input name="public_note" placeholder="Public note"><label><input type="checkbox" name="is_open" checked> Open</label>
+        </div><button class="btn add-btn" type="submit">Create reception schedule</button>
+    </form>
+    <form method="post" action="{{ url_for('ai_admin.create_reception_override') }}" style="margin-top:18px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h3>Reception holiday / special timing</h3>
+        <div class="grid" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;">
+            <select name="location_id">{% for row in locations if row.is_active %}<option value="{{ row.id }}">{{ row.display_name }}</option>{% endfor %}</select>
+            <input name="schedule_date" type="date" required><input name="open_time" type="time"><input name="close_time" type="time"><input name="public_note" placeholder="Holiday or special timing note"><label><input type="checkbox" name="is_open"> Open</label>
+        </div><button class="btn btn-secondary" type="submit">Create reception override</button>
+    </form>
+    <form method="post" action="{{ url_for('ai_admin.create_knowledge_entry') }}" style="margin-top:18px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h3>Add approved knowledge</h3>
+        <div class="grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;"><input name="category" required placeholder="Category"><input name="question" required placeholder="Question"><input name="language" value="en" placeholder="Language"></div>
+        <textarea name="answer" required placeholder="Approved answer" style="margin-top:10px;"></textarea><input name="keywords" placeholder="Keywords, comma separated" style="margin-top:10px;">
+        <button class="btn add-btn" type="submit" style="margin-top:10px;">Add knowledge</button>
+    </form>
+    <p style="color:#607089;">Reception rules: {{ reception_schedules|length }} · Overrides: {{ reception_overrides|length }} · Knowledge entries: {{ knowledge_entries|length }}</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        {% for row in reception_schedules[:14] %}<form id="aiReceptionSchedule{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='reception-schedule', row_id=row.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-secondary" type="submit">Reception #{{ row.id }}: {{ 'Disable' if row.is_active else 'Enable' }}</button></form>{% endfor %}
+        {% for row in reception_overrides[:14] %}<form id="aiReceptionOverride{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='reception-override', row_id=row.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-secondary" type="submit">Reception {{ row.schedule_date }}: {{ 'Disable' if row.is_active else 'Enable' }}</button></form>{% endfor %}
+        {% for row in knowledge_entries[:20] %}<form id="aiKnowledge{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='knowledge', row_id=row.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-secondary" type="submit">FAQ #{{ row.id }}: {{ 'Disable' if row.is_active else 'Enable' }}</button></form>{% endfor %}
+    </div>
+</details>
+
+<details id="aiOperationsCard" class="card" data-ai-component style="margin-bottom:18px;">
+    <summary style="cursor:pointer;font-weight:800;font-size:16px;">Callbacks, complaints and notifications</summary>
+    <form method="get" action="{{ url_for('ai_admin.overview') }}" style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:8px;margin:14px 0;">
+        <select name="callback_status"><option value="">All callback statuses</option>{% for s in ['PENDING','ASSIGNED','CONTACTED','COMPLETED','CANCELLED'] %}<option {% if callback_status_filter == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        <select name="callback_priority"><option value="">All callback priorities</option>{% for s in ['LOW','NORMAL','HIGH','URGENT'] %}<option {% if callback_priority_filter == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        <select name="complaint_status"><option value="">All complaint statuses</option>{% for s in ['OPEN','IN_PROGRESS','RESOLVED','CLOSED'] %}<option {% if complaint_status_filter == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        <select name="complaint_priority"><option value="">All complaint priorities</option>{% for s in ['LOW','NORMAL','HIGH','URGENT'] %}<option {% if complaint_priority_filter == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        <input name="operations_date_from" type="date" value="{{ operations_date_from }}" aria-label="From date">
+        <input name="operations_date_to" type="date" value="{{ operations_date_to }}" aria-label="To date">
+        <button class="btn btn-secondary" type="submit">Filter</button>
+    </form>
+    <h3>Pending callbacks</h3>
+    {% for row in callbacks %}<form id="aiCallback{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.update_callback_status', row_id=row.id) }}" style="display:grid;grid-template-columns:1fr 1fr 1fr 2fr auto;gap:8px;margin-bottom:8px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div><code>{{ row.callback_ref }}</code><br><small>{{ row.priority }} · {{ row.category or 'GENERAL' }} · {{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</small><br><small>{{ row.reason }}</small></div><select name="status">{% for s in ['PENDING','ASSIGNED','CONTACTED','COMPLETED','CANCELLED'] %}<option {% if row.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><input name="assigned_to" value="{{ row.assigned_to or '' }}" placeholder="Assigned to"><input name="resolution_note" value="{{ row.resolution_note or '' }}" placeholder="Resolution"><button class="btn btn-secondary">Update</button>
+    </form>{% else %}<p>No callbacks.</p>{% endfor %}
+    <h3>Complaints</h3>
+    {% for row in complaints %}<form id="aiComplaint{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.update_complaint_status', row_id=row.id) }}" style="display:grid;grid-template-columns:1fr 1fr 1fr 2fr auto;gap:8px;margin-bottom:8px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div><code>{{ row.complaint_ref }}</code><br><small>{{ row.priority }} · {{ row.category }} · {{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</small><br><small>{{ row.summary }}</small></div><select name="status">{% for s in ['OPEN','IN_PROGRESS','RESOLVED','CLOSED'] %}<option {% if row.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><input name="assigned_to" value="{{ row.assigned_to or '' }}" placeholder="Assigned to"><input name="resolution_note" value="{{ row.resolution_note or '' }}" placeholder="Resolution"><button class="btn btn-secondary">Update</button>
+    </form>{% else %}<p>No complaints.</p>{% endfor %}
+    <form method="post" action="{{ url_for('ai_admin.create_notification_template') }}" style="margin-top:18px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h3>Approved notification template</h3>
+        <div class="grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;"><input name="event_code" required placeholder="APPOINTMENT_CONFIRMATION"><select name="channel"><option>SMS</option><option>WHATSAPP</option><option>EMAIL</option></select><input name="language" value="en"></div>
+        <textarea name="body_template" required placeholder="Appointment {appointment_no} with {doctor_name} is confirmed."></textarea><button class="btn add-btn" type="submit">Save template</button>
+    </form>
+    <p style="color:#607089;">Templates: {{ notification_templates|length }} · Recent deliveries: {{ notification_deliveries|length }}</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">{% for row in notification_templates %}<form id="aiNotificationTemplate{{ row.id }}" data-ai-component method="post" action="{{ url_for('ai_admin.toggle_operational_setting', entity='notification-template', row_id=row.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-secondary" type="submit">{{ row.event_code }}/{{ row.channel }}: {{ 'Disable' if row.is_active else 'Enable' }}</button></form>{% endfor %}</div>
+</details>
+
+<section id="aiCreateClientCard" class="card" data-ai-component style="margin-bottom:18px;">
+    <h2 style="margin-top:0;">Create API client</h2>
+    <form method="post" action="{{ url_for('ai_admin.create_client') }}" autocomplete="off" data-ai-refresh-target="#aiSummaryCards,#aiApiClientsCard">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            <div>
+                <label for="clientName">Client name</label>
+                <input id="clientName" name="name" maxlength="120" required placeholder="Clinic Call Assistant - Production">
+            </div>
+            <div>
+                <label for="clientAllowedIps">Allowed IPs/CIDRs (optional)</label>
+                <input id="clientAllowedIps" name="allowed_ips" placeholder="203.0.113.10, 10.20.0.0/16">
+            </div>
+        </div>
+        <fieldset style="border:1px solid #dbe4f0;border-radius:8px;margin:14px 0;padding:12px;">
+            <legend>Allowed scopes</legend>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;">
+                {% for scope in allowed_scopes %}
+                <label style="display:flex;gap:7px;align-items:center;">
+                    <input type="checkbox" name="scopes" value="{{ scope }}" {% if scope in ['clinic:read', 'doctor:read'] %}checked{% endif %}>
+                    <code>{{ scope }}</code>
+                </label>
+                {% endfor %}
+            </div>
+        </fieldset>
+        <button class="btn add-btn" type="submit">Create client</button>
+    </form>
+</section>
+
+<section id="aiApiClientsCard" class="card" data-ai-component style="margin-bottom:18px;">
+    <h2 style="margin-top:0;">API clients</h2>
+    {% if clients %}
+        {% for client in clients %}
+        <details id="aiApiClient{{ client.id }}" data-ai-component style="border:1px solid #dbe4f0;border-radius:10px;padding:12px;margin-bottom:10px;" {% if loop.first %}open{% endif %}>
+            <summary style="cursor:pointer;font-weight:700;">
+                {{ client.name }} · <code>{{ client.client_id }}</code>
+                <span class="badge {{ 'badge-active' if client.is_active else 'badge-inactive' }}">{{ 'Active' if client.is_active else 'Disabled' }}</span>
+            </summary>
+            <form method="post" action="{{ url_for('ai_admin.update_client_settings', client_pk=client.id) }}" data-ai-refresh-target="#aiApiClient{{ client.id }}" style="margin-top:14px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                    <div><label>Name</label><input name="name" maxlength="120" required value="{{ client.name }}"></div>
+                    <div><label>Allowed IPs/CIDRs</label><input name="allowed_ips" value="{{ client_ips[client.id]|join(', ') }}"></div>
+                </div>
+                <fieldset style="border:1px solid #dbe4f0;border-radius:8px;margin:14px 0;padding:12px;">
+                    <legend>Scopes</legend>
+                    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;">
+                        {% for scope in allowed_scopes %}
+                        <label style="display:flex;gap:7px;align-items:center;">
+                            <input type="checkbox" name="scopes" value="{{ scope }}" {% if scope in client_scopes[client.id] %}checked{% endif %}>
+                            <code>{{ scope }}</code>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+                <p style="color:#607089;">Last used: {{ client.last_used_at or 'Never' }} · Secret version: {{ client.secret_version }}</p>
+                <button class="btn add-btn" type="submit">Save settings</button>
+            </form>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                <form method="post" action="{{ url_for('ai_admin.toggle_client', client_pk=client.id) }}" data-ai-refresh-target="#aiSummaryCards,#aiApiClient{{ client.id }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="btn {{ 'btn-danger' if client.is_active else 'add-btn' }}" type="submit">{{ 'Disable' if client.is_active else 'Enable' }}</button>
+                </form>
+                <form method="post" action="{{ url_for('ai_admin.rotate_client_secret', client_pk=client.id) }}" data-ai-refresh-target="#aiApiClient{{ client.id }}" onsubmit="return confirm('Rotate this secret and revoke every existing token?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="btn btn-secondary" type="submit">Rotate secret</button>
+                </form>
+            </div>
+        </details>
+        {% endfor %}
+    {% else %}
+        <p>No AI API clients have been created.</p>
+    {% endif %}
+</section>
+
+<section id="aiRecentRequestsCard" class="card" data-ai-component>
+    <h2 style="margin-top:0;">Recent API requests</h2>
+    <div class="table-responsive" style="overflow:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+            <thead><tr><th>Time</th><th>Request ID</th><th>Method</th><th>Endpoint</th><th>Status</th><th>Latency</th><th>Error</th></tr></thead>
+            <tbody>
+            {% for item in recent_audits %}
+                <tr>
+                    <td>{{ item.created_at }}</td>
+                    <td><code>{{ item.request_id }}</code></td>
+                    <td>{{ item.method }}</td>
+                    <td>{{ item.endpoint }}</td>
+                    <td>{{ item.status_code }}</td>
+                    <td>{{ item.latency_ms }} ms</td>
+                    <td>{{ item.error_code or '-' }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="7">No API requests recorded.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+</div>
+<script>
+async function copyAIValue(id) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    try {
+        await navigator.clipboard.writeText(input.value);
+    } catch (_) {
+        input.select();
+        document.execCommand('copy');
+    }
+}
+
+(function () {
+    "use strict";
+
+    const root = document.getElementById("aiIntegrationPage");
+    const toastStack = document.getElementById("aiToastStack");
+    if (!root || !toastStack) return;
+
+    const TOAST_TTL_MS = 3000;
+
+    function normalizeCategory(category) {
+        const value = String(category || "info").toLowerCase();
+        if (value === "error") return "danger";
+        return ["success", "danger", "warning", "info"].includes(value) ? value : "info";
+    }
+
+    function showToast(message, category) {
+        const text = String(message || "").trim();
+        if (!text) return;
+        const toast = document.createElement("div");
+        toast.className = "app-toast " + normalizeCategory(category);
+        toast.textContent = text;
+        toastStack.appendChild(toast);
+        requestAnimationFrame(function () { toast.classList.add("show"); });
+        window.setTimeout(function () {
+            toast.classList.remove("show");
+            window.setTimeout(function () { toast.remove(); }, 220);
+        }, TOAST_TTL_MS);
+    }
+
+    function targetSelectors(form) {
+        const configured = String(form.getAttribute("data-ai-refresh-target") || "").trim();
+        if (configured) {
+            return configured.split(",").map(function (item) { return item.trim(); }).filter(Boolean);
+        }
+        const component = form.closest("[data-ai-component][id]");
+        return component ? ["#" + component.id] : [];
+    }
+
+    function setBusy(form, busy) {
+        form.classList.toggle("ai-saving", busy);
+        Array.from(form.querySelectorAll("button, input[type='submit']")).forEach(function (control) {
+            if (busy) {
+                control.dataset.aiWasDisabled = control.disabled ? "true" : "false";
+                control.disabled = true;
+            } else {
+                control.disabled = control.dataset.aiWasDisabled === "true";
+                delete control.dataset.aiWasDisabled;
+            }
+        });
+    }
+
+    function renderOneTimeSecret(secret) {
+        if (!secret || !secret.client_id || !secret.client_secret) return;
+        const region = document.getElementById("aiSecretRegion");
+        if (!region) return;
+
+        const section = document.createElement("section");
+        section.className = "card";
+        section.style.cssText = "border:2px solid #198754;margin-bottom:18px;";
+
+        const heading = document.createElement("h2");
+        heading.style.marginTop = "0";
+        heading.textContent = "Copy this secret now";
+        section.appendChild(heading);
+
+        const note = document.createElement("p");
+        note.textContent = "This plaintext secret is shown once and is not stored by the application.";
+        section.appendChild(note);
+
+        [["Client ID", "newAiClientId", secret.client_id], ["Client secret", "newAiClientSecret", secret.client_secret]].forEach(function (item, index) {
+            const label = document.createElement("label");
+            label.textContent = item[0];
+            section.appendChild(label);
+
+            const line = document.createElement("div");
+            line.style.cssText = "display:flex;gap:8px;" + (index === 0 ? "margin-bottom:10px;" : "");
+            const input = document.createElement("input");
+            input.id = item[1];
+            input.readOnly = true;
+            input.value = item[2];
+            input.autocomplete = index === 0 ? "off" : "new-password";
+            const copy = document.createElement("button");
+            copy.type = "button";
+            copy.className = "btn btn-secondary";
+            copy.textContent = "Copy";
+            copy.setAttribute("data-ai-copy", item[1]);
+            line.append(input, copy);
+            section.appendChild(line);
+        });
+        region.replaceChildren(section);
+    }
+
+    function captureDetailsState() {
+        const state = new Map();
+        document.querySelectorAll("details[id]").forEach(function (details) {
+            state.set(details.id, details.open);
+        });
+        return state;
+    }
+
+    function restoreScrollPosition(x, y, detailsState) {
+        detailsState.forEach(function (open, id) {
+            const details = document.getElementById(id);
+            if (details) details.open = open;
+        });
+        window.scrollTo(x, y);
+        requestAnimationFrame(function () {
+            window.scrollTo(x, y);
+            requestAnimationFrame(function () {
+                window.scrollTo(x, y);
+                document.documentElement.style.overflowAnchor = "";
+                document.body.style.overflowAnchor = "";
+            });
+        });
+    }
+
+    async function refreshComponents(selectors, secret) {
+        const response = await fetch(window.location.href, {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: {"Accept": "text/html", "X-Requested-With": "XMLHttpRequest"}
+        });
+        if (response.redirected && new URL(response.url).pathname === "/login") {
+            window.location.assign(response.url);
+            return;
+        }
+        if (!response.ok) throw new Error("Could not refresh the updated component");
+
+        const html = await response.text();
+        const freshDocument = new DOMParser().parseFromString(html, "text/html");
+        const x = window.scrollX;
+        const y = window.scrollY;
+        const detailsState = captureDetailsState();
+        document.documentElement.style.overflowAnchor = "none";
+        document.body.style.overflowAnchor = "none";
+
+        selectors.forEach(function (selector) {
+            const current = document.querySelector(selector);
+            const fresh = freshDocument.querySelector(selector);
+            if (current && fresh) {
+                current.replaceWith(document.importNode(fresh, true));
+            } else if (current && !fresh) {
+                current.remove();
+            }
+        });
+        renderOneTimeSecret(secret);
+        restoreScrollPosition(x, y, detailsState);
+    }
+
+    async function parseActionResponse(response) {
+        const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+        if (contentType.includes("application/json")) {
+            return response.json();
+        }
+        if (response.redirected && new URL(response.url).pathname === "/login") {
+            window.location.assign(response.url);
+            return {ok: false, messages: []};
+        }
+        const text = await response.text();
+        const doc = new DOMParser().parseFromString(text, "text/html");
+        const messages = Array.from(doc.querySelectorAll(".flash")).map(function (node) {
+            return {
+                message: node.textContent || "",
+                category: node.getAttribute("data-category") || "info"
+            };
+        });
+        return {ok: response.ok, messages: messages};
+    }
+
+    root.addEventListener("submit", async function (event) {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement) || event.defaultPrevented) return;
+        const method = String(form.method || "GET").toUpperCase();
+        if (method !== "POST") return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        const selectors = targetSelectors(form);
+        setBusy(form, true);
+
+        try {
+            const response = await fetch(form.action, {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                redirect: "follow",
+                headers: {
+                    "Accept": "application/json",
+                    "X-Requested-With": "XMLHttpRequest"
+                }
+            });
+            const payload = await parseActionResponse(response);
+            const messages = Array.isArray(payload.messages) ? payload.messages : [];
+            messages.forEach(function (item) { showToast(item.message, item.category); });
+            if (!messages.length) {
+                showToast(payload.ok ? "Saved successfully." : "Unable to save changes.", payload.ok ? "success" : "danger");
+            }
+            if (!payload.ok) return;
+
+            if (form.action.endsWith("/clients") || form.hasAttribute("data-ai-reset-on-success")) form.reset();
+            await refreshComponents(selectors, payload.secret);
+        } catch (_error) {
+            showToast("Network error. Please try again.", "danger");
+        } finally {
+            if (form.isConnected) setBusy(form, false);
+        }
+    });
+
+    root.addEventListener("click", function (event) {
+        const copyButton = event.target.closest("[data-ai-copy]");
+        if (copyButton) {
+            copyAIValue(copyButton.getAttribute("data-ai-copy"));
+            showToast("Copied.", "success");
+            return;
+        }
+
+        const toggle = event.target.closest("[data-ai-edit-toggle]");
+        const cancel = event.target.closest("[data-ai-edit-cancel]");
+        const control = toggle || cancel;
+        if (!control) return;
+        const panel = document.getElementById(
+            control.getAttribute(toggle ? "data-ai-edit-toggle" : "data-ai-edit-cancel")
+        );
+        if (!panel) return;
+        const x = window.scrollX;
+        const y = window.scrollY;
+        panel.hidden = cancel ? true : !panel.hidden;
+        if (toggle) toggle.textContent = panel.hidden ? "Edit" : "Close edit";
+        window.scrollTo(x, y);
+        requestAnimationFrame(function () { window.scrollTo(x, y); });
+    });
+})();
+</script>
+{% endblock %}

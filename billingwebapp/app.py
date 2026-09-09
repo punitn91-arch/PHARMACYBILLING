@@ -62,12 +62,21 @@ try:
         VendorLedgerEntry,
         AuditLog,
         LoginSecurityEvent,
+        VoiceCall,
+        VoiceCallEvent,
+        AIAPIClient,
+        AIAccessToken,
+        AIAPIRequestAudit,
+        AIIdempotencyRecord,
     )
     from .routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
     from .routes.appointments import render_appointments_page
     from .routes.billing import prepare_billing_context
     from .routes.reports import render_reports_page
     from .routes.vendors import render_vendor_reports_page
+    from .routes.telephony import handle_generic_telephony_webhook
+    from .routes.ai_api import ai_api_bp
+    from .routes.ai_admin import ai_admin_bp
     from .services.background_jobs import init_background_jobs, queue_report_export_job
     from .services.infra_safety import (
         build_backup_snapshot,
@@ -121,12 +130,21 @@ except ImportError:  # pragma: no cover - script/local fallback
         VendorLedgerEntry,
         AuditLog,
         LoginSecurityEvent,
+        VoiceCall,
+        VoiceCallEvent,
+        AIAPIClient,
+        AIAccessToken,
+        AIAPIRequestAudit,
+        AIIdempotencyRecord,
     )
     from routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
     from routes.appointments import render_appointments_page
     from routes.billing import prepare_billing_context
     from routes.reports import render_reports_page
     from routes.vendors import render_vendor_reports_page
+    from routes.telephony import handle_generic_telephony_webhook
+    from routes.ai_api import ai_api_bp
+    from routes.ai_admin import ai_admin_bp
     from services.background_jobs import init_background_jobs, queue_report_export_job
     from services.infra_safety import (
         build_backup_snapshot,
@@ -173,6 +191,15 @@ def clinic_now():
 
 
 APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv(os.path.join(APP_BASE_DIR, ".env"), override=False)
+
 app = Flask(
     __name__,
     template_folder=os.path.join(APP_BASE_DIR, "templates"),
@@ -239,6 +266,54 @@ def env_flag(name, default=False):
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name, default, minimum=None, maximum=None):
+    try:
+        value = int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    if minimum is not None:
+        value = max(int(minimum), value)
+    if maximum is not None:
+        value = min(int(maximum), value)
+    return value
+
+
+# AI integration is deliberately opt-in. Enabling it exposes only the
+# versioned API boundary; every functional endpoint still requires a scoped,
+# short-lived machine token.
+app.config["AI_API_ENABLED"] = env_flag("AI_API_ENABLED", False)
+app.config["AI_ACCESS_TOKEN_TTL_SECONDS"] = env_int(
+    "AI_ACCESS_TOKEN_TTL_SECONDS", 900, minimum=60, maximum=3600
+)
+app.config["AI_AUTH_RATE_LIMIT_PER_MINUTE"] = env_int(
+    "AI_AUTH_RATE_LIMIT_PER_MINUTE", 20, minimum=5, maximum=100
+)
+app.config["AI_API_TRUST_PROXY_HEADERS"] = env_flag("AI_API_TRUST_PROXY_HEADERS", False)
+app.config["AI_AUDIT_FINGERPRINT_SECRET"] = (
+    os.environ.get("AI_AUDIT_FINGERPRINT_SECRET") or app.secret_key
+)
+app.config["IS_PRODUCTION"] = IS_PROD
+app.config["AI_OTP_ENABLED"] = env_flag("AI_OTP_ENABLED", False)
+app.config["AI_SECURE_REPORT_DELIVERY_ENABLED"] = env_flag(
+    "AI_SECURE_REPORT_DELIVERY_ENABLED", False
+)
+app.config["AI_CALLBACKS_ENABLED"] = env_flag("AI_CALLBACKS_ENABLED", False)
+app.config["AI_COMPLAINTS_ENABLED"] = env_flag("AI_COMPLAINTS_ENABLED", False)
+app.config["AI_NOTIFICATIONS_ENABLED"] = env_flag("AI_NOTIFICATIONS_ENABLED", False)
+app.config["OTP_EXPIRY_SECONDS"] = env_int("OTP_EXPIRY_SECONDS", 300, minimum=60, maximum=900)
+app.config["OTP_MAX_ATTEMPTS"] = env_int("OTP_MAX_ATTEMPTS", 5, minimum=1, maximum=10)
+app.config["OTP_RESEND_COOLDOWN_SECONDS"] = env_int(
+    "OTP_RESEND_COOLDOWN_SECONDS", 60, minimum=30, maximum=900
+)
+app.config["AI_PATIENT_SESSION_TTL_SECONDS"] = env_int(
+    "AI_PATIENT_SESSION_TTL_SECONDS", 900, minimum=300, maximum=3600
+)
+app.config["SECURE_DOCUMENT_EXPIRY_MINUTES"] = env_int(
+    "SECURE_DOCUMENT_EXPIRY_MINUTES", 10, minimum=1, maximum=60
+)
+app.config["APPLICATION_BASE_URL"] = (os.environ.get("APPLICATION_BASE_URL") or "").strip()
 
 
 def normalize_database_url(raw_url):
@@ -3898,6 +3973,9 @@ def build_lab_test_audit_snapshot(lab_test):
         "specimen_type": (lab_test.specimen_type or "").strip(),
         "preparation": (lab_test.preparation or "").strip(),
         "default_price": round(to_float_safe(lab_test.default_price, 0), 2),
+        "fasting_required": bool(getattr(lab_test, "fasting_required", False)),
+        "turnaround_text": (getattr(lab_test, "turnaround_text", None) or "").strip(),
+        "aliases_json": getattr(lab_test, "aliases_json", None) or "[]",
         "is_active": bool(lab_test.is_active),
     }
 
@@ -5341,6 +5419,8 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 migrate = Migrate(app, db, compare_type=True, render_as_batch=db_url.startswith("sqlite")) if Migrate else None
 AUTO_DATA_BACKFILL_ON_BOOT = env_flag("AUTO_DATA_BACKFILL_ON_BOOT", not IS_SERVERLESS)
+app.register_blueprint(ai_api_bp)
+app.register_blueprint(ai_admin_bp)
 
 # ---------------- INIT ----------------
 with app.app_context():
@@ -5414,6 +5494,33 @@ with app.app_context():
         ensure_column("vendor_purchase", "bill_attachment_ref", "TEXT")
         ensure_column("vendor_purchase", "paid_amount", "REAL")
         ensure_column("vendor_purchase", "notes", "TEXT")
+
+        # AI clinic/lab profile upgrade (additive; see migration 20260905_07)
+        ensure_column("clinician", "sub_specialties_json", "TEXT DEFAULT '[]'")
+        ensure_column("clinician", "languages_json", "TEXT DEFAULT '[]'")
+        ensure_column("clinician", "conditions_treated_json", "TEXT DEFAULT '[]'")
+        ensure_column("clinician", "services_offered_json", "TEXT DEFAULT '[]'")
+        ensure_column("lab_test", "aliases_json", "TEXT DEFAULT '[]'")
+        ensure_column("lab_test", "fasting_required", "BOOLEAN DEFAULT FALSE")
+        ensure_column("lab_test", "turnaround_text", "TEXT")
+        try:
+            _rule_insp = inspect(db.engine)
+            _had_slot_mode_column = "individual_time_slots" in {
+                c["name"] for c in _rule_insp.get_columns("clinic_schedule_rule")
+            }
+        except Exception:
+            _had_slot_mode_column = True
+        ensure_column("clinic_schedule_rule", "individual_time_slots", "BOOLEAN DEFAULT TRUE")
+        if not _had_slot_mode_column:
+            # One-time backfill only: a clinic-wide gate rule (no clinician)
+            # is an FCFS capacity pool, not an individual doctor calendar.
+            # Never re-run this, so an admin's later choice for that rule is
+            # never silently reverted on a future restart.
+            db.session.execute(text(
+                "UPDATE clinic_schedule_rule SET individual_time_slots = 0 "
+                "WHERE clinician_id IS NULL"
+            ))
+            db.session.commit()
 
         ensure_column("return_bill", "return_no", "TEXT")
         ensure_column("return_bill", "payment_mode", "TEXT")
@@ -5859,6 +5966,30 @@ def readyz():
     payload["ready"] = bool(database_ok and storage_ok)
     status_code = 200 if payload["ready"] else 503
     return jsonify(payload), status_code
+
+
+@app.route("/telephony/<provider>/inbound", methods=["POST"])
+def generic_telephony_inbound(provider):
+    """Receive one signed, provider-neutral staging telephony event.
+
+    This intentionally supports only the internal generic staging envelope.
+    It is disabled until an explicit provider name and webhook secret are
+    configured. A real Exotel/Twilio/etc. adapter must validate that
+    provider's signing scheme and translate its payload before using this
+    boundary.
+    """
+    raw_body = request.get_data(cache=True, as_text=False)
+    request_target = (request.full_path or request.path or "").rstrip("?")
+    response = handle_generic_telephony_webhook(
+        provider=provider,
+        method=request.method,
+        request_target=request_target,
+        raw_body=raw_body,
+        headers=request.headers,
+        db_session=db.session,
+        environment={**os.environ, "APP_ENV": app.config.get("APP_ENV", "")},
+    )
+    return jsonify(dict(response.payload)), response.status_code
 
 # ---------------- LOGIN ----------------
 @app.route("/login", methods=["GET", "POST"])
@@ -7173,6 +7304,11 @@ def validate_lab_test_master_form(form_data, *, existing_test=None):
         specimen_type = ((existing_test.specimen_type if existing_test else "") or "").strip()
     preparation = (form_data.get("preparation") or "").strip()
     default_price, price_error = parse_optional_money(form_data.get("default_price"))
+    aliases = [
+        item.strip() for item in (form_data.get("aliases") or "").split(",") if item.strip()
+    ][:20]
+    fasting_required = "fasting_required" in form_data
+    turnaround_text = (form_data.get("turnaround_text") or "").strip()[:120]
 
     if not test_code:
         test_code = normalize_lab_test_code(
@@ -7193,6 +7329,9 @@ def validate_lab_test_master_form(form_data, *, existing_test=None):
         "specimen_type": specimen_type,
         "preparation": preparation,
         "default_price": default_price,
+        "aliases_json": json.dumps(aliases, separators=(",", ":")),
+        "fasting_required": fasting_required,
+        "turnaround_text": turnaround_text or None,
     }, None
 
 
@@ -7274,6 +7413,14 @@ def add_lab_test():
 @lab_catalog_access_required
 def edit_lab_test(id):
     lab_test = LabTest.query.get_or_404(id)
+
+    def _aliases_display(existing_test):
+        try:
+            values = json.loads(existing_test.aliases_json or "[]")
+        except (TypeError, ValueError):
+            values = []
+        return ", ".join(str(item).strip() for item in values if str(item).strip()) if isinstance(values, list) else ""
+
     if request.method == "POST":
         before_snapshot = build_lab_test_audit_snapshot(lab_test)
         payload, error = validate_lab_test_master_form(request.form, existing_test=lab_test)
@@ -7284,6 +7431,7 @@ def edit_lab_test(id):
                 test=lab_test,
                 form_title="Edit Lab Test",
                 submit_label="Save Changes",
+                test_aliases_display=(request.form.get("aliases") or _aliases_display(lab_test)),
             ), 400
 
         duplicate = LabTest.query.filter(
@@ -7297,6 +7445,7 @@ def edit_lab_test(id):
                 test=lab_test,
                 form_title="Edit Lab Test",
                 submit_label="Save Changes",
+                test_aliases_display=(request.form.get("aliases") or _aliases_display(lab_test)),
             ), 400
 
         for field_name, field_value in payload.items():
@@ -7314,6 +7463,7 @@ def edit_lab_test(id):
                 test=lab_test,
                 form_title="Edit Lab Test",
                 submit_label="Save Changes",
+                test_aliases_display=_aliases_display(lab_test),
             ), 400
         except Exception:
             db.session.rollback()
@@ -7324,6 +7474,7 @@ def edit_lab_test(id):
                 test=lab_test,
                 form_title="Edit Lab Test",
                 submit_label="Save Changes",
+                test_aliases_display=_aliases_display(lab_test),
             ), 500
 
         record_audit_event(
@@ -7342,6 +7493,7 @@ def edit_lab_test(id):
         test=lab_test,
         form_title="Edit Lab Test",
         submit_label="Save Changes",
+        test_aliases_display=_aliases_display(lab_test),
     )
 
 
@@ -11800,6 +11952,33 @@ def ensure_inventory_runtime_schema():
     )
 
 
+def ensure_ai_clinic_lab_runtime_schema():
+    """Additive compatibility upgrade for the AI doctor/lab profile fields."""
+    return ensure_runtime_schema_requirements(
+        {
+            "clinician": [
+                ("sub_specialties_json", "TEXT DEFAULT '[]'"),
+                ("languages_json", "TEXT DEFAULT '[]'"),
+                ("conditions_treated_json", "TEXT DEFAULT '[]'"),
+                ("services_offered_json", "TEXT DEFAULT '[]'"),
+            ],
+            "lab_test": [
+                ("aliases_json", "TEXT DEFAULT '[]'"),
+                ("fasting_required", "BOOLEAN DEFAULT FALSE"),
+                ("turnaround_text", "TEXT"),
+            ],
+            "clinic_schedule_rule": [
+                ("individual_time_slots", "BOOLEAN DEFAULT TRUE"),
+            ],
+        },
+        postgres_boolean_columns={
+            "lab_test": {"fasting_required": False},
+            "clinic_schedule_rule": {"individual_time_slots": True},
+        },
+        log_label="AI clinic/lab profile",
+    )
+
+
 def create_appointment_record(*, appointment_no, patient, mobile, validated, form_data):
     common_values = {
         "appointment_no": appointment_no,
@@ -11817,6 +11996,7 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         "doctor_discount": validated["doctor_discount"],
         "consultation_fee": validated["consultation_fee"],
         "status": "BOOKED",
+        "source": "ADMIN",
         "symptoms": form_data["symptoms"],
         "previous_visit_notes": form_data["previous_visit_notes"],
         "notes": form_data["notes"],
@@ -15002,7 +15182,7 @@ def export_stock_history():
         download_name="stock_history.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    
+
 @app.route("/stock-history/delete/<int:id>", methods=["POST"])
 @login_required
 @admin_required
