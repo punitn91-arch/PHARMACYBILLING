@@ -103,6 +103,43 @@ def _remote_addr():
     return request.remote_addr or ""
 
 
+def _allowed_browser_origin():
+    """Return the single OmniDimension UI origin allowed to run test calls.
+
+    Production tool calls are server-to-server and do not need CORS.  The
+    dashboard's Test API control runs in the browser, however, and its custom
+    gateway header causes a preflight request.  Never reflect arbitrary
+    origins here: that would turn this static-key endpoint into a broad
+    browser-accessible API.
+    """
+
+    configured = str(
+        current_app.config.get("OMNIDIM_GATEWAY_CORS_ORIGIN") or ""
+    ).strip().rstrip("/")
+    origin = str(request.headers.get("Origin") or "").strip().rstrip("/")
+    if configured and origin and hmac.compare_digest(origin, configured):
+        return origin
+    return None
+
+
+def _apply_browser_cors(response):
+    origin = _allowed_browser_origin()
+    if not origin:
+        return response
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers[
+        "Access-Control-Allow-Headers"
+    ] = "Content-Type, X-Clinic-Gateway-Key, X-Request-ID, X-Omnidim-Call-ID, X-Omnidim-Session-ID"
+    response.headers["Access-Control-Expose-Headers"] = "X-Request-ID"
+    response.headers["Access-Control-Max-Age"] = "600"
+    vary = [item.strip() for item in (response.headers.get("Vary") or "").split(",") if item.strip()]
+    if "Origin" not in vary:
+        vary.append("Origin")
+    response.headers["Vary"] = ", ".join(vary)
+    return response
+
+
 def _audit_fingerprint(value):
     secret = (
         current_app.config.get("AI_AUDIT_FINGERPRINT_SECRET")
@@ -385,6 +422,13 @@ def prepare_gateway_request():
     g.omnidim_action = None
     g.omnidim_resource_type = None
     g.omnidim_resource_id = None
+    g.omnidim_preflight = False
+    if request.method == "OPTIONS" and _allowed_browser_origin():
+        # Browser preflight requests cannot include the gateway key.  Accept
+        # only the exact OmniDimension dashboard origin and do not audit this
+        # transport-only request as a business action.
+        g.omnidim_preflight = True
+        return "", 204
     if not bool(current_app.config.get("OMNIDIM_GATEWAY_ENABLED", False)):
         raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
     secret = _configured_secret()
@@ -403,6 +447,9 @@ def finalize_gateway_request(response):
     response.headers["Pragma"] = "no-cache"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
+    _apply_browser_cors(response)
+    if getattr(g, "omnidim_preflight", False):
+        return response
     try:
         elapsed = max(0, int((time.perf_counter() - g.omnidim_started_at) * 1000))
         audit = AIAPIRequestAudit(

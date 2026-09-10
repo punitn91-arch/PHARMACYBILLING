@@ -22,6 +22,7 @@ class OmnidimGatewayTests(unittest.TestCase):
         "OMNIDIM_GATEWAY_ENABLED",
         "OMNIDIM_GATEWAY_SECRET",
         "OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE",
+        "OMNIDIM_GATEWAY_CORS_ORIGIN",
     )
 
     @classmethod
@@ -45,6 +46,7 @@ class OmnidimGatewayTests(unittest.TestCase):
                 "OMNIDIM_GATEWAY_ENABLED": "1",
                 "OMNIDIM_GATEWAY_SECRET": "omnidim-gateway-test-secret-with-more-than-thirty-two-bytes",
                 "OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE": "120",
+                "OMNIDIM_GATEWAY_CORS_ORIGIN": "https://omnidim.io",
             }
         )
         project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,6 +64,7 @@ class OmnidimGatewayTests(unittest.TestCase):
             AI_COMPLAINTS_ENABLED=True,
             OMNIDIM_GATEWAY_ENABLED=True,
             OMNIDIM_GATEWAY_SECRET=os.environ["OMNIDIM_GATEWAY_SECRET"],
+            OMNIDIM_GATEWAY_CORS_ORIGIN="https://omnidim.io",
             APPLICATION_BASE_URL="https://clinic.example.test",
         )
         from models import (
@@ -176,6 +179,33 @@ class OmnidimGatewayTests(unittest.TestCase):
         denied = self.client.get("/api/v1/omnidim/clinic-info")
         self.assertEqual(denied.status_code, 401, denied.get_json())
         self.assertEqual(denied.get_json()["error"]["code"], "UNAUTHORIZED")
+
+    def test_browser_test_preflight_is_limited_to_omnidim_origin(self):
+        preflight = self.client.options(
+            "/api/v1/omnidim/clinic-info",
+            headers={
+                "Origin": "https://omnidim.io",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-Clinic-Gateway-Key",
+            },
+        )
+        self.assertEqual(preflight.status_code, 204)
+        self.assertEqual(preflight.headers.get("Access-Control-Allow-Origin"), "https://omnidim.io")
+        self.assertIn("X-Clinic-Gateway-Key", preflight.headers.get("Access-Control-Allow-Headers"))
+
+        allowed = self.client.get(
+            "/api/v1/omnidim/clinic-info",
+            headers={**self.headers, "Origin": "https://omnidim.io"},
+        )
+        self.assertEqual(allowed.status_code, 200, allowed.get_json())
+        self.assertEqual(allowed.headers.get("Access-Control-Allow-Origin"), "https://omnidim.io")
+
+        rejected = self.client.options(
+            "/api/v1/omnidim/clinic-info",
+            headers={"Origin": "https://untrusted.example", "Access-Control-Request-Method": "GET"},
+        )
+        self.assertEqual(rejected.status_code, 401, rejected.get_json())
+        self.assertIsNone(rejected.headers.get("Access-Control-Allow-Origin"))
 
     def test_public_clinic_timing_slots_and_secure_portal_handoffs(self):
         clinic = self.client.get("/api/v1/omnidim/clinic-info", headers=self.headers)

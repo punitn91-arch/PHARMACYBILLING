@@ -317,6 +317,12 @@ app.config["OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE"] = env_int(
 app.config["OMNIDIM_GATEWAY_TRUST_PROXY_HEADERS"] = env_flag(
     "OMNIDIM_GATEWAY_TRUST_PROXY_HEADERS", False
 )
+# The OmniDimension dashboard's Test API tool runs at this browser origin.
+# Keep this a single explicit origin; the gateway must never reflect arbitrary
+# web origins because its shared key is configured in the dashboard.
+app.config["OMNIDIM_GATEWAY_CORS_ORIGIN"] = (
+    os.environ.get("OMNIDIM_GATEWAY_CORS_ORIGIN") or "https://omnidim.io"
+).strip().rstrip("/")
 app.config["OTP_EXPIRY_SECONDS"] = env_int("OTP_EXPIRY_SECONDS", 300, minimum=60, maximum=900)
 app.config["OTP_MAX_ATTEMPTS"] = env_int("OTP_MAX_ATTEMPTS", 5, minimum=1, maximum=10)
 app.config["OTP_RESEND_COOLDOWN_SECONDS"] = env_int(
