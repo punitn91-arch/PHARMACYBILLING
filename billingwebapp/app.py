@@ -68,6 +68,7 @@ try:
         AIAccessToken,
         AIAPIRequestAudit,
         AIIdempotencyRecord,
+        OmnidimGatewayAction,
     )
     from .routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
     from .routes.appointments import render_appointments_page
@@ -77,6 +78,7 @@ try:
     from .routes.telephony import handle_generic_telephony_webhook
     from .routes.ai_api import ai_api_bp
     from .routes.ai_admin import ai_admin_bp
+    from .routes.omnidim_gateway import omnidim_gateway_bp
     from .services.background_jobs import init_background_jobs, queue_report_export_job
     from .services.infra_safety import (
         build_backup_snapshot,
@@ -136,6 +138,7 @@ except ImportError:  # pragma: no cover - script/local fallback
         AIAccessToken,
         AIAPIRequestAudit,
         AIIdempotencyRecord,
+        OmnidimGatewayAction,
     )
     from routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
     from routes.appointments import render_appointments_page
@@ -145,6 +148,7 @@ except ImportError:  # pragma: no cover - script/local fallback
     from routes.telephony import handle_generic_telephony_webhook
     from routes.ai_api import ai_api_bp
     from routes.ai_admin import ai_admin_bp
+    from routes.omnidim_gateway import omnidim_gateway_bp
     from services.background_jobs import init_background_jobs, queue_report_export_job
     from services.infra_safety import (
         build_backup_snapshot,
@@ -302,6 +306,17 @@ app.config["AI_SECURE_REPORT_DELIVERY_ENABLED"] = env_flag(
 app.config["AI_CALLBACKS_ENABLED"] = env_flag("AI_CALLBACKS_ENABLED", False)
 app.config["AI_COMPLAINTS_ENABLED"] = env_flag("AI_COMPLAINTS_ENABLED", False)
 app.config["AI_NOTIFICATIONS_ENABLED"] = env_flag("AI_NOTIFICATIONS_ENABLED", False)
+# OmniDimension uses a long-lived static header for Custom API actions.  Keep
+# this separate from the internal AI API's short-lived bearer-token boundary
+# so enabling the voice gateway does not expose the general integration API.
+app.config["OMNIDIM_GATEWAY_ENABLED"] = env_flag("OMNIDIM_GATEWAY_ENABLED", False)
+app.config["OMNIDIM_GATEWAY_SECRET"] = (os.environ.get("OMNIDIM_GATEWAY_SECRET") or "").strip()
+app.config["OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE"] = env_int(
+    "OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE", 60, minimum=5, maximum=300
+)
+app.config["OMNIDIM_GATEWAY_TRUST_PROXY_HEADERS"] = env_flag(
+    "OMNIDIM_GATEWAY_TRUST_PROXY_HEADERS", False
+)
 app.config["OTP_EXPIRY_SECONDS"] = env_int("OTP_EXPIRY_SECONDS", 300, minimum=60, maximum=900)
 app.config["OTP_MAX_ATTEMPTS"] = env_int("OTP_MAX_ATTEMPTS", 5, minimum=1, maximum=10)
 app.config["OTP_RESEND_COOLDOWN_SECONDS"] = env_int(
@@ -5421,6 +5436,7 @@ migrate = Migrate(app, db, compare_type=True, render_as_batch=db_url.startswith(
 AUTO_DATA_BACKFILL_ON_BOOT = env_flag("AUTO_DATA_BACKFILL_ON_BOOT", not IS_SERVERLESS)
 app.register_blueprint(ai_api_bp)
 app.register_blueprint(ai_admin_bp)
+app.register_blueprint(omnidim_gateway_bp)
 
 # ---------------- INIT ----------------
 with app.app_context():

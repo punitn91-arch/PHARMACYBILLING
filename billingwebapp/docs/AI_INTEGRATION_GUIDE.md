@@ -47,6 +47,10 @@ put phone numbers, OTPs or report tokens in those IDs.
 
 The exact request contract is [openapi-ai-v1.yaml](openapi-ai-v1.yaml).
 
+For OmniDimension specifically, do not put a raw AI client secret or a
+short-lived patient session into its Custom API configuration. Use the narrow
+[OmniDimension gateway](OMNIDIM_GATEWAY.md) instead.
+
 ## Patient verification workflow
 
 1. Call `POST /patients/identify` with the caller mobile. For a genuinely new
@@ -126,7 +130,7 @@ backoff and the same idempotency key.
 ## Deployment checklist
 
 1. Back up the database and run `flask db upgrade`; expected head is
-   `20260831_05`.
+   `20260910_09`.
 2. Configure strong `SECRET_KEY`, `AI_AUDIT_FINGERPRINT_SECRET` and HTTPS
    `APPLICATION_BASE_URL`.
 3. Keep all AI feature flags off while staging client, locations, schedules,

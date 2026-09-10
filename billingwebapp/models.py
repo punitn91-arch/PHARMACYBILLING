@@ -1076,6 +1076,43 @@ class AIIdempotencyRecord(db.Model):
     )
 
 
+class OmnidimGatewayAction(db.Model):
+    """Replay protection for the narrow OmniDimension voice gateway.
+
+    The table intentionally contains only keyed hashes and the minimal result
+    needed to replay a successful request.  Patient names, phone numbers,
+    complaint text and call transcripts remain in their appropriate business
+    records and are never copied into gateway request storage.
+    """
+
+    __tablename__ = "omnidim_gateway_action"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "operation",
+            "idempotency_key_hash",
+            name="uq_omnidim_gateway_action_key",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    operation = db.Column(db.String(80), nullable=False, index=True)
+    idempotency_key_hash = db.Column(db.String(64), nullable=False, index=True)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    state = db.Column(db.String(20), nullable=False, default="IN_PROGRESS", index=True)
+    response_json = db.Column(db.Text)
+    response_status = db.Column(db.Integer)
+    resource_type = db.Column(db.String(50), index=True)
+    resource_id = db.Column(db.String(80), index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    completed_at = db.Column(db.DateTime, index=True)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
 class ClinicProfile(db.Model):
     """Structured, admin-approved public clinic information."""
 
