@@ -4,6 +4,9 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
+    "preDeployCommand": [
+      "cd /app/billingwebapp && PYTHONPATH=/app:/app/billingwebapp flask --app app db upgrade"
+    ],
     "startCommand": "PYTHONPATH=/app:/app/billingwebapp gunicorn app:app --bind 0.0.0.0:$PORT"
   }
 }
