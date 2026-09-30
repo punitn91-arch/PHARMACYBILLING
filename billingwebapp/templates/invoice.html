@@ -375,6 +375,7 @@ body {
 
 .print-btn { background: #007bff; color: white; }
 .pdf-btn { background: #198754; color: white; }
+.excel-btn { background: #146c43; color: white; text-decoration: none; display: inline-block; }
 .wa-btn { background: #1fa855; color: white; }
 
 .btn[disabled] {
@@ -574,6 +575,7 @@ body {
     <button class="btn print-btn" onclick="window.print()">🖨 PRINT</button>
     <button class="btn pdf-btn" onclick="window.print()">⬇ DOWNLOAD PDF</button>
     {% if not is_public_invoice %}
+    <a class="btn excel-btn" href="/invoice/{{ inv.id }}/excel">EXCEL REPORT</a>
     {% set has_whatsapp_mobile = ((mobile or '')|trim) != '' %}
     <button
         class="btn wa-btn"

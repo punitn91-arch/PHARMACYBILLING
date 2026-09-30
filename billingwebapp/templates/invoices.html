@@ -147,6 +147,7 @@
                                     <div class="invoice-action-panel">
                                         <a href="/invoice/{{ i.id }}">View</a>
                                         <a href="/invoice/{{ i.id }}?print=1" target="_blank">Print</a>
+                                        <a href="/invoice/{{ i.id }}/excel">Excel</a>
                                         <a href="/return-medicine?invoice_no={{ i.invoice_no }}">Return</a>
                                         {% if session.get("role") == "admin" %}
                                         <a href="/invoice/edit/{{ i.id }}">Edit</a>

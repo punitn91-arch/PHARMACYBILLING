@@ -8851,6 +8851,136 @@ def render_invoice_page(inv, *, share_url="", is_public_invoice=False):
     )
 
 
+def build_single_invoice_excel(inv):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    items = InvoiceItem.query.filter_by(invoice_id=inv.id).order_by(InvoiceItem.id.asc()).all()
+    created_at = storage_datetime_to_local(inv.created_at) or inv.created_at
+    rounded_total = compute_invoice_rounded_total(inv.total if inv.total not in (None, "") else inv.subtotal)
+    payment_breakdown = build_invoice_payment_breakdown(inv, rounded_total)
+    print_profile = resolve_invoice_print_profile(inv)
+
+    def money(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def auto_size_columns(sheet):
+        for column_cells in sheet.columns:
+            column_letter = get_column_letter(column_cells[0].column)
+            max_length = 0
+            for cell in column_cells:
+                value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(value))
+            sheet.column_dimensions[column_letter].width = min(max(max_length + 2, 12), 42)
+
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Invoice Summary"
+    detail = wb.create_sheet("Invoice Items")
+
+    title_fill = PatternFill("solid", fgColor="173F91")
+    title_font = Font(color="FFFFFF", bold=True, size=13)
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    header_font = Font(bold=True)
+
+    summary.merge_cells("A1:B1")
+    summary["A1"] = "THE ENDO PHARMACY - Invoice Report"
+    summary["A1"].fill = title_fill
+    summary["A1"].font = title_font
+    summary["A1"].alignment = Alignment(horizontal="center")
+
+    summary_rows = [
+        ("Invoice No", inv.invoice_no or ""),
+        ("Invoice Date", created_at.strftime("%d-%m-%Y") if created_at else ""),
+        ("Invoice Time", created_at.strftime("%I:%M %p") if created_at else ""),
+        ("Patient / Party Name", inv.customer or ""),
+        ("Mobile", inv.mobile or ""),
+        ("Gender", inv.gender or ""),
+        ("Doctor", inv.doctor or ""),
+        ("Customer GST No", inv.customer_gst_no or ""),
+        ("Payment Mode", payment_breakdown["display_mode"]),
+        ("Payment Type", payment_breakdown["payment_type"]),
+        ("Cash Collection", payment_breakdown["cash_amount"]),
+        ("Online Collection", payment_breakdown["online_amount"]),
+        ("Subtotal", money(inv.subtotal)),
+        ("Discount", money(inv.discount)),
+        ("CGST", money(inv.cgst)),
+        ("SGST", money(inv.sgst)),
+        ("Total", money(inv.total)),
+        ("Rounded Amount", payment_breakdown["rounded_amount"]),
+        ("Created By", inv.created_by or ""),
+        ("Internal Note", inv.internal_note or ""),
+        ("Pharmacy Address 1", print_profile.get("address_line_1", "")),
+        ("Pharmacy Address 2", print_profile.get("address_line_2", "")),
+        ("Pharmacy Mobile", print_profile.get("mobile", "")),
+        ("Pharmacy GST No", print_profile.get("gst_no", "")),
+        ("Pharmacy Licence No", print_profile.get("licence_no", "")),
+    ]
+
+    for row_number, (label, value) in enumerate(summary_rows, start=3):
+        summary.cell(row=row_number, column=1, value=label)
+        summary.cell(row=row_number, column=2, value=value)
+        summary.cell(row=row_number, column=1).font = header_font
+
+    item_headers = [
+        "S.No",
+        "Product",
+        "Qty",
+        "Batch",
+        "Expiry",
+        "MRP",
+        "Amount",
+        "Discount %",
+        "Discount Amount",
+        "Net Amount",
+        "CGST",
+        "SGST",
+    ]
+    detail.append(item_headers)
+    for cell in detail[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for index, item in enumerate(items, start=1):
+        net_amount = money(item.net_amount if item.net_amount is not None else item.amount)
+        detail.append([
+            index,
+            item.name or "",
+            item.qty or 0,
+            item.batch or "",
+            item.expiry or "",
+            money(item.price),
+            money(item.amount),
+            money(item.discount_percent),
+            money(item.discount_amount),
+            net_amount,
+            round(net_amount * 0.025, 2),
+            round(net_amount * 0.025, 2),
+        ])
+
+    total_row = detail.max_row + 1
+    detail.cell(row=total_row, column=1, value="TOTAL")
+    detail.cell(row=total_row, column=1).font = header_font
+    for column in (3, 7, 9, 10, 11, 12):
+        letter = get_column_letter(column)
+        detail.cell(row=total_row, column=column, value=f"=SUM({letter}2:{letter}{total_row - 1})")
+        detail.cell(row=total_row, column=column).font = header_font
+
+    detail.freeze_panes = "A2"
+    for sheet in (summary, detail):
+        auto_size_columns(sheet)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
 # ---------------- PART-3: VIEW / PRINT INVOICE ----------------
 @app.route("/invoice/<int:id>")
 @login_required
@@ -8863,6 +8993,22 @@ def view_invoice(id):
         _external=True,
     )
     return render_invoice_page(inv, share_url=share_url, is_public_invoice=False)
+
+
+@app.route("/invoice/<int:id>/excel")
+@login_required
+@invoice_access_required
+def export_invoice_excel(id):
+    inv = Invoice.query.get_or_404(id)
+    output = build_single_invoice_excel(inv)
+    safe_invoice_no = secure_filename(inv.invoice_no or f"invoice_{inv.id}") or f"invoice_{inv.id}"
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=f"{safe_invoice_no}_Excel_Report.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        max_age=0,
+    )
 
 
 @app.route("/invoice/share/<token>")
