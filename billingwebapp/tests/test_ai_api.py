@@ -28,6 +28,7 @@ class AIIntegrationAPITests(unittest.TestCase):
             os.path.join(cls.temp_dir.name, "ai_api.db")
         )
         os.environ["SECRET_KEY"] = "ai-api-test-session-secret"
+        os.environ["CSRF_PROTECTION"] = "0"
         os.environ["APP_TIMEZONE"] = "Asia/Kolkata"
         os.environ["APP_STORAGE_ROOT"] = os.path.join(cls.temp_dir.name, "uploads")
         os.environ["APP_BACKUP_ROOT"] = os.path.join(cls.temp_dir.name, "backups")

@@ -6,7 +6,7 @@
 
 {% set ns = namespace(total_sales=0.0, cash=0, online=0, high=0) %}
 {% set show_admin_invoice_cards = session.get("role") == "admin" %}
-{% for i in invoices %}
+{% for i in invoices if not (i.is_cancelled in (true, 1, '1', 'true', 't')) %}
     {% set ns.total_sales = ns.total_sales + (i.total or 0) %}
     {% if (i.payment_mode or 'CASH')|upper == 'CASH' %}
         {% set ns.cash = ns.cash + 1 %}
@@ -107,14 +107,22 @@
                     {% if invoices %}
                         {% for i in invoices %}
                         {% set pay_mode = (i.payment_mode or 'CASH')|upper %}
+                        {% set is_cancelled = i.is_cancelled in (true, 1, '1', 'true', 't') %}
                         <tr
                             data-payment="{{ pay_mode }}"
-                            data-total="{{ '%.2f'|format(i.total or 0) }}"
+                            data-cancelled="{{ '1' if is_cancelled else '0' }}"
+                            data-total="{{ '0.00' if is_cancelled else '%.2f'|format(i.total or 0) }}"
+                            {% if is_cancelled %}style="opacity:0.6"{% endif %}
                             data-date="{{ i.created_at.strftime('%Y-%m-%d') if i.created_at else '' }}"
                         >
                             <td>
                                 <strong>{{ i.invoice_no }}</strong>
+                                {% if is_cancelled %}
+                                <div><span class="app-badge danger">CANCELLED</span></div>
+                                <div class="app-inline-help">{{ i.cancel_reason or 'Cancelled' }}{% if i.cancelled_by %} · {{ i.cancelled_by }}{% endif %}</div>
+                                {% else %}
                                 <div class="app-inline-help">Invoice record</div>
+                                {% endif %}
                             </td>
                             <td>
                                 <strong>{{ i.customer }}</strong>
@@ -148,15 +156,18 @@
                                         <a href="/invoice/{{ i.id }}">View</a>
                                         <a href="/invoice/{{ i.id }}?print=1" target="_blank">Print</a>
                                         <a href="/invoice/{{ i.id }}/excel">Excel</a>
+                                        {% if not is_cancelled %}
                                         <a href="/return-medicine?invoice_no={{ i.invoice_no }}">Return</a>
                                         {% if session.get("role") == "admin" %}
                                         <a href="/invoice/edit/{{ i.id }}">Edit</a>
                                         {% endif %}
                                         {% if session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}
-                                        <a class="danger"
-                                           href="/delete-invoice/{{ i.id }}"
-                                           data-async-action="true"
-                                           onclick="return confirm('Delete invoice?')">Delete</a>
+                                        <form method="post" action="/invoice/cancel/{{ i.id }}" class="invoice-cancel-form" style="margin:0"
+                                              onsubmit="var r = prompt('Cancel invoice {{ i.invoice_no }}? Stock will be restored and the invoice kept as CANCELLED.\nReason:'); if (r === null) return false; this.reason.value = r; return true;">
+                                            <input type="hidden" name="reason" value="">
+                                            <button type="submit" class="danger" style="background:none;border:0;padding:0;color:inherit;cursor:pointer;font:inherit;text-align:left;width:100%">Cancel Invoice</button>
+                                        </form>
+                                        {% endif %}
                                         {% endif %}
                                     </div>
                                 </details>

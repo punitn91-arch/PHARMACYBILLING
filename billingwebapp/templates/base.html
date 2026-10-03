@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ app_csrf_token() }}">
+    <script src="{{ url_for('static', filename='csrf.js') }}"></script>
     <title>{% block title %}Pharmacy Billing{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -988,18 +990,10 @@
         <a href="/billing">🧾 POS Invoice</a>
         <a href="/invoices">📄 Manage Invoice</a>
         <a href="/return-bills">&#8617; Return Bills</a>
+        <a href="/quarantine-stock" class="{% if request.path.startswith('/quarantine-stock') %}active{% endif %}">&#9888; Quarantine Stock</a>
         <a href="/pending-bills">&#9203; Pending Bills</a>
         {% if session.get("role") == "admin" %}
         <a href="/stock-sale" class="{% if request.path.startswith('/stock-sale') %}active{% endif %}">📦 Stock Sale</a>
-        {% endif %}
-        {% endif %}
-
-        {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
-        <h4>Lab</h4>
-        <a href="/lab-billing" class="{% if request.path.startswith('/lab-billing') %}active{% endif %}">🧪 Lab Billing</a>
-        <a href="/lab-orders" class="{% if request.path.startswith('/lab-orders') or request.path.startswith('/lab-order/') %}active{% endif %}">🧾 Lab Orders</a>
-        {% if session.get("role") == "admin" %}
-        <a href="/lab-tests" class="{% if request.path.startswith('/lab-tests') %}active{% endif %}">🧪 Lab Test Master</a>
         {% endif %}
         {% endif %}
 
@@ -1014,6 +1008,8 @@
   </a>
 </li>
 {% endif %}
+        <a href="/expiring-soon" class="{% if request.path.startswith('/expiring-soon') %}active{% endif %}">⏰ Expiry Management</a>
+        <a href="/order-list" class="{% if request.path.startswith('/order-list') %}active{% endif %}">🛒 Reorder List</a>
         <a href="/company">🏭 Company Master</a>
         <a href="/category">📦 Category Master</a>
         <a href="/salt">🧪 Salt Master</a>
@@ -1025,9 +1021,23 @@
         {% endif %}
         <a href="/customer" class="{% if request.path == '/customer' or request.path.startswith('/patients') %}active{% endif %}">👤 Customer Master</a>
 
+        {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
+        <h4>Lab</h4>
+        <a href="/lab-billing" class="{% if request.path.startswith('/lab-billing') %}active{% endif %}">🧪 Lab Billing</a>
+        <a href="/lab-orders" class="{% if request.path.startswith('/lab-orders') or request.path.startswith('/lab-order/') %}active{% endif %}">🧾 Lab Orders</a>
+        {% if session.get("role") == "admin" %}
+        <a href="/lab-tests" class="{% if request.path.startswith('/lab-tests') %}active{% endif %}">🧪 Lab Test Master</a>
+        {% endif %}
+        {% endif %}
+
         <h4>Reports</h4>
         {% if session.get("role") == "admin" or session.get("can_view_reports") %}
 <a href="/reports">📊 Reports</a>
+<a href="/reports/gst" class="{% if request.path.startswith('/reports/gst') %}active{% endif %}">🧾 GST Summary</a>
+<a href="/reports/schedule-h1" class="{% if request.path.startswith('/reports/schedule-h1') %}active{% endif %}">℞ Schedule H1 Register</a>
+{% endif %}
+{% if session.get("role") == "admin" %}
+<a href="/data-health" class="{% if request.path.startswith('/data-health') %}active{% endif %}">🩺 Data Health</a>
 {% endif %}
 {% if session.get("role") == "admin" or session.get("can_manage_users") or session.get("can_view_audit_logs") %}
 <h4>System</h4>
@@ -1533,7 +1543,13 @@
         link.style.pointerEvents = "none";
 
         try {
-            const response = await requestAction(link.href, "GET");
+            const linkMethod = (link.getAttribute("data-method") || "GET").toUpperCase();
+            let linkBody = null;
+            if (linkMethod !== "GET") {
+                linkBody = new FormData();
+                linkBody.append("_csrf_token", (window.appCsrfToken && window.appCsrfToken()) || "");
+            }
+            const response = await requestAction(link.href, linkMethod, linkBody);
             await handleAsyncResult(link, link.href, response);
         } catch (_err) {
             showToast("Network error. Please try again.", "danger");

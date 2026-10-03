@@ -24,6 +24,7 @@ class AIFunctionalAPITests(unittest.TestCase):
         os.environ.update({
             "DATABASE_URL": "sqlite:///{}".format(os.path.join(cls.temp_dir.name, "functional.db")),
             "SECRET_KEY": "functional-api-secret",
+            "CSRF_PROTECTION": "0",
             "APP_TIMEZONE": "Asia/Kolkata",
             "APP_STORAGE_ROOT": os.path.join(cls.temp_dir.name, "uploads"),
             "APP_PRIVATE_STORAGE_ROOT": os.path.join(cls.temp_dir.name, "private"),
@@ -390,6 +391,67 @@ class AIFunctionalAPITests(unittest.TestCase):
         self.assertEqual(collision.get_json()["error"]["code"], "APPOINTMENT_UNAVAILABLE")
         with self.app.app_context():
             self.assertEqual(self.models["Appointment"].query.count(), 1)
+
+    def test_contact_only_booking_requires_no_otp_and_is_idempotent(self):
+        """New booking path (clinic policy: booking a NEW appointment needs
+        only the caller's name + mobile, never OTP-verified proof of phone
+        possession -- the existing verified-session path above is
+        unaffected and still required for viewing/cancelling/rescheduling).
+        No X-Patient-Session header, no /patients/identify or
+        /verification/otp/* call anywhere in this test."""
+        slots = self.client.get(
+            "/api/v1/ai/appointments/slots?doctor_id={}&location_id={}&date={}".format(
+                self.doctor_id, self.location_id, self.target_date.isoformat()
+            ), headers=self.auth,
+        ).get_json()["data"]["slots"]
+        start_at = slots[0]["start_at"]
+        headers = dict(self.auth, **{"Idempotency-Key": "contact-booking-key-001"})
+        payload = {
+            "doctor_id": self.doctor_id,
+            "location_id": self.location_id,
+            "start_at": start_at,
+            "patient_name": "Contact Only Patient",
+            "mobile": "9812345670",
+        }
+        created = self.client.post("/api/v1/ai/appointments", json=payload, headers=headers)
+        self.assertEqual(created.status_code, 201, created.get_json())
+        with self.app.app_context():
+            patient = self.models["Patient"].query.get(created.get_json()["data"]["patient_id"])
+            self.assertEqual(patient.mobile, "+919812345670")
+            self.assertEqual(patient.name, "Contact Only Patient")
+
+        replay = self.client.post("/api/v1/ai/appointments", json=payload, headers=headers)
+        self.assertEqual(replay.status_code, 201)
+
+        other_headers = dict(headers, **{"Idempotency-Key": "contact-booking-key-002"})
+        collision = self.client.post("/api/v1/ai/appointments", json=payload, headers=other_headers)
+        self.assertEqual(collision.status_code, 409)
+        self.assertEqual(collision.get_json()["error"]["code"], "APPOINTMENT_UNAVAILABLE")
+
+        with self.app.app_context():
+            self.assertEqual(self.models["Appointment"].query.count(), 1)
+            self.assertEqual(self.models["Patient"].query.filter_by(mobile="+919812345670").count(), 1)
+
+    def test_contact_only_booking_missing_name_or_mobile_falls_back_to_verified_session(self):
+        """Without both patient_name and mobile, the route falls back to
+        the original verified-session requirement rather than silently
+        booking with incomplete contact info -- so a caller that omits them
+        and has no X-Patient-Session gets the same error as before this
+        change existed."""
+        slots = self.client.get(
+            "/api/v1/ai/appointments/slots?doctor_id={}&location_id={}&date={}".format(
+                self.doctor_id, self.location_id, self.target_date.isoformat()
+            ), headers=self.auth,
+        ).get_json()["data"]["slots"]
+        payload = {
+            "doctor_id": self.doctor_id, "location_id": self.location_id, "start_at": slots[0]["start_at"],
+            "patient_name": "Only Name Given",
+        }
+        response = self.client.post(
+            "/api/v1/ai/appointments", json=payload,
+            headers=dict(self.auth, **{"Idempotency-Key": "contact-booking-key-003"}),
+        )
+        self.assertEqual(response.status_code, 401)
 
     def test_verified_reschedule_and_cancel_preserve_history(self):
         patient_token = self._patient_session()

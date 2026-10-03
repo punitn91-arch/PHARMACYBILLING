@@ -71,6 +71,10 @@ class Medicine(db.Model):
     barcode = db.Column(db.String(80), index=True)
     reorder_level = db.Column(db.Integer, default=10)
     is_active = db.Column(db.Boolean, default=True)
+    # GST rate (%) included in the MRP and drug schedule ("", "H", "H1", "X")
+    # for the Schedule H1 register.
+    gst_percent = db.Column(db.Float, default=5)
+    schedule_type = db.Column(db.String(10), default="")
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
@@ -97,6 +101,9 @@ class Invoice(db.Model):
     cash_amount = db.Column(db.Numeric(10, 2), default=0)
     online_amount = db.Column(db.Numeric(10, 2), default=0)
     is_split_payment = db.Column(db.Boolean, default=False)
+    return_credit_used = db.Column(db.Float, default=0)
+    final_payable = db.Column(db.Float, default=0)
+    refund_amount = db.Column(db.Float, default=0)
     internal_note = db.Column(db.Text)
     print_profile_code = db.Column(db.String(40))
     print_address_line_1 = db.Column(db.String(255))
@@ -106,6 +113,11 @@ class Invoice(db.Model):
     print_licence_no = db.Column(db.String(80))
     print_logo_path = db.Column(db.String(255))
 
+    # Invoices are never deleted (GST rule): they are cancelled and kept.
+    is_cancelled = db.Column(db.Boolean, default=False, index=True)
+    cancelled_at = db.Column(db.DateTime)
+    cancelled_by = db.Column(db.String(50))
+    cancel_reason = db.Column(db.String(255))
 
     created_by = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
@@ -129,6 +141,10 @@ class InvoiceItem(db.Model):
     net_amount = db.Column(db.Float, default=0)
     cost_price = db.Column(db.Float, default=0)
     cost_amount = db.Column(db.Float, default=0)
+    # GST snapshot at the time of sale (MRP is GST-inclusive).
+    gst_percent = db.Column(db.Float)
+    taxable_amount = db.Column(db.Float)
+    gst_amount = db.Column(db.Float)
 
 # ================= RETURN =================
 class Return(db.Model):
@@ -144,6 +160,12 @@ class Return(db.Model):
     cgst = db.Column(db.Float, default=0)
     sgst = db.Column(db.Float, default=0)
     payment_mode = db.Column(db.String(20), default="CASH")
+    adjusted_invoice_id = db.Column(db.Integer, index=True)
+    adjusted_amount = db.Column(db.Float, default=0)
+    refund_amount = db.Column(db.Float, default=0)
+    cash_refund_amount = db.Column(db.Numeric(10, 2), default=0)
+    online_refund_amount = db.Column(db.Numeric(10, 2), default=0)
+    is_split_refund = db.Column(db.Boolean, default=False)
     is_cancelled = db.Column(db.Boolean, default=False)
     cancelled_by = db.Column(db.String(50))
     cancelled_at = db.Column(db.DateTime)
@@ -176,6 +198,46 @@ class ReturnItem(db.Model):
     net_amount = db.Column(db.Float, default=0)
     cost_price = db.Column(db.Float, default=0)
     cost_amount = db.Column(db.Float, default=0)
+    # RESTOCK = back to sellable stock, DAMAGED / EXPIRED = kept aside in
+    # quarantine (never sold again until an admin decides).
+    disposition = db.Column(db.String(20), default="RESTOCK")
+
+
+class ReturnLotAllocation(db.Model):
+    """Purchase lots that received stock back from a manual (no-invoice) return."""
+
+    __tablename__ = "return_lot_allocation"
+
+    id = db.Column(db.Integer, primary_key=True)
+    return_item_id = db.Column(db.Integer, nullable=False, index=True)
+    purchase_item_id = db.Column(db.Integer, nullable=False, index=True)
+    qty = db.Column(db.Integer, default=0)
+    cost_rate = db.Column(db.Float, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class QuarantineStock(db.Model):
+    """Damaged / expired returned units kept out of sellable stock."""
+
+    __tablename__ = "quarantine_stock"
+
+    id = db.Column(db.Integer, primary_key=True)
+    medicine_id = db.Column(db.Integer, index=True)
+    medicine_name = db.Column(db.String(150), index=True)
+    batch = db.Column(db.String(50), index=True)
+    expiry = db.Column(db.String(10))
+    qty = db.Column(db.Integer, default=0)
+    reason = db.Column(db.String(20))  # DAMAGED / EXPIRED
+    note = db.Column(db.String(255))
+    status = db.Column(db.String(20), default="PENDING", index=True)  # PENDING / RESTOCKED / WRITTEN_OFF / CANCELLED
+    return_id = db.Column(db.Integer, index=True)
+    return_item_id = db.Column(db.Integer, index=True)
+    invoice_item_id = db.Column(db.Integer)
+    cost_rate = db.Column(db.Float, default=0)
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    resolved_by = db.Column(db.String(50))
+    resolved_at = db.Column(db.DateTime)
 
 # ================= HOLD BILL =================
 class HoldBill(db.Model):

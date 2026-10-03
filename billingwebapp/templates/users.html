@@ -89,7 +89,7 @@ th { background:#0d6efd;color:#fff; }
                 <a href="/users/change-password/{{ u.id }}" class="btn btn-pass">Password</a>
 
                 {% if u.username != "admin" %}
-                    <a href="/users/delete/{{ u.id }}"
+                    <a href="/users/delete/{{ u.id }}" data-method="post"
                        class="btn btn-del"
                        data-async-action="true"
                        onclick="return confirm('Archive this user?')">

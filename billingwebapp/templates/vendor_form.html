@@ -1055,7 +1055,7 @@ td {
                                     <a href="/vendor/purchase/{{ b.id }}?mode=edit">Edit</a>
                                     <a href="/vendor/purchase/{{ b.id }}?mode=return">Return</a>
                                     <a class="vendor-history-action-danger"
-                                       href="/vendor/purchase/delete/{{ b.id }}"
+                                       href="/vendor/purchase/delete/{{ b.id }}" data-method="post"
                                        data-async-action="true"
                                        onclick="return confirm('Delete this bill? This will remove stock and all linked purchase entries from this bill.');">
                                         Delete

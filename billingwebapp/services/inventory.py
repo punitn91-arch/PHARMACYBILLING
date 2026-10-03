@@ -6,6 +6,15 @@ except ImportError:  # pragma: no cover - script/local fallback
     from models import VendorPurchase, VendorPurchaseItem, db
 
 
+def _medicine_gst(medicine):
+    value = getattr(medicine, "gst_percent", None)
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        rate = 5.0
+    return rate if 0 <= rate <= 40 else 5.0
+
+
 def build_billing_page_context(medicines):
     medicine_names = sorted({(medicine.name or "").strip() for medicine in medicines if (medicine.name or "").strip()})
     medicine_data = []
@@ -18,6 +27,8 @@ def build_billing_page_context(medicines):
             "mrp": float(medicine.mrp or 0),
             "discount": medicine.discount_percent or 0,
             "barcode": (medicine.barcode or "").strip(),
+            "gst": _medicine_gst(medicine),
+            "schedule": (getattr(medicine, "schedule_type", "") or "").strip().upper(),
             "created_at": medicine.created_at.strftime("%Y-%m-%d") if medicine.created_at else "",
         })
     return {

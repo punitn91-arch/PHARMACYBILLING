@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Quarantine Stock{% endblock %}
+{% block body %}
+<div class="app-page-stack">
+    <section class="app-surface">
+        <h2 style="margin:0 0 4px;">Quarantine Stock (Damaged / Expired Returns)</h2>
+        <div class="app-inline-help">
+            Returned units marked Damaged or Expired are kept here. They are <strong>not</strong> part of sellable stock and can never be billed by mistake.
+            An admin decides: <em>Back to stock</em> (it was fine after checking) or <em>Write off</em> (loss).
+            To send it back to the vendor, first move it back to stock and then create a Debit Note in <a href="/vendor-notes">Vendor Notes</a>.
+        </div>
+        <div class="app-chip-row" style="margin-top:10px;">
+            {% for code, label in (('PENDING','Pending'),('RESTOCKED','Restocked'),('WRITTEN_OFF','Written off'),('CANCELLED','Cancelled'),('ALL','All')) %}
+            <a class="app-chip {% if status == code %}is-active{% endif %}" href="/quarantine-stock?status={{ code }}">{{ label }}</a>
+            {% endfor %}
+        </div>
+        <div class="app-inline-help" style="margin-top:6px;">Pending value at cost: <strong>Rs {{ '%.2f'|format(pending_value) }}</strong></div>
+    </section>
+
+    <section class="app-table-shell">
+        <div class="app-table-scroll">
+            <table class="app-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Medicine</th>
+                        <th>Batch</th>
+                        <th>Qty</th>
+                        <th>Condition</th>
+                        <th>Return Bill</th>
+                        <th>Note</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr>
+                        <td>{{ row.created_at.strftime('%d-%m-%Y') if row.created_at else '-' }}</td>
+                        <td><strong>{{ row.medicine_name }}</strong></td>
+                        <td>{{ row.batch }}</td>
+                        <td>{{ row.qty }}</td>
+                        <td><span class="app-badge {% if row.reason == 'EXPIRED' %}warning{% else %}danger{% endif %}">{{ row.reason }}</span></td>
+                        <td>{% if row.return_id %}<a href="/return-invoice/{{ row.return_id }}">{{ return_numbers.get(row.return_id, row.return_id) }}</a>{% else %}-{% endif %}</td>
+                        <td>{{ row.note or '-' }}</td>
+                        <td>{{ row.status }}{% if row.resolved_by %}<div class="app-inline-help">{{ row.resolved_by }}</div>{% endif %}</td>
+                        <td>
+                            {% if row.status == 'PENDING' and is_admin %}
+                            <form method="post" action="/quarantine-stock/{{ row.id }}/restock" style="display:inline"
+                                  onsubmit="return confirm('Move {{ row.qty }} unit(s) back to sellable stock?');">
+                                <button type="submit" class="app-button secondary" style="padding:2px 8px;">Back to stock</button>
+                            </form>
+                            <form method="post" action="/quarantine-stock/{{ row.id }}/write-off" style="display:inline"
+                                  onsubmit="var n = prompt('Write off {{ row.qty }} unit(s)? Optional note:'); if (n === null) return false; this.note.value = n; return true;">
+                                <input type="hidden" name="note" value="">
+                                <button type="submit" class="app-button secondary" style="padding:2px 8px;">Write off</button>
+                            </form>
+                            {% elif row.status == 'PENDING' %}
+                            Waiting for admin
+                            {% else %}-{% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="9"><div class="app-empty"><strong>Nothing here</strong> No quarantine items for this filter.</div></td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

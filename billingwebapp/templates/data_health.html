@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Data Health{% endblock %}
+{% block body %}
+<div class="app-page-stack">
+    <section class="app-surface">
+        <h2 style="margin:0 0 4px;">Data Health Check</h2>
+        <div class="app-inline-help">Problems in stock data that can make bills, returns or reports wrong. Fix the red items first.</div>
+    </section>
+
+    <section class="app-stat-grid">
+        <article class="app-stat-card">
+            <div class="app-stat-label">Duplicate batch rows</div>
+            <div class="app-stat-value" {% if report.duplicates %}style="color:#b00020;"{% endif %}>{{ report.duplicates|length }}</div>
+            <div class="app-stat-sub">Same medicine + batch saved twice</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Expired but in stock</div>
+            <div class="app-stat-value" {% if report.expired %}style="color:#b00020;"{% endif %}>{{ report.expired|length }}</div>
+            <div class="app-stat-sub"><a href="/expiring-soon">Open expiry screen</a></div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Stock ≠ vendor lots</div>
+            <div class="app-stat-value">{{ report.mismatches|length }}</div>
+            <div class="app-stat-sub">Medicine qty differs from purchase lots</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Cost above MRP</div>
+            <div class="app-stat-value">{{ report.costly_lots|length }}</div>
+            <div class="app-stat-sub">Purchase rate + GST &gt; MRP</div>
+        </article>
+    </section>
+
+    <section class="app-surface">
+        <h3 style="margin-top:0;">Duplicate rows</h3>
+        {% for group in report.duplicates %}
+        <div style="border:1px solid #e5ebf3;border-radius:10px;padding:10px;margin-bottom:8px;">
+            <strong>{{ group[0].name }}</strong> · batch {{ group[0].batch }}
+            <table class="app-table" style="margin-top:6px;">
+                <thead><tr><th>Row ID</th><th>Expiry</th><th>MRP</th><th>Stock</th><th>Created</th><th>Merge into first row</th></tr></thead>
+                <tbody>
+                    {% for med in group %}
+                    <tr>
+                        <td>#{{ med.id }}</td>
+                        <td>{{ med.expiry }}</td>
+                        <td>{{ med.mrp }}</td>
+                        <td>{{ med.qty }}</td>
+                        <td>{{ med.created_at.strftime('%d-%m-%Y') if med.created_at else '-' }}</td>
+                        <td>
+                            {% if not loop.first %}
+                            <form method="post" action="/data-health/merge-duplicate" onsubmit="return confirm('Move stock and history links of row #{{ med.id }} into row #{{ group[0].id }} and archive #{{ med.id }}?');">
+                                <input type="hidden" name="keep_id" value="{{ group[0].id }}">
+                                <input type="hidden" name="merge_id" value="{{ med.id }}">
+                                <button type="submit" class="app-button secondary" style="padding:2px 8px;">Merge into #{{ group[0].id }}</button>
+                            </form>
+                            {% else %}<span class="app-badge success">Keep</span>{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="app-inline-help">No duplicates. 👍</div>
+        {% endfor %}
+    </section>
+
+    <section class="app-surface">
+        <h3 style="margin-top:0;">Stock vs vendor lots mismatch</h3>
+        {% if report.mismatches %}
+        <table class="app-table">
+            <thead><tr><th>Medicine</th><th>Batch</th><th>Medicine Master qty</th><th>Vendor lots qty</th></tr></thead>
+            <tbody>
+                {% for row in report.mismatches %}
+                <tr><td>{{ row.medicine.name }}</td><td>{{ row.medicine.batch }}</td><td>{{ row.medicine.qty }}</td><td>{{ row.lot_qty }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="app-inline-help">Usually caused by manual stock edits or old manual returns. Correct via purchase edit or a stock adjustment.</div>
+        {% else %}
+        <div class="app-inline-help">All batches with purchase lots match. 👍</div>
+        {% endif %}
+    </section>
+
+    <section class="app-surface">
+        <h3 style="margin-top:0;">Purchase cost above MRP</h3>
+        {% if report.costly_lots %}
+        <table class="app-table">
+            <thead><tr><th>Medicine</th><th>Batch</th><th>Purchase rate</th><th>GST %</th><th>Landed cost</th><th>MRP</th><th>Purchase</th></tr></thead>
+            <tbody>
+                {% for row in report.costly_lots %}
+                <tr>
+                    <td>{{ row.lot.medicine_name }}</td>
+                    <td>{{ row.lot.batch }}</td>
+                    <td>{{ row.lot.purchase_rate }}</td>
+                    <td>{{ row.lot.gst_percent }}</td>
+                    <td><strong>{{ row.landed }}</strong></td>
+                    <td>{{ row.lot.mrp }}</td>
+                    <td><a href="/vendor/purchase/{{ row.lot.purchase_id }}">Open bill</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="app-inline-help">No purchase lot costs more than its MRP. 👍</div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

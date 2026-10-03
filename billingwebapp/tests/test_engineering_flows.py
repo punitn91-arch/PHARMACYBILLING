@@ -16,6 +16,7 @@ class EngineeringFlowTests(unittest.TestCase):
         cls.db_path = os.path.join(cls.temp_dir.name, "engineering_test.db")
         os.environ["DATABASE_URL"] = f"sqlite:///{cls.db_path}"
         os.environ["SECRET_KEY"] = "engineering-test-secret"
+        os.environ["CSRF_PROTECTION"] = "0"
         os.environ["APP_TIMEZONE"] = "Asia/Kolkata"
         os.environ["ENABLE_BACKGROUND_JOBS"] = "0"
         os.environ["APP_STORAGE_ROOT"] = os.path.join(cls.temp_dir.name, "uploads")
@@ -365,8 +366,9 @@ class EngineeringFlowTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("₹1.19", html)
-        self.assertNotIn("₹1.25", html)
+        # MRP is GST-inclusive: 47.50 x 5/105 = 2.26 -> CGST 1.13 + SGST 1.13
+        self.assertIn("₹1.13", html)
+        self.assertNotIn("₹1.19", html)
 
     def test_invoice_print_profile_backfill_respects_cutover_date(self):
         with self.app.app_context():
@@ -1896,10 +1898,11 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(context["refund_total"], 230.0)
             self.assertEqual(context["cgst_total"], 7.5)
             self.assertEqual(context["sgst_total"], 7.5)
-            self.assertEqual(context["items"][0]["cgst_amount"], 4.5)
-            self.assertEqual(context["items"][0]["sgst_amount"], 4.5)
-            self.assertEqual(context["items"][1]["cgst_amount"], 3.0)
-            self.assertEqual(context["items"][1]["sgst_amount"], 3.0)
+            # GST is inside the net amount: 180 @5% -> 8.57 tax, 50 @12% -> 5.36 tax
+            self.assertEqual(context["items"][0]["cgst_amount"], 4.29)
+            self.assertEqual(context["items"][0]["sgst_amount"], 4.29)
+            self.assertEqual(context["items"][1]["cgst_amount"], 2.68)
+            self.assertEqual(context["items"][1]["sgst_amount"], 2.68)
             self.assertEqual(context["customer"], "Corrected Return Name")
             self.assertEqual(context["doctor"], "Dr. Abhishek Prakash")
             self.assertEqual(context["gender"], "FEMALE")
@@ -1924,8 +1927,8 @@ class EngineeringFlowTests(unittest.TestCase):
             "₹250.00",
             "₹20.00",
             "₹230.00",
-            "₹4.50",
-            "₹3.00",
+            "₹4.29",
+            "₹2.68",
         ):
             self.assertIn(expected, html)
 
@@ -2476,7 +2479,7 @@ class EngineeringFlowTests(unittest.TestCase):
             staff_id = staff.id
 
         self.login()
-        archive_response = self.client.get(f"/users/delete/{staff_id}", follow_redirects=False)
+        archive_response = self.client.post(f"/users/delete/{staff_id}", follow_redirects=False)
         self.assertEqual(archive_response.status_code, 302)
 
         with self.app.app_context():
@@ -2532,7 +2535,7 @@ class EngineeringFlowTests(unittest.TestCase):
             hold_bill_id = hold_bill.id
 
         self.login()
-        response = self.client.get(f"/delete-hold/{hold_bill_id}", follow_redirects=False)
+        response = self.client.post(f"/delete-hold/{hold_bill_id}", follow_redirects=False)
         self.assertEqual(response.status_code, 302)
 
         with self.app.app_context():
@@ -3108,7 +3111,7 @@ class EngineeringFlowTests(unittest.TestCase):
         original_helper = self.app_module.user_boolean_storage_mode_map
         self.app_module.user_boolean_storage_mode_map = lambda: {"is_active": "integer"}
         try:
-            response = self.client.get(f"/users/delete/{staff_user_id}", follow_redirects=False)
+            response = self.client.post(f"/users/delete/{staff_user_id}", follow_redirects=False)
             self.assertEqual(response.status_code, 302)
         finally:
             self.app_module.user_boolean_storage_mode_map = original_helper

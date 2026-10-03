@@ -282,6 +282,95 @@ tr.item-row {
     color: #352a17;
 }
 
+.exchange-panel {
+    background: #fff7ed;
+    border-color: #d7932e;
+}
+
+.exchange-search {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.exchange-search input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #bdb6a5;
+    font-size: 12px;
+}
+
+.exchange-results {
+    margin-top: 8px;
+    display: grid;
+    gap: 5px;
+}
+
+.exchange-result {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+    border: 1px solid #dfc58a;
+    background: #fff;
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.exchange-result button,
+.exchange-btn {
+    background: #8a6c21;
+    color: #fff;
+    border: 1px solid #6b5419;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.exchange-context {
+    margin-top: 8px;
+    display: none;
+    border: 1px solid #dfc58a;
+    background: #fff;
+    padding: 8px;
+    font-size: 12px;
+}
+
+.exchange-context.is-active {
+    display: block;
+}
+
+.exchange-row {
+    background: #fff4e5;
+}
+
+.exchange-row.blocked {
+    color: #7a6f58;
+    background: #f2eee4;
+}
+
+.exchange-row input[type="number"] {
+    width: 64px;
+    text-align: center;
+}
+
+.exchange-credit {
+    color: #0f6a3d;
+    font-weight: 700;
+}
+
+.exchange-override {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+    color: #6b5419;
+}
+
 #billTable .qty-input {
     width: 60px;
     text-align: center;
@@ -560,14 +649,59 @@ tr.item-row {
         <div style="margin-top:8px;"></div>
     </div>
 
+    <div class="panel exchange-panel">
+        <h3 class="panel-title">Return / Exchange Adjustment</h3>
+        <div class="exchange-search">
+            <input type="search" id="exchangeInvoiceSearch" placeholder="Search old invoice by invoice no, patient name, or mobile" autocomplete="off">
+            <button type="button" class="exchange-btn" id="exchangeInvoiceSearchBtn">Search</button>
+        </div>
+        <div id="exchangeSearchStatus" class="panel-help">Return credit can be adjusted against this bill. Original invoice is never edited.</div>
+        {% if session.get("role") == "admin" %}
+        <label class="exchange-override">
+            <input type="checkbox" id="exchangeReturnOverrideWindow" name="exchange_return_override_window" value="1">
+            Admin override: allow return outside configured return window
+        </label>
+        {% endif %}
+        <div id="exchangeSearchResults" class="exchange-results"></div>
+        <div id="exchangeContext" class="exchange-context">
+            <input type="hidden" name="exchange_return_invoice_id" id="exchangeReturnInvoiceId" value="">
+            <div id="exchangeLoadedInfo"></div>
+            <div style="margin-top:8px; overflow-x:auto;">
+                <table id="exchangeReturnTable">
+                    <thead>
+                        <tr>
+                            <th>Medicine</th>
+                            <th>Batch</th>
+                            <th>Expiry</th>
+                            <th>Sold</th>
+                            <th>Returned</th>
+                            <th>Returnable</th>
+                            <th>Rate</th>
+                            <th>Disc %</th>
+                            <th>GST %</th>
+                            <th>Return Qty</th>
+                            <th>Credit</th>
+                            <th>Condition</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="panel-help">Cold-chain/refrigerated items and invoices outside the return window are blocked automatically.</div>
+        </div>
+    </div>
+
     <div class="summary-bar pos-sticky-summary">
         <div class="summary-grid">
             <div class="sum-box"><b>Subtotal</b><span>Rs <span id="subtotal">0</span></span></div>
             <div class="sum-box"><b>Discount</b><span>Rs <span id="discount">0</span></span></div>
-            <div class="sum-box"><b>CGST 2.5%</b><span>Rs <span id="cgst">0</span></span></div>
-            <div class="sum-box"><b>SGST 2.5%</b><span>Rs <span id="sgst">0</span></span></div>
+            <div class="sum-box"><b>CGST</b><span>Rs <span id="cgst">0</span></span></div>
+            <div class="sum-box"><b>SGST</b><span>Rs <span id="sgst">0</span></span></div>
             <div class="sum-box"><b>Net Total</b><span>Rs <span id="grand">0</span></span></div>
             <div class="sum-box"><b>Rounded Amt</b><span>Rs <span id="rounded">0.00</span></span></div>
+            <div class="sum-box"><b>Return Adjustment</b><span>- Rs <span id="returnCredit">0.00</span></span></div>
+            <div class="sum-box"><b>Final Payable</b><span>Rs <span id="finalPayable">0.00</span></span></div>
         </div>
         <input type="hidden" name="subtotal" id="subtotalInput" value="0">
         <input type="hidden" name="discount" id="discountInput" value="0">
@@ -575,6 +709,10 @@ tr.item-row {
         <input type="hidden" name="sgst" id="sgstInput" value="0">
         <input type="hidden" name="net_total" id="netTotalInput" value="0">
         <input type="hidden" name="rounded_amount" id="roundedInput" value="0">
+        <input type="hidden" name="return_credit_total" id="returnCreditInput" value="0">
+        <input type="hidden" name="final_payable" id="finalPayableInput" value="0">
+        <input type="hidden" name="refund_due" id="refundDueInput" value="0">
+        <div class="panel-help" id="exchangeFinalNote">Collect payment as per final payable.</div>
 
         <div class="payment">
             <div class="payment-field">
@@ -684,9 +822,10 @@ function syncPaymentBreakdown() {
     let splitCashInput = document.getElementById("splitCashAmountInput");
     let onlineAmountInput = document.getElementById("onlineAmountInput");
     let roundedInput = document.getElementById("roundedInput");
+    let finalPayableInput = document.getElementById("finalPayableInput");
     if (!paymentSelect || !splitCashInput || !onlineAmountInput || !roundedInput) return;
 
-    let roundedAmount = toNum(roundedInput.value, 0);
+    let roundedAmount = Math.max(toNum(finalPayableInput ? finalPayableInput.value : roundedInput.value, 0), 0);
     let rawSplitCash = String(splitCashInput.value || "").trim();
     let splitCash = rawSplitCash === "" ? 0 : toNum(rawSplitCash, 0);
     let paymentMode = String(paymentSelect.value || "CASH").toUpperCase();
@@ -754,6 +893,7 @@ function addRow() {
     row.dataset.medicineName = "";
     row.dataset.totalStock = "";
     row.dataset.netAmount = "";
+    row.dataset.gstAmount = "";
     row.dataset.discountAmount = "";
     row.dataset.restoredSnapshot = "";
     row.classList.add("is-empty");
@@ -805,6 +945,7 @@ function updateRow(el) {
     let amountTotal = 0;
     let discountTotal = 0;
     let net = 0;
+    let gstTotal = 0;
 
     if (autoMode) {
         let remaining = qty;
@@ -815,6 +956,7 @@ function updateRow(el) {
             let lineDisc = lineAmt * (b.discount / 100);
             amountTotal += lineAmt;
             discountTotal += lineDisc;
+            gstTotal += inclusiveGst(lineAmt - lineDisc, batchGstRate(b));
             remaining -= take;
             if (remaining === 0) break;
         }
@@ -836,6 +978,8 @@ function updateRow(el) {
         amountTotal = qty * price;
         discountTotal = amountTotal * discp / 100;
         net = amountTotal - discountTotal;
+        let selectedBatch = batchSelect ? getAllBatches(name).find(b => b.batch === batchSelect.value) : null;
+        gstTotal = inclusiveGst(net, batchGstRate(selectedBatch));
 
         row.querySelector(".exp").innerText = row.dataset.expiry || "-";
         row.querySelector(".price").innerText = price.toFixed(2);
@@ -844,10 +988,37 @@ function updateRow(el) {
 
     row.dataset.netAmount = net;
     row.dataset.discountAmount = discountTotal;
+    row.dataset.gstAmount = gstTotal;
     row.querySelector(".net").innerText = net.toFixed(2);
     syncRowHidden(row);
 
     calculateTotal();
+}
+
+// MRP already includes GST, so GST = net x rate / (100 + rate).
+function inclusiveGst(amount, rate) {
+    let value = toNum(amount, 0);
+    let pct = toNum(rate, 5);
+    if (pct <= 0 || value <= 0) return 0;
+    return value - (value * 100 / (100 + pct));
+}
+
+function batchGstRate(batch) {
+    if (batch && batch.gst !== undefined && batch.gst !== null && batch.gst !== "") return toNum(batch.gst, 5);
+    return 5;
+}
+
+function rowGstAmount(r) {
+    if (r.dataset.gstAmount !== undefined && r.dataset.gstAmount !== "") return toNum(r.dataset.gstAmount, 0);
+    let name = r.dataset.medicineName || "";
+    let batches = name ? getAllBatches(name) : [];
+    return inclusiveGst(toNum(r.dataset.netAmount, 0), batchGstRate(batches[0]));
+}
+
+function sumBillGst() {
+    let gst = 0;
+    document.querySelectorAll(".item").forEach(r => { gst += rowGstAmount(r); });
+    return gst;
 }
 
 function calculateTotal() {
@@ -861,8 +1032,9 @@ function calculateTotal() {
         discount += discAmt;
     });
 
-    let cgst = subtotal * 0.025;
-    let sgst = subtotal * 0.025;
+    let gstTotal = sumBillGst();
+    let cgst = Math.round(gstTotal * 50) / 100;
+    let sgst = cgst;
 
     document.getElementById("subtotal").innerText = subtotal.toFixed(2);
     document.getElementById("discount").innerText = discount.toFixed(2);
@@ -870,8 +1042,32 @@ function calculateTotal() {
     document.getElementById("sgst").innerText = sgst.toFixed(2);
     document.getElementById("grand").innerText = subtotal.toFixed(2);
     let rounded = Math.round(subtotal);
+    let returnCredit = calculateReturnCredit();
+    let finalPayable = rounded - returnCredit;
+    let refundDue = Math.max(-finalPayable, 0);
+    let payableToCollect = Math.max(finalPayable, 0);
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = rounded.toFixed(2);
+    let returnCreditEl = document.getElementById("returnCredit");
+    if (returnCreditEl) returnCreditEl.innerText = returnCredit.toFixed(2);
+    let finalPayableEl = document.getElementById("finalPayable");
+    if (finalPayableEl) finalPayableEl.innerText = payableToCollect.toFixed(2);
+    let returnCreditInput = document.getElementById("returnCreditInput");
+    if (returnCreditInput) returnCreditInput.value = returnCredit.toFixed(2);
+    let finalPayableInput = document.getElementById("finalPayableInput");
+    if (finalPayableInput) finalPayableInput.value = payableToCollect.toFixed(2);
+    let refundDueInput = document.getElementById("refundDueInput");
+    if (refundDueInput) refundDueInput.value = refundDue.toFixed(2);
+    let finalNote = document.getElementById("exchangeFinalNote");
+    if (finalNote) {
+        if (refundDue > 0) {
+            finalNote.textContent = `Refund/Credit Due: Rs ${refundDue.toFixed(2)}`;
+        } else if (payableToCollect === 0 && returnCredit > 0) {
+            finalNote.textContent = "No payment needed. Return credit fully adjusts this bill.";
+        } else {
+            finalNote.textContent = "Collect payment as per final payable.";
+        }
+    }
     syncSummaryHidden(subtotal, discount, cgst, sgst, subtotal, rounded);
     syncPaymentBreakdown();
 }
@@ -904,6 +1100,7 @@ function resetBillUI() {
         first.dataset.medicineName = "";
         first.dataset.totalStock = "";
         first.dataset.netAmount = "";
+        first.dataset.gstAmount = "";
         first.dataset.discountAmount = "";
         first.dataset.restoredSnapshot = "";
         let qtyInput = first.querySelector(".qty-input");
@@ -925,6 +1122,17 @@ function resetBillUI() {
     document.getElementById("grand").innerText = "0";
     let roundedEl = document.getElementById("rounded");
     if (roundedEl) roundedEl.innerText = "0.00";
+    let returnCreditEl = document.getElementById("returnCredit");
+    if (returnCreditEl) returnCreditEl.innerText = "0.00";
+    let finalPayableEl = document.getElementById("finalPayable");
+    if (finalPayableEl) finalPayableEl.innerText = "0.00";
+    let returnCreditInput = document.getElementById("returnCreditInput");
+    if (returnCreditInput) returnCreditInput.value = "0.00";
+    let finalPayableInput = document.getElementById("finalPayableInput");
+    if (finalPayableInput) finalPayableInput.value = "0.00";
+    let refundDueInput = document.getElementById("refundDueInput");
+    if (refundDueInput) refundDueInput.value = "0.00";
+    clearExchangeInvoice();
     syncSummaryHidden(0, 0, 0, 0, 0, 0);
     let splitCashInput = document.getElementById("splitCashAmountInput");
     if (splitCashInput) splitCashInput.value = "";
@@ -970,6 +1178,16 @@ let barcodeScanButton = document.getElementById("barcodeScanButton");
 let barcodeStatus = document.getElementById("barcodeStatus");
 let paymentModeSelect = document.getElementById("paymentModeSelect");
 let splitCashAmountInput = document.getElementById("splitCashAmountInput");
+let exchangeInvoiceSearch = document.getElementById("exchangeInvoiceSearch");
+let exchangeInvoiceSearchBtn = document.getElementById("exchangeInvoiceSearchBtn");
+let exchangeSearchResults = document.getElementById("exchangeSearchResults");
+let exchangeSearchStatus = document.getElementById("exchangeSearchStatus");
+let exchangeContext = document.getElementById("exchangeContext");
+let exchangeLoadedInfo = document.getElementById("exchangeLoadedInfo");
+let exchangeReturnInvoiceId = document.getElementById("exchangeReturnInvoiceId");
+let exchangeReturnTable = document.getElementById("exchangeReturnTable");
+let exchangeReturnOverrideWindow = document.getElementById("exchangeReturnOverrideWindow");
+let loadedExchangeInvoice = null;
 let activeRow = document.querySelector(".item");
 let f2OnQty = false;
 let medicineData = {{ medicine_data|tojson }};
@@ -1012,6 +1230,147 @@ function setBarcodeStatus(message, tone = "") {
     if (!barcodeStatus) return;
     barcodeStatus.textContent = message || "";
     barcodeStatus.className = "barcode-status" + (tone ? ` ${tone}` : "");
+}
+
+function setExchangeStatus(message) {
+    if (exchangeSearchStatus) exchangeSearchStatus.textContent = message || "";
+}
+
+function escapeHtml(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (ch) {
+        return {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        }[ch];
+    });
+}
+
+function calculateReturnCredit() {
+    let total = 0;
+    document.querySelectorAll(".exchange-return-qty").forEach(input => {
+        let qty = toNum(input.value, 0);
+        let unitNet = toNum(input.dataset.unitNet || "0", 0);
+        total += qty * unitNet;
+        let row = input.closest("tr");
+        let creditCell = row ? row.querySelector(".exchange-line-credit") : null;
+        if (creditCell) creditCell.textContent = (qty * unitNet).toFixed(2);
+    });
+    return Math.max(total, 0);
+}
+
+function clearExchangeInvoice() {
+    loadedExchangeInvoice = null;
+    if (exchangeReturnInvoiceId) exchangeReturnInvoiceId.value = "";
+    if (exchangeLoadedInfo) exchangeLoadedInfo.textContent = "";
+    if (exchangeReturnTable) {
+        let tbody = exchangeReturnTable.querySelector("tbody");
+        if (tbody) tbody.innerHTML = "";
+    }
+    if (exchangeContext) exchangeContext.classList.remove("is-active");
+}
+
+function renderExchangeResults(invoices) {
+    if (!exchangeSearchResults) return;
+    exchangeSearchResults.innerHTML = "";
+    if (!invoices.length) {
+        setExchangeStatus("No matching invoice found.");
+        return;
+    }
+    setExchangeStatus(`${invoices.length} matching invoice(s) found.`);
+    invoices.forEach(inv => {
+        let row = document.createElement("div");
+        row.className = "exchange-result";
+        row.innerHTML = `
+            <div><b>${escapeHtml(inv.invoice_no || "-")}</b> · ${escapeHtml(inv.customer || "-")} · ${escapeHtml(inv.mobile || "-")} · ${escapeHtml(inv.date || "-")} · Rs ${toNum(inv.total, 0).toFixed(2)}</div>
+            <button type="button">Load</button>
+        `;
+        row.querySelector("button").addEventListener("click", function () {
+            loadExchangeInvoice(inv.id);
+        });
+        exchangeSearchResults.appendChild(row);
+    });
+}
+
+function searchExchangeInvoices() {
+    let q = (exchangeInvoiceSearch ? exchangeInvoiceSearch.value : "").trim();
+    if (q.length < 2) {
+        setExchangeStatus("Enter at least 2 characters to search old invoices.");
+        return;
+    }
+    setExchangeStatus("Searching invoices...");
+    fetch(`/billing/return-search?q=${encodeURIComponent(q)}`)
+        .then(resp => resp.json())
+        .then(data => renderExchangeResults(data.invoices || []))
+        .catch(() => setExchangeStatus("Unable to search invoices. Please retry."));
+}
+
+function loadExchangeInvoice(invoiceId) {
+    setExchangeStatus("Loading returnable items...");
+    fetch(`/billing/return-invoice/${invoiceId}`)
+        .then(resp => resp.json())
+        .then(data => {
+            if (!data.ok || !data.invoice) {
+                setExchangeStatus("Unable to load invoice.");
+                return;
+            }
+            renderExchangeInvoice(data.invoice);
+        })
+        .catch(() => setExchangeStatus("Unable to load invoice. Please retry."));
+}
+
+function renderExchangeInvoice(invoice) {
+    clearExchangeInvoice();
+    loadedExchangeInvoice = invoice;
+    let overrideWindow = !!(exchangeReturnOverrideWindow && exchangeReturnOverrideWindow.checked);
+    if (exchangeReturnInvoiceId) exchangeReturnInvoiceId.value = invoice.id;
+    if (exchangeLoadedInfo) {
+        exchangeLoadedInfo.innerHTML = `<b>Loaded:</b> ${escapeHtml(invoice.invoice_no || "-")} · ${escapeHtml(invoice.customer || "-")} · ${escapeHtml(invoice.mobile || "-")} · ${escapeHtml(invoice.created_at || "-")} · Rs ${toNum(invoice.total, 0).toFixed(2)}`;
+    }
+    let tbody = exchangeReturnTable ? exchangeReturnTable.querySelector("tbody") : null;
+    if (!tbody) return;
+    (invoice.items || []).forEach(item => {
+        let effectiveReturnableQty = (overrideWindow && !item.cold_chain) ? item.raw_returnable_qty : item.returnable_qty;
+        let blocked = effectiveReturnableQty <= 0;
+        let row = document.createElement("tr");
+        row.className = "exchange-row" + (blocked ? " blocked" : "");
+        let blockReason = "";
+        if (!item.window_open && !overrideWindow) blockReason = `Return window closed (${invoice.return_window_days} days).`;
+        else if (!item.window_open && overrideWindow) blockReason = "Admin override active.";
+        else if (item.cold_chain) blockReason = "Cold chain blocked.";
+        else if (item.raw_returnable_qty <= 0) blockReason = "Already fully returned.";
+        row.innerHTML = `
+            <td>${escapeHtml(item.medicine_name || "-")}</td>
+            <td>${escapeHtml(item.batch || "-")}</td>
+            <td>${escapeHtml(item.expiry || "-")}</td>
+            <td>${item.sold_qty || 0}</td>
+            <td>${item.already_returned_qty || 0}</td>
+            <td>${effectiveReturnableQty || 0}${blockReason ? `<br><small>${escapeHtml(blockReason)}</small>` : ""}</td>
+            <td>${toNum(item.price, 0).toFixed(2)}</td>
+            <td>${toNum(item.discount_percent, 0).toFixed(2)}</td>
+            <td>${toNum(item.gst_percent, 0).toFixed(2)}</td>
+            <td><input class="exchange-return-qty" type="number" min="0" max="${effectiveReturnableQty || 0}" name="exchange_return_qty_${item.invoice_item_id}" value="0" data-unit-net="${toNum(item.unit_net_amount, 0).toFixed(2)}" ${blocked ? "disabled" : ""}></td>
+            <td class="exchange-credit">- Rs <span class="exchange-line-credit">0.00</span></td>
+            <td><select name="exchange_return_disposition_${item.invoice_item_id}" ${blocked ? "disabled" : ""}><option value="RESTOCK">Good - to stock</option><option value="DAMAGED">Damaged - keep aside</option><option value="EXPIRED">Expired - keep aside</option></select></td>
+            <td><input type="text" name="exchange_return_reason_${item.invoice_item_id}" placeholder="Optional" ${blocked ? "disabled" : ""}></td>
+        `;
+        tbody.appendChild(row);
+    });
+    tbody.querySelectorAll(".exchange-return-qty").forEach(input => {
+        input.addEventListener("input", function () {
+            let maxQty = toNum(this.max, 0);
+            let qty = toNum(this.value, 0);
+            if (qty > maxQty) this.value = maxQty;
+            if (qty < 0) this.value = 0;
+            calculateTotal();
+        });
+    });
+    if (exchangeContext) exchangeContext.classList.add("is-active");
+    if (exchangeSearchResults) exchangeSearchResults.innerHTML = "";
+    setExchangeStatus("Select return quantities below. Amounts use original invoice rates.");
+    calculateTotal();
 }
 
 function parseDate(val) {
@@ -1228,6 +1587,7 @@ function populateRestoredRow(row, rawItem) {
     row.dataset.totalStock = qoh;
     row.dataset.expiry = expiry;
     row.dataset.netAmount = net;
+    row.dataset.gstAmount = "";
     row.dataset.discountAmount = discAmt;
     row.dataset.restoredSnapshot = "1";
 
@@ -1290,8 +1650,9 @@ function applyRestoredBill(payload) {
 
     let subtotal = toNum(totals.subtotal, 0);
     let discount = toNum(totals.discount, 0);
-    let cgst = toNum(totals.cgst, subtotal * 0.025);
-    let sgst = toNum(totals.sgst, subtotal * 0.025);
+    let restoredGst = sumBillGst();
+    let cgst = toNum(totals.cgst, Math.round(restoredGst * 50) / 100);
+    let sgst = toNum(totals.sgst, Math.round(restoredGst * 50) / 100);
     let netTotal = toNum(totals.net_total, subtotal);
     let rounded = toNum(totals.rounded_amount, Math.round(netTotal));
     let internalNoteInput = document.getElementById("internalNoteInput");
@@ -1581,6 +1942,27 @@ if (splitCashAmountInput) {
             this.value = toNum(this.value, 0).toFixed(2);
         }
         syncPaymentBreakdown();
+    });
+}
+
+if (exchangeInvoiceSearchBtn) {
+    exchangeInvoiceSearchBtn.addEventListener("click", searchExchangeInvoices);
+}
+
+if (exchangeInvoiceSearch) {
+    exchangeInvoiceSearch.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            searchExchangeInvoices();
+        }
+    });
+}
+
+if (exchangeReturnOverrideWindow) {
+    exchangeReturnOverrideWindow.addEventListener("change", function () {
+        if (loadedExchangeInvoice) {
+            renderExchangeInvoice(loadedExchangeInvoice);
+        }
     });
 }
 

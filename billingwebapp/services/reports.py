@@ -24,6 +24,17 @@ def _active_return_filter(or_):
     )
 
 
+def _active_invoice_query():
+    """Invoices that count as sales: cancelled invoices are kept for GST
+    records but must not be added to sales totals."""
+    from sqlalchemy import or_ as _or
+
+    normalized = db.func.lower(db.func.trim(cast(Invoice.is_cancelled, String)))
+    return Invoice.query.filter(
+        _or(Invoice.is_cancelled.is_(None), normalized.in_(("0", "false", "f", "no", "off", "")))
+    )
+
+
 def default_report_filters(fresh_start_date=None, current_date=None):
     from_date = ""
     to_date = ""
@@ -118,7 +129,7 @@ def build_reports_page_state(
         if report_type == "daily":
             today = clinic_now().date()
             start_bound, end_bound = local_date_range_to_storage_bounds(today, today)
-            invoices = Invoice.query.filter(
+            invoices = _active_invoice_query().filter(
                 Invoice.created_at >= start_bound,
                 Invoice.created_at < end_bound,
             ).all()
@@ -141,7 +152,7 @@ def build_reports_page_state(
                     date(year, month, 1),
                     date(year, month, last_day),
                 )
-                invoices = Invoice.query.filter(
+                invoices = _active_invoice_query().filter(
                     Invoice.created_at >= start_bound,
                     Invoice.created_at < end_bound,
                 ).all()
@@ -162,7 +173,7 @@ def build_reports_page_state(
                     messages.append(("danger", "To date must be greater than or equal to from date."))
                 else:
                     from_dt, to_dt = local_date_range_to_storage_bounds(from_date_value, to_date_value)
-                    invoices = Invoice.query.filter(
+                    invoices = _active_invoice_query().filter(
                         Invoice.created_at >= from_dt,
                         Invoice.created_at < to_dt,
                     ).all()
@@ -178,7 +189,7 @@ def build_reports_page_state(
             if not patient:
                 messages.append(("danger", "Please enter patient name."))
             else:
-                invoices = Invoice.query.filter(Invoice.customer.ilike(f"%{patient}%")).all()
+                invoices = _active_invoice_query().filter(Invoice.customer.ilike(f"%{patient}%")).all()
                 returns = Return.query.filter(
                     Return.customer.ilike(f"%{patient}%"),
                     _active_return_filter(or_),
@@ -211,7 +222,7 @@ def build_reports_page_state(
                     "",
                 )
                 if mobile_digits:
-                    invoices = Invoice.query.filter(
+                    invoices = _active_invoice_query().filter(
                         or_(
                             normalized_mobile.like(f"%{mobile_digits}%"),
                             Invoice.mobile.ilike(f"%{mobile_raw}%"),
@@ -246,7 +257,7 @@ def build_reports_page_state(
                         _active_return_filter(or_),
                     ).all()
                 else:
-                    invoices = Invoice.query.filter(Invoice.mobile.ilike(f"%{mobile_raw}%")).all()
+                    invoices = _active_invoice_query().filter(Invoice.mobile.ilike(f"%{mobile_raw}%")).all()
                     returns = Return.query.filter(
                         Return.mobile.ilike(f"%{mobile_raw}%"),
                         _active_return_filter(or_),

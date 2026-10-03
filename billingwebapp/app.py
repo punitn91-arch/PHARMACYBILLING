@@ -69,6 +69,8 @@ try:
         AIAPIRequestAudit,
         AIIdempotencyRecord,
         OmnidimGatewayAction,
+        ReturnLotAllocation,
+        QuarantineStock,
     )
     from .routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
     from .routes.appointments import render_appointments_page
@@ -139,6 +141,8 @@ except ImportError:  # pragma: no cover - script/local fallback
         AIAPIRequestAudit,
         AIIdempotencyRecord,
         OmnidimGatewayAction,
+        ReturnLotAllocation,
+        QuarantineStock,
     )
     from routes.appointments import mark_appointment_paid as handle_mark_appointment_paid
     from routes.appointments import render_appointments_page
@@ -210,7 +214,52 @@ app = Flask(
     static_folder=os.path.join(APP_BASE_DIR, "static"),
     static_url_path="/static"
 )
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
+def resolve_app_secret_key():
+    """Return a strong secret key.
+
+    Production must provide SECRET_KEY explicitly; starting with a guessable
+    fallback would let anyone forge login sessions and invoice share links.
+    Local installs get a random key that is persisted under instance/ so that
+    logins survive restarts without ever using a shared hard-coded value.
+    """
+    configured = (os.environ.get("SECRET_KEY") or "").strip()
+    weak_values = {"", "dev-secret", "secret", "changeme", "change-me"}
+    lowered = configured.lower()
+    if lowered.startswith(("replace-with", "change-this", "your-secret")):
+        weak_values.add(lowered)  # placeholder copied from .env.example
+    if configured and lowered not in weak_values and len(configured) >= 16:
+        return configured
+    if IS_PROD:
+        raise RuntimeError(
+            "SECRET_KEY environment variable is missing or too weak. "
+            "Set a random value of at least 32 characters before starting in production."
+        )
+    if configured and lowered not in weak_values:
+        # Short but explicit keys are tolerated locally (tests use these).
+        return configured
+    key_dir = os.path.join(APP_BASE_DIR, "instance")
+    key_path = os.path.join(key_dir, ".secret_key")
+    try:
+        if os.path.exists(key_path):
+            with open(key_path, "r", encoding="utf-8") as handle:
+                stored = handle.read().strip()
+            if len(stored) >= 32:
+                return stored
+        os.makedirs(key_dir, exist_ok=True)
+        generated = secrets.token_urlsafe(48)
+        with open(key_path, "w", encoding="utf-8") as handle:
+            handle.write(generated)
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+        return generated
+    except OSError:
+        # Read-only filesystem: fall back to a per-process random key.
+        return secrets.token_urlsafe(48)
+
+
+app.secret_key = resolve_app_secret_key()
 try:
     max_upload_mb = max(1, int(str(os.environ.get("MAX_CONTENT_LENGTH_MB", "12")).strip()))
 except (TypeError, ValueError):
@@ -479,6 +528,78 @@ def delete_private_lab_report_file(storage_key):
 
 def is_async_request():
     return request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+
+# ---------------- CSRF PROTECTION ----------------
+CSRF_SESSION_KEY = "_csrf_token"
+CSRF_FORM_FIELD = "_csrf_token"
+CSRF_HEADER = "X-CSRF-Token"
+CSRF_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Token-authenticated machine APIs and webhooks never rely on the staff
+# browser session, so they are verified by their own signatures instead.
+CSRF_EXEMPT_BLUEPRINTS = {"ai_api", "omnidim_gateway", "ai_admin"}
+CSRF_EXEMPT_ENDPOINTS = {"login", "generic_telephony_inbound"}
+app.config["CSRF_PROTECTION"] = env_flag("CSRF_PROTECTION", True)
+
+
+def get_csrf_token():
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+@app.context_processor
+def inject_csrf_token():
+    return {"app_csrf_token": get_csrf_token}
+
+
+def csrf_failure_response():
+    message = "Security check failed (form expired). Please reload the page and try again."
+    wants_json = (
+        is_async_request()
+        or request.path.startswith("/api/")
+        or "application/json" in (request.headers.get("Accept") or "")
+        or request.is_json
+    )
+    if wants_json:
+        response = jsonify({"ok": False, "error": message, "messages": [{"category": "danger", "message": message}]})
+        response.status_code = 400
+        return response
+    flash(message, "danger")
+    target = request.referrer or "/"
+    try:
+        from urllib.parse import urlparse as _urlparse
+        parsed = _urlparse(target)
+        if parsed.netloc and parsed.netloc != request.host:
+            target = "/"
+    except Exception:
+        target = "/"
+    return redirect(target)
+
+
+@app.before_request
+def enforce_csrf_protection():
+    if not app.config.get("CSRF_PROTECTION", True):
+        return None
+    if request.method not in CSRF_UNSAFE_METHODS:
+        return None
+    if request.blueprint in CSRF_EXEMPT_BLUEPRINTS or request.endpoint in CSRF_EXEMPT_ENDPOINTS:
+        return None
+    # Only browser sessions of logged-in staff can be abused through CSRF.
+    if not session.get("user_id"):
+        return None
+    expected = session.get(CSRF_SESSION_KEY) or ""
+    supplied = (
+        request.headers.get(CSRF_HEADER)
+        or request.form.get(CSRF_FORM_FIELD)
+        or ""
+    )
+    if not expected or not supplied or not secrets.compare_digest(str(expected), str(supplied)):
+        app.logger.warning("CSRF check failed for %s %s", request.method, request.path)
+        return csrf_failure_response()
+    return None
 
 @app.after_request
 def adapt_redirect_for_async(response):
@@ -1559,6 +1680,278 @@ def build_return_payment_breakdown(return_bill, refund_amount=None):
     }
 
 
+def return_window_days():
+    return env_int("RETURN_WINDOW_DAYS", 15, minimum=0, maximum=365)
+
+
+def is_invoice_return_window_open(invoice):
+    if not invoice or not getattr(invoice, "created_at", None):
+        return True
+    local_created = storage_datetime_to_local(invoice.created_at) or invoice.created_at
+    return local_created.date() >= clinic_now().date() - timedelta(days=return_window_days())
+
+
+def is_cold_chain_medicine(medicine=None, item=None):
+    values = []
+    if medicine:
+        values.extend([
+            getattr(medicine, "name", ""),
+            getattr(medicine, "composition", ""),
+            getattr(medicine, "company", ""),
+            getattr(medicine, "pack_type", ""),
+        ])
+    if item:
+        values.extend([getattr(item, "name", "")])
+    haystack = " ".join(str(v or "") for v in values).lower()
+    cold_keywords = (
+        "cold chain",
+        "cold-chain",
+        "refrigerated",
+        "refrigeration",
+        "fridge",
+        "insulin",
+        "vaccine",
+    )
+    return any(keyword in haystack for keyword in cold_keywords)
+
+
+# ---------------- GST (MRP is GST-inclusive) ----------------
+GST_RATE_CHOICES = (0, 5, 12, 18, 28, 40)
+SCHEDULE_TYPE_CHOICES = ("", "H", "H1", "X")
+
+
+def default_gst_percent():
+    try:
+        value = float(str(os.environ.get("DEFAULT_GST_PERCENT", "5")).strip())
+    except (TypeError, ValueError):
+        value = 5.0
+    return min(max(value, 0.0), 40.0)
+
+
+def normalize_gst_percent(value, default=None):
+    """Return a GST rate between 0 and 40, or ``default`` when blank/invalid."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    try:
+        rate = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return default
+    if rate < 0 or rate > 40:
+        return default
+    return round(rate, 2)
+
+
+def normalize_schedule_type(value):
+    cleaned = str(value or "").strip().upper().replace("SCHEDULE", "").replace(" ", "")
+    return cleaned if cleaned in SCHEDULE_TYPE_CHOICES else ""
+
+
+def backfill_medicine_gst_from_purchases():
+    """One-time fill of empty medicine GST rates from their latest purchase lot."""
+    pending = Medicine.query.filter(Medicine.gst_percent.is_(None)).all()
+    if not pending:
+        return 0
+    updated = 0
+    for med in pending:
+        lot = (
+            VendorPurchaseItem.query.filter(
+                VendorPurchaseItem.medicine_id == med.id,
+                VendorPurchaseItem.gst_percent > 0,
+            )
+            .order_by(VendorPurchaseItem.created_at.desc(), VendorPurchaseItem.id.desc())
+            .first()
+        )
+        med.gst_percent = normalize_gst_percent(getattr(lot, "gst_percent", None), default_gst_percent())
+        updated += 1
+    db.session.commit()
+    return updated
+
+
+def medicine_form_choices():
+    return {
+        "gst_rate_choices": GST_RATE_CHOICES,
+        "schedule_choices": [
+            ("", "Not scheduled (OTC / general)"),
+            ("H", "Schedule H (prescription)"),
+            ("H1", "Schedule H1 (register required)"),
+            ("X", "Schedule X (register required)"),
+        ],
+    }
+
+
+def medicine_gst_percent(medicine):
+    rate = normalize_gst_percent(getattr(medicine, "gst_percent", None), None)
+    return default_gst_percent() if rate is None else rate
+
+
+def split_inclusive_gst(inclusive_amount, gst_percent):
+    """Split a GST-inclusive amount into taxable value, CGST and SGST.
+
+    Example: ₹105 at 5% -> taxable ₹100, GST ₹5 (CGST ₹2.50 + SGST ₹2.50).
+    """
+    amount = to_float_safe(inclusive_amount, 0)
+    rate = max(to_float_safe(gst_percent, 0), 0.0)
+    tax = amount * rate / (100 + rate) if rate else 0.0
+    # CGST and SGST are always equal halves on the printed bill.
+    cgst = round_currency(tax / 2)
+    sgst = cgst
+    gst_amount = round_currency(cgst + sgst)
+    taxable = round_currency(amount - gst_amount)
+    return {
+        "gst_percent": round(rate, 2),
+        "taxable_amount": taxable,
+        "gst_amount": gst_amount,
+        "cgst": cgst,
+        "sgst": sgst,
+    }
+
+
+def snap_gst_slab(value):
+    """Old records stored derived rates like 5.00475%; report them on the real slab."""
+    rate = max(to_float_safe(value, 0), 0.0)
+    nearest = min(GST_RATE_CHOICES, key=lambda slab: abs(slab - rate))
+    return float(nearest) if abs(nearest - rate) <= 0.5 else round(rate, 2)
+
+
+def invoice_item_gst_percent(invoice, item):
+    """GST rate used on the original sale line (legacy invoices: derived)."""
+    stored = normalize_gst_percent(getattr(item, "gst_percent", None), None)
+    if stored is not None:
+        return stored
+    subtotal = to_float_safe(getattr(invoice, "subtotal", 0), 0) if invoice else 0
+    tax_total = (
+        to_float_safe(getattr(invoice, "cgst", 0), 0) + to_float_safe(getattr(invoice, "sgst", 0), 0)
+        if invoice else 0
+    )
+    if subtotal > 0 and tax_total > 0:
+        # Legacy invoices stored GST as a flat % of the subtotal; snap to the
+        # nearest standard slab so tiny rounding noise does not leak through.
+        derived = tax_total / subtotal * 100
+        return min(GST_RATE_CHOICES, key=lambda slab: abs(slab - derived))
+    return 0.0 if invoice else default_gst_percent()
+
+
+def return_item_amount_snapshot(invoice, item, qty):
+    qty = to_int_safe(qty, 0)
+    amount = round_currency(qty * to_float_safe(getattr(item, "price", 0), 0))
+    discount_percent = to_float_safe(getattr(item, "discount_percent", 0), 0)
+    discount_amount = round_currency(amount * discount_percent / 100)
+    net_amount = round_currency(amount - discount_amount)
+    gst = split_inclusive_gst(net_amount, invoice_item_gst_percent(invoice, item))
+    return {
+        "amount": amount,
+        "discount_percent": discount_percent,
+        "discount_amount": discount_amount,
+        "net_amount": net_amount,
+        "gst_percent": gst["gst_percent"],
+        "taxable_amount": gst["taxable_amount"],
+        "cgst": gst["cgst"],
+        "sgst": gst["sgst"],
+    }
+
+
+def returned_qty_map_for_invoice(invoice_id):
+    return dict(
+        db.session.query(ReturnItem.invoice_item_id, db.func.sum(ReturnItem.qty))
+        .join(Return, Return.id == ReturnItem.return_id)
+        .filter(
+            Return.invoice_id == invoice_id,
+            falsey_or_null_column_expr(Return.is_cancelled),
+        )
+        .group_by(ReturnItem.invoice_item_id)
+        .all()
+    )
+
+
+def build_returnable_invoice_payload(invoice):
+    returned_map = returned_qty_map_for_invoice(invoice.id)
+    items = InvoiceItem.query.filter_by(invoice_id=invoice.id).order_by(InvoiceItem.id.asc()).all()
+    window_open = is_invoice_return_window_open(invoice)
+    rows = []
+    for item in items:
+        already_returned = to_int_safe(returned_map.get(item.id), 0)
+        sold_qty = to_int_safe(item.qty, 0)
+        returnable_qty = max(sold_qty - already_returned, 0)
+        med = Medicine.query.filter_by(name=item.name, batch=item.batch, expiry=item.expiry).first()
+        cold_chain_med = med or Medicine.query.filter_by(name=item.name, batch=item.batch).first()
+        cold_chain = is_cold_chain_medicine(cold_chain_med, item)
+        amount_snapshot = return_item_amount_snapshot(invoice, item, 1)
+        rows.append({
+            "invoice_item_id": item.id,
+            "medicine_name": item.name,
+            "batch": item.batch,
+            "expiry": item.expiry,
+            "sold_qty": sold_qty,
+            "already_returned_qty": already_returned,
+            "returnable_qty": 0 if cold_chain or not window_open else returnable_qty,
+            "raw_returnable_qty": returnable_qty,
+            "price": round_currency(item.price),
+            "discount_percent": round_currency(item.discount_percent),
+            "gst_percent": amount_snapshot["gst_percent"],
+            "unit_net_amount": amount_snapshot["net_amount"],
+            "cold_chain": cold_chain,
+            "window_open": window_open,
+        })
+    created_at = storage_datetime_to_local(invoice.created_at) or invoice.created_at
+    return {
+        "id": invoice.id,
+        "invoice_no": invoice.invoice_no,
+        "customer": invoice.customer,
+        "mobile": invoice.mobile,
+        "created_at": created_at.strftime("%d-%m-%Y") if created_at else "",
+        "total": round_currency(invoice.total),
+        "window_open": window_open,
+        "return_window_days": return_window_days(),
+        "items": rows,
+    }
+
+
+def build_exchange_return_requests(form):
+    invoice_id = to_int_safe(form.get("exchange_return_invoice_id"), 0)
+    if invoice_id <= 0:
+        return None, [], None
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return None, [], "Original invoice for return adjustment was not found."
+    if bool(getattr(invoice, "is_cancelled", False)):
+        return invoice, [], "The original invoice is cancelled, so its items cannot be returned."
+    override_window = (
+        (form.get("exchange_return_override_window") or "").strip() == "1"
+        and (session.get("role") or "").strip().lower() == "admin"
+    )
+
+    items = {item.id: item for item in InvoiceItem.query.filter_by(invoice_id=invoice.id).all()}
+    returned_map = returned_qty_map_for_invoice(invoice.id)
+    requests = []
+    for item_id, item in items.items():
+        qty = to_int_safe(form.get(f"exchange_return_qty_{item_id}"), 0)
+        if qty < 0:
+            return invoice, [], f"Invalid return quantity for {item.name}."
+        if qty <= 0:
+            continue
+        if not override_window and not is_invoice_return_window_open(invoice):
+            return invoice, [], f"Return is allowed only within {return_window_days()} days of invoice date."
+        already_returned = to_int_safe(returned_map.get(item.id), 0)
+        returnable_qty = max(to_int_safe(item.qty, 0) - already_returned, 0)
+        if qty > returnable_qty:
+            return invoice, [], f"Return qty cannot exceed returnable qty for {item.name} ({item.batch})."
+        med = Medicine.query.filter_by(name=item.name, batch=item.batch, expiry=item.expiry).first()
+        cold_chain_med = med or Medicine.query.filter_by(name=item.name, batch=item.batch).first()
+        if is_cold_chain_medicine(cold_chain_med, item):
+            return invoice, [], f"Cold-chain/refrigerated item cannot be returned: {item.name}."
+        amount_snapshot = return_item_amount_snapshot(invoice, item, qty)
+        requests.append({
+            "item": item,
+            "qty": qty,
+            "reason": (form.get(f"exchange_return_reason_{item_id}") or "Exchange adjustment").strip(),
+            "disposition": normalize_return_disposition(form.get(f"exchange_return_disposition_{item_id}")),
+            "amounts": amount_snapshot,
+            "medicine": med,
+            "window_override": override_window,
+        })
+    return invoice, requests, None
+
+
 def build_return_invoice_context(return_bill):
     """Build one authoritative, presentation-ready return invoice snapshot.
 
@@ -1570,6 +1963,9 @@ def build_return_invoice_context(return_bill):
     linked_invoice = None
     if to_int_safe(getattr(return_bill, "invoice_id", 0), 0) > 0:
         linked_invoice = db.session.get(Invoice, return_bill.invoice_id)
+    adjusted_invoice = None
+    if to_int_safe(getattr(return_bill, "adjusted_invoice_id", 0), 0) > 0:
+        adjusted_invoice = db.session.get(Invoice, return_bill.adjusted_invoice_id)
 
     return_items = ReturnItem.query.filter_by(return_id=return_bill.id).order_by(ReturnItem.id.asc()).all()
     prepared_items = []
@@ -1611,8 +2007,9 @@ def build_return_invoice_context(return_bill):
             discount_amount = max(amount - net_amount, 0.0)
 
         gst_percent = max(to_float_safe(item.gst_percent, 0), 0.0)
-        cgst_amount = round_currency(net_amount * gst_percent / 200)
-        sgst_amount = round_currency(net_amount * gst_percent / 200)
+        item_gst = split_inclusive_gst(net_amount, gst_percent)
+        cgst_amount = item_gst["cgst"]
+        sgst_amount = item_gst["sgst"]
 
         prepared_items.append({
             "id": item.id,
@@ -1629,6 +2026,7 @@ def build_return_invoice_context(return_bill):
             "cgst_amount": cgst_amount,
             "sgst_amount": sgst_amount,
             "reason": (item.reason or "").strip(),
+            "disposition": (getattr(item, "disposition", "") or "RESTOCK").strip().upper(),
         })
         gross_total += amount
         discount_total += discount_amount
@@ -1654,6 +2052,7 @@ def build_return_invoice_context(return_bill):
     return {
         "ret": return_bill,
         "original_invoice": linked_invoice,
+        "adjusted_invoice": adjusted_invoice,
         "items": prepared_items,
         "print_profile": print_profile,
         "return_no": return_bill.return_no or f"RB-{return_bill.id:06d}",
@@ -1671,6 +2070,8 @@ def build_return_invoice_context(return_bill):
         "discount_total": round_currency(discount_total),
         "net_total": round_currency(net_total),
         "refund_total": refund_total,
+        "adjusted_amount": round_currency(getattr(return_bill, "adjusted_amount", 0)),
+        "refund_due": round_currency(getattr(return_bill, "refund_amount", 0)),
         "cgst_total": round_currency(return_bill.cgst),
         "sgst_total": round_currency(return_bill.sgst),
         "is_cancelled": bool(return_bill.is_cancelled),
@@ -2207,8 +2608,10 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
 
             subtotal = 0.0
             total_discount = 0.0
+            stock_sale_cgst = 0.0
+            stock_sale_sgst = 0.0
             for row in chunk_rows:
-                med = Medicine.query.get(row["medicine_id"])
+                med = lock_medicine_for_update(Medicine.query.get(row["medicine_id"]))
                 if not med:
                     raise ValueError(f"Medicine not found: {row['name']} ({row['batch']})")
                 sell_qty = to_int_safe(row["qty"], 0)
@@ -2219,6 +2622,9 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
 
                 amount = round_currency(sell_qty * to_float_safe(row.get("purchase_rate_raw", row["purchase_rate"]), 0))
                 subtotal += amount
+                stock_line_gst = split_inclusive_gst(amount, medicine_gst_percent(med))
+                stock_sale_cgst += stock_line_gst["cgst"]
+                stock_sale_sgst += stock_line_gst["sgst"]
                 old_stock = med.qty
                 med.qty -= sell_qty
                 touched_names.append(med.name)
@@ -2254,6 +2660,9 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
                     net_amount=amount,
                     cost_price=cost_price,
                     cost_amount=cost_amount,
+                    gst_percent=stock_line_gst["gst_percent"],
+                    taxable_amount=stock_line_gst["taxable_amount"],
+                    gst_amount=stock_line_gst["gst_amount"],
                 )
                 db.session.add(invoice_item)
                 db.session.flush()
@@ -2268,8 +2677,8 @@ def execute_stock_sale_operation(*, customer, customer_gst_no, mobile, doctor, p
 
             invoice.subtotal = round_currency(subtotal)
             invoice.discount = round_currency(total_discount)
-            invoice.cgst = round(invoice.subtotal * 0.025, 2)
-            invoice.sgst = round(invoice.subtotal * 0.025, 2)
+            invoice.cgst = round_currency(stock_sale_cgst)
+            invoice.sgst = round_currency(stock_sale_sgst)
             invoice.total = round_currency(invoice.subtotal)
             payment_breakdown, payment_error = calculate_invoice_payment_breakdown(
                 payment_mode=normalized_payment_mode,
@@ -2462,6 +2871,8 @@ def summarize_invoice_collection(invoices, returns=None):
         "online_collection": 0.0,
         "cash_refund_total": 0.0,
         "online_refund_total": 0.0,
+        "adjusted_payment_total": 0.0,
+        "refund_due_total": 0.0,
         "split_payment_count": 0,
         "cash_invoice_count": 0,
         "online_invoice_count": 0,
@@ -2489,6 +2900,8 @@ def summarize_invoice_collection(invoices, returns=None):
         summary["refund_total"] += breakdown["refund_amount"]
         summary["cash_refund_total"] += breakdown["cash_refund_amount"]
         summary["online_refund_total"] += breakdown["online_refund_amount"]
+        summary["adjusted_payment_total"] += round_currency(getattr(return_bill, "adjusted_amount", 0))
+        summary["refund_due_total"] += round_currency(getattr(return_bill, "refund_amount", 0))
         summary["cash_collection"] -= breakdown["cash_refund_amount"]
         summary["online_collection"] -= breakdown["online_refund_amount"]
 
@@ -2499,6 +2912,8 @@ def summarize_invoice_collection(invoices, returns=None):
     summary["online_collection"] = round_currency(summary["online_collection"])
     summary["cash_refund_total"] = round_currency(summary["cash_refund_total"])
     summary["online_refund_total"] = round_currency(summary["online_refund_total"])
+    summary["adjusted_payment_total"] = round_currency(summary["adjusted_payment_total"])
+    summary["refund_due_total"] = round_currency(summary["refund_due_total"])
     return summary
 
 
@@ -3314,6 +3729,15 @@ def falsey_or_null_column_expr(column):
     return or_(column.is_(None), normalized.in_(("0", "false", "f", "no", "off", "")))
 
 
+def active_invoice_expr():
+    """SQL condition for invoices that count as sales (not cancelled)."""
+    return falsey_or_null_column_expr(Invoice.is_cancelled)
+
+
+def active_invoice_query():
+    return Invoice.query.filter(active_invoice_expr())
+
+
 def active_user_query():
     return User.query.filter(User.deleted_at.is_(None), truthy_column_expr(User.is_active))
 
@@ -3440,14 +3864,14 @@ def run_system_health_checks(include_counts=False):
             "users": active_user_query().count(),
             "patients": Patient.query.count(),
             "appointments": active_appointment_query().count(),
-            "invoices": Invoice.query.count(),
+            "invoices": active_invoice_query().count(),
             "returns": Return.query.count(),
             "medicines": Medicine.query.count(),
             "active_medicines": Medicine.query.filter(truthy_column_expr(Medicine.is_active)).count(),
             "low_stock_medicines": Medicine.query.filter(Medicine.qty <= Medicine.reorder_level).count(),
             "vendors": active_vendor_query().count(),
             "audit_events": AuditLog.query.count(),
-            "today_invoices": Invoice.query.filter(db.func.date(Invoice.created_at) == today_local).count(),
+            "today_invoices": active_invoice_query().filter(db.func.date(Invoice.created_at) == today_local).count(),
             "today_appointments": active_appointment_query().filter(Appointment.appointment_date == today_local).count()
         }
 
@@ -3527,7 +3951,7 @@ def build_dashboard_sales_trend(days=7):
         for day_key in ordered_days
     }
 
-    invoices = Invoice.query.filter(
+    invoices = active_invoice_query().filter(
         Invoice.created_at >= start_bound,
         Invoice.created_at < end_bound
     ).all()
@@ -3894,7 +4318,7 @@ def build_customer_directory_rows(patients):
         )
 
     if invoice_conditions:
-        invoice_rows = Invoice.query.filter(or_(*invoice_conditions)).with_entities(
+        invoice_rows = active_invoice_query().filter(or_(*invoice_conditions)).with_entities(
             Invoice.patient_id,
             Invoice.customer,
             Invoice.mobile,
@@ -3962,7 +4386,12 @@ def build_invoice_audit_snapshot(inv):
         "cash_amount": payment_breakdown["cash_amount"],
         "online_amount": payment_breakdown["online_amount"],
         "is_split_payment": payment_breakdown["is_split_payment"],
+        "return_credit_used": round(to_float_safe(getattr(inv, "return_credit_used", 0), 0), 2),
+        "final_payable": round(to_float_safe(getattr(inv, "final_payable", inv.total), 0), 2),
+        "refund_amount": round(to_float_safe(getattr(inv, "refund_amount", 0), 0), 2),
         "internal_note": (getattr(inv, "internal_note", "") or "").strip(),
+        "is_cancelled": bool(getattr(inv, "is_cancelled", False)),
+        "cancel_reason": (getattr(inv, "cancel_reason", "") or "").strip(),
         "created_by": (inv.created_by or "").strip()
     }
 
@@ -3978,6 +4407,9 @@ def build_return_audit_snapshot(return_bill):
         "customer": (return_bill.customer or "").strip(),
         "payment_mode": normalize_payment_mode(return_bill.payment_mode or "CASH"),
         "total_refund": round(to_float_safe(return_bill.total_refund, 0), 2),
+        "adjusted_invoice_id": getattr(return_bill, "adjusted_invoice_id", None),
+        "adjusted_amount": round(to_float_safe(getattr(return_bill, "adjusted_amount", 0), 0), 2),
+        "refund_amount": round(to_float_safe(getattr(return_bill, "refund_amount", 0), 0), 2),
         "created_at": return_bill.created_at.isoformat() if return_bill.created_at else None,
         "is_cancelled": bool(return_bill.is_cancelled),
     }
@@ -4540,8 +4972,9 @@ def build_hold_totals_from_form(form, items):
 
     subtotal = to_float_safe(subtotal_raw, 0.0) if subtotal_raw not in (None, "") else round(sum(i["net_amount"] for i in items), 2)
     discount = to_float_safe(discount_raw, 0.0) if discount_raw not in (None, "") else round(sum(i["discount_amount"] for i in items), 2)
-    cgst = to_float_safe(cgst_raw, round(subtotal * 0.025, 2)) if cgst_raw not in (None, "") else round(subtotal * 0.025, 2)
-    sgst = to_float_safe(sgst_raw, round(subtotal * 0.025, 2)) if sgst_raw not in (None, "") else round(subtotal * 0.025, 2)
+    fallback_gst = split_inclusive_gst(subtotal, default_gst_percent())
+    cgst = to_float_safe(cgst_raw, fallback_gst["cgst"]) if cgst_raw not in (None, "") else fallback_gst["cgst"]
+    sgst = to_float_safe(sgst_raw, fallback_gst["sgst"]) if sgst_raw not in (None, "") else fallback_gst["sgst"]
     net_total = to_float_safe(net_total_raw, subtotal) if net_total_raw not in (None, "") else subtotal
     rounded_amount = to_float_safe(rounded_raw, round(net_total, 2)) if rounded_raw not in (None, "") else round(net_total, 2)
     split_cash_amount = max(to_float_safe(split_cash_raw, 0.0), 0.0) if split_cash_raw not in (None, "") else 0.0
@@ -4658,8 +5091,9 @@ def normalize_hold_bill_payload(*, hold_bill_id=None, customer="", mobile="", do
     finalized_items = normalize_rows(raw_items, allow_zero_qty=False)
     subtotal = to_float_safe(totals.get("subtotal"), round(sum(i["net_amount"] for i in finalized_items), 2))
     discount = to_float_safe(totals.get("discount"), round(sum(i["discount_amount"] for i in finalized_items), 2))
-    cgst = to_float_safe(totals.get("cgst"), round(subtotal * 0.025, 2))
-    sgst = to_float_safe(totals.get("sgst"), round(subtotal * 0.025, 2))
+    fallback_gst = split_inclusive_gst(subtotal, default_gst_percent())
+    cgst = to_float_safe(totals.get("cgst"), fallback_gst["cgst"])
+    sgst = to_float_safe(totals.get("sgst"), fallback_gst["sgst"])
     net_total = to_float_safe(totals.get("net_total"), subtotal)
     rounded_amount = to_float_safe(totals.get("rounded_amount"), round(net_total, 2))
     cash_amount = to_float_safe(totals.get("cash_amount"), 0)
@@ -5377,6 +5811,26 @@ def fifo_consume(med, qty):
         })
     return allocations
 
+def lock_medicine_for_update(med):
+    """Reload a medicine row with a row-level lock (PostgreSQL ``FOR UPDATE``).
+
+    SQLite ignores the lock clause but serialises writers anyway, so the
+    re-read still gives the latest committed quantity.
+    """
+    if med is None or not getattr(med, "id", None):
+        return med
+    try:
+        return (
+            Medicine.query.filter(Medicine.id == med.id)
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
+    except SQLAlchemyError:
+        app.logger.exception("Could not lock medicine row id=%s; using current row", med.id)
+        return med
+
+
 def fifo_return(invoice_item_id, qty, fallback_rate):
     remaining = qty
     cost_total = 0.0
@@ -5400,6 +5854,165 @@ def fifo_return(invoice_item_id, qty, fallback_rate):
     if remaining > 0:
         cost_total += remaining * to_float(fallback_rate)
     return cost_total
+
+RETURN_DISPOSITIONS = ("RESTOCK", "DAMAGED", "EXPIRED")
+
+
+def normalize_return_disposition(value):
+    cleaned = str(value or "").strip().upper()
+    return cleaned if cleaned in RETURN_DISPOSITIONS else "RESTOCK"
+
+
+def fifo_return_cost_preview(invoice_item_id, qty, fallback_rate):
+    """Cost of returned units (same order as ``fifo_return``) without changing lots."""
+    remaining = to_int(qty)
+    cost_total = 0.0
+    allocations = SalesAllocation.query.filter_by(invoice_item_id=invoice_item_id).order_by(SalesAllocation.id.asc()).all()
+    for alloc in allocations:
+        available = to_int(alloc.qty) - to_int(alloc.returned_qty)
+        if available <= 0:
+            continue
+        take = min(available, remaining)
+        cost_total += take * to_float(alloc.cost_rate)
+        remaining -= take
+        if remaining <= 0:
+            break
+    if remaining > 0:
+        cost_total += remaining * to_float(fallback_rate)
+    return cost_total
+
+
+def restock_lots_for_manual_return(med, qty, fallback_rate):
+    """Put manually returned units back into the newest purchase lots of a batch.
+
+    Without this, ``Medicine.qty`` went up but no vendor lot did, so stock and
+    lots drifted apart and FIFO costing / vendor debit notes became wrong.
+    Returns (allocations, cost_total) where allocations are (lot, qty, rate).
+    """
+    remaining = to_int(qty)
+    allocations = []
+    cost_total = 0.0
+    lots = list(reversed(get_purchase_items_for_med(med)))
+    for lot in lots:
+        if remaining <= 0:
+            break
+        capacity = to_int(lot.qty) + to_int(lot.free_qty) - to_int(lot.remaining_qty)
+        if capacity <= 0:
+            continue
+        take = min(capacity, remaining)
+        lot.remaining_qty = to_int(lot.remaining_qty) + take
+        rate = to_float(lot.purchase_rate)
+        allocations.append((lot, take, rate))
+        cost_total += take * rate
+        remaining -= take
+    if remaining > 0:
+        cost_total += remaining * to_float(fallback_rate)
+    return allocations, cost_total
+
+
+def reverse_manual_return_lots(return_item_id):
+    for alloc in ReturnLotAllocation.query.filter_by(return_item_id=return_item_id).all():
+        lot = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+        if lot:
+            lot.remaining_qty = max(to_int(lot.remaining_qty) - to_int(alloc.qty), 0)
+        db.session.delete(alloc)
+
+
+def apply_return_line_stock(*, ret, med, qty, disposition, invoice_item_id, fallback_rate, actor, remark):
+    """Move returned units to sellable stock or to quarantine.
+
+    RESTOCK  -> Medicine.qty and the vendor purchase lot both go up.
+    DAMAGED / EXPIRED -> nothing is added to sellable stock; a quarantine
+    record is created later (needs the ReturnItem id) for an admin decision.
+    Returns (cost_total, lot_allocations).
+    """
+    disposition = normalize_return_disposition(disposition)
+    lot_allocations = []
+    if disposition == "RESTOCK":
+        med = lock_medicine_for_update(med)
+        old_stock = to_int_safe(med.qty, 0)
+        med.qty = old_stock + qty
+        db.session.add(StockHistory(
+            medicine_id=med.id,
+            medicine_name=med.name,
+            batch=med.batch,
+            action="RETURN",
+            stock_before=old_stock,
+            qty_change=qty,
+            stock_after=med.qty,
+            user=actor,
+            remark=remark,
+            ref_table="return_bill",
+            ref_id=ret.id,
+        ))
+        if invoice_item_id:
+            cost_total = fifo_return(invoice_item_id, qty, fallback_rate)
+        else:
+            lot_allocations, cost_total = restock_lots_for_manual_return(med, qty, fallback_rate)
+    else:
+        current = to_int_safe(med.qty, 0)
+        db.session.add(StockHistory(
+            medicine_id=med.id,
+            medicine_name=med.name,
+            batch=med.batch,
+            action="RETURN_QUARANTINE",
+            stock_before=current,
+            qty_change=0,
+            stock_after=current,
+            user=actor,
+            remark=f"{remark} | {qty} unit(s) kept aside as {disposition} (not sellable)",
+            ref_table="return_bill",
+            ref_id=ret.id,
+        ))
+        if invoice_item_id:
+            cost_total = fifo_return_cost_preview(invoice_item_id, qty, fallback_rate)
+        else:
+            cost_total = qty * to_float(fallback_rate)
+    return cost_total, lot_allocations
+
+
+def record_return_line_followups(*, ret, return_item, med, disposition, lot_allocations, cost_price, actor, note=""):
+    for lot, take, rate in lot_allocations:
+        db.session.add(ReturnLotAllocation(
+            return_item_id=return_item.id,
+            purchase_item_id=lot.id,
+            qty=take,
+            cost_rate=rate,
+        ))
+    disposition = normalize_return_disposition(disposition)
+    if disposition != "RESTOCK":
+        db.session.add(QuarantineStock(
+            medicine_id=med.id if med else None,
+            medicine_name=return_item.medicine_name,
+            batch=return_item.batch,
+            expiry=return_item.expiry,
+            qty=to_int(return_item.qty),
+            reason=disposition,
+            note=(note or return_item.reason or "")[:255],
+            status="PENDING",
+            return_id=ret.id,
+            return_item_id=return_item.id,
+            invoice_item_id=return_item.invoice_item_id or None,
+            cost_rate=cost_price,
+            created_by=actor,
+        ))
+
+
+def return_success_message(lines):
+    kept_aside = sum(to_int(row.get("qty")) for row in lines if normalize_return_disposition(row.get("disposition")) != "RESTOCK")
+    message = "Medicine returned successfully. Stock updated & Return Bill generated."
+    if kept_aside:
+        message += f" {kept_aside} damaged/expired unit(s) kept aside in Quarantine Stock (not sellable)."
+    return message
+
+
+def find_medicine_for_invoice_item(item):
+    """Exact batch row for a sold item (name + batch + expiry, then name + batch)."""
+    return (
+        Medicine.query.filter_by(name=item.name, batch=item.batch, expiry=item.expiry).first()
+        or Medicine.query.filter_by(name=item.name, batch=item.batch).first()
+    )
+
 
 def fifo_cancel_return(invoice_item_id, qty, fallback_rate):
     remaining = qty
@@ -5548,6 +6161,12 @@ with app.app_context():
         ensure_column("return_bill", "payment_mode", "TEXT")
         ensure_column("return_bill", "cgst", "REAL")
         ensure_column("return_bill", "sgst", "REAL")
+        ensure_column("return_bill", "adjusted_invoice_id", "INTEGER")
+        ensure_column("return_bill", "adjusted_amount", "REAL DEFAULT 0")
+        ensure_column("return_bill", "refund_amount", "REAL DEFAULT 0")
+        ensure_column("return_bill", "cash_refund_amount", "NUMERIC(10,2) DEFAULT 0")
+        ensure_column("return_bill", "online_refund_amount", "NUMERIC(10,2) DEFAULT 0")
+        ensure_column("return_bill", "is_split_refund", "BOOLEAN DEFAULT FALSE")
         ensure_column("return_bill", "is_cancelled", "BOOLEAN DEFAULT FALSE")
         ensure_column("return_bill", "cancelled_by", "TEXT")
         ensure_column("return_bill", "cancelled_at", "TEXT")
@@ -5560,6 +6179,9 @@ with app.app_context():
         ensure_column("invoice", "cash_amount", "NUMERIC(10,2) DEFAULT 0")
         ensure_column("invoice", "online_amount", "NUMERIC(10,2) DEFAULT 0")
         ensure_column("invoice", "is_split_payment", "BOOLEAN DEFAULT FALSE")
+        ensure_column("invoice", "return_credit_used", "REAL DEFAULT 0")
+        ensure_column("invoice", "final_payable", "REAL DEFAULT 0")
+        ensure_column("invoice", "refund_amount", "REAL DEFAULT 0")
         ensure_column("invoice", "internal_note", "TEXT")
         ensure_column("invoice", "print_profile_code", "TEXT")
         ensure_column("invoice", "print_address_line_1", "TEXT")
@@ -5569,6 +6191,16 @@ with app.app_context():
         ensure_column("invoice", "print_licence_no", "TEXT")
         ensure_column("invoice", "print_logo_path", "TEXT")
         ensure_column("invoice", "customer_gst_no", "TEXT")
+        ensure_column("invoice", "is_cancelled", "BOOLEAN DEFAULT FALSE")
+        ensure_column("invoice", "cancelled_at", "TIMESTAMP")
+        ensure_column("invoice", "cancelled_by", "TEXT")
+        ensure_column("invoice", "cancel_reason", "TEXT")
+        ensure_column("invoice_item", "gst_percent", "REAL")
+        ensure_column("invoice_item", "taxable_amount", "REAL")
+        ensure_column("invoice_item", "gst_amount", "REAL")
+        ensure_column("medicine", "gst_percent", "REAL DEFAULT 5")
+        ensure_column("medicine", "schedule_type", "TEXT DEFAULT ''")
+        ensure_column("return_item", "disposition", "TEXT DEFAULT 'RESTOCK'")
         ensure_column("invoice_item", "cost_price", "REAL")
         ensure_column("invoice_item", "cost_amount", "REAL")
         ensure_column("return_item", "cost_price", "REAL")
@@ -5832,9 +6464,15 @@ with app.app_context():
         repair_pending_bill_store_compat()
         sync_pending_bill_store()
     except Exception:
-        # If schema upgrade fails, app should still run
+        # If schema upgrade fails, app should still run, but the failure must be
+        # visible in logs: a missing column breaks billing later in confusing ways.
         db.session.rollback()
-        pass
+        app.logger.exception("Boot-time schema upgrade failed; run 'flask db upgrade' to add missing columns")
+    try:
+        backfill_medicine_gst_from_purchases()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Medicine GST backfill failed; medicines without a rate use DEFAULT_GST_PERCENT")
     if not active_user_query().filter_by(username="admin").first():
         bootstrap_admin_password = (
             (os.environ.get("DEFAULT_ADMIN_PASSWORD") or "").strip()
@@ -6279,7 +6917,7 @@ def index():
     today = clinic_now().date()
     today_iso = today.isoformat()
     today_start, tomorrow_start = local_date_range_to_storage_bounds(today, today)
-    today_invoices = Invoice.query.filter(
+    today_invoices = active_invoice_query().filter(
         Invoice.created_at >= today_start,
         Invoice.created_at < tomorrow_start
     ).all()
@@ -6407,12 +7045,610 @@ def order_list():
 
     return render_template("order_list.html", items=order_items)
 
+def user_is_admin():
+    return (session.get("role") or "").strip().lower() == "admin"
+
+
+def reports_permission_required(f):
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = active_user_by_id(session.get("user_id"))
+        if not user or (user.role != "admin" and not user.can_view_reports):
+            flash("Access denied", "danger")
+            return redirect("/")
+        return f(*args, **kwargs)
+    return w
+
+
+def admin_only(f):
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = active_user_by_id(session.get("user_id"))
+        if not user or user.role != "admin":
+            flash("Only an administrator can do this.", "danger")
+            return redirect(request.referrer or "/")
+        return f(*args, **kwargs)
+    return w
+
+
+def parse_report_date_range(default_days=30):
+    today = clinic_now().date()
+    default_from = today.replace(day=1) if default_days == "month" else today - timedelta(days=default_days)
+    try:
+        start = datetime.strptime((request.args.get("from") or "").strip(), "%Y-%m-%d").date()
+    except ValueError:
+        start = default_from
+    try:
+        end = datetime.strptime((request.args.get("to") or "").strip(), "%Y-%m-%d").date()
+    except ValueError:
+        end = today
+    if end < start:
+        start, end = end, start
+    return start, end
+
+
+def excel_response(sheets, filename):
+    """sheets: list of (title, headers, rows)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for title, headers, rows in sheets:
+        sheet = workbook.create_sheet(title=title[:31])
+        sheet.append(headers)
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+        for row in rows:
+            sheet.append(row)
+        for column in sheet.columns:
+            width = max(len(str(cell.value or "")) for cell in column)
+            sheet.column_dimensions[column[0].column_letter].width = min(max(10, width + 2), 45)
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        max_age=0,
+    )
+
+
+# ---------------- EXPIRY MANAGEMENT ----------------
+def build_expiry_buckets(reference_date=None, window_days=90):
+    today = reference_date or clinic_now().date()
+    rows = []
+    for med in Medicine.query.filter(Medicine.qty > 0).all():
+        exp_dt = parse_expiry_date(med.expiry)
+        if not exp_dt:
+            continue
+        days_left = (exp_dt - today).days
+        if days_left > window_days:
+            continue
+        if days_left < 0:
+            bucket = "expired"
+        elif days_left <= 30:
+            bucket = "30"
+        elif days_left <= 60:
+            bucket = "60"
+        else:
+            bucket = "90"
+        last_lot = (
+            VendorPurchaseItem.query.filter(
+                or_(
+                    VendorPurchaseItem.medicine_id == med.id,
+                    and_(
+                        VendorPurchaseItem.medicine_id.is_(None),
+                        VendorPurchaseItem.medicine_name == med.name,
+                        VendorPurchaseItem.batch == med.batch,
+                    ),
+                )
+            )
+            .order_by(VendorPurchaseItem.created_at.desc(), VendorPurchaseItem.id.desc())
+            .first()
+        )
+        vendor = Vendor.query.get(last_lot.vendor_id) if last_lot and last_lot.vendor_id else None
+        cost_rate = to_float(last_lot.purchase_rate) if last_lot else 0.0
+        rows.append({
+            "medicine": med,
+            "days_left": days_left,
+            "bucket": bucket,
+            "expiry_date": exp_dt,
+            "stock_value_mrp": round_currency(to_int(med.qty) * to_float(med.mrp)),
+            "stock_value_cost": round_currency(to_int(med.qty) * cost_rate),
+            "vendor": vendor,
+        })
+    rows.sort(key=lambda row: (row["days_left"], row["medicine"].name or ""))
+    return rows
+
+
 @app.route("/expiring-soon")
 @login_required
 def expiring_soon():
-    medicines = build_expiring_medicines_query(clinic_now().date()).order_by(Medicine.expiry).all()
+    window_days = to_int_safe(request.args.get("days"), 90)
+    if window_days not in (30, 60, 90, 180):
+        window_days = 90
+    rows = build_expiry_buckets(clinic_now().date(), window_days)
+    summary = {}
+    for key in ("expired", "30", "60", "90"):
+        bucket_rows = [row for row in rows if row["bucket"] == key]
+        summary[key] = {
+            "count": len(bucket_rows),
+            "units": sum(to_int(row["medicine"].qty) for row in bucket_rows),
+            "value": round_currency(sum(row["stock_value_mrp"] for row in bucket_rows)),
+        }
+    if (request.args.get("format") or "").lower() == "xlsx":
+        return excel_response(
+            [(
+                "Expiry",
+                ["Medicine", "Batch", "Expiry", "Days Left", "Stock", "MRP Value", "Cost Value", "Last Vendor"],
+                [
+                    [
+                        row["medicine"].name, row["medicine"].batch, row["medicine"].expiry, row["days_left"],
+                        row["medicine"].qty, row["stock_value_mrp"], row["stock_value_cost"],
+                        row["vendor"].name if row["vendor"] else "",
+                    ]
+                    for row in rows
+                ],
+            )],
+            f"Expiry_Report_{clinic_now().strftime('%Y%m%d')}.xlsx",
+        )
+    return render_template(
+        "expiring.html",
+        rows=rows,
+        summary=summary,
+        window_days=window_days,
+        is_admin=user_is_admin(),
+    )
 
-    return render_template("expiring.html", medicines=medicines)
+
+@app.route("/expired-stock/<int:medicine_id>/write-off", methods=["POST"])
+@login_required
+@admin_only
+def write_off_expired_stock(medicine_id):
+    med = lock_medicine_for_update(Medicine.query.get_or_404(medicine_id))
+    exp_dt = parse_expiry_date(med.expiry)
+    if not exp_dt or exp_dt >= clinic_now().date():
+        flash("Only expired batches can be written off from this screen.", "danger")
+        return redirect("/expiring-soon")
+    qty = to_int(med.qty)
+    if qty <= 0:
+        flash("No stock left in this batch.", "info")
+        return redirect("/expiring-soon")
+    # Remove the units from the oldest purchase lots so lots stay in sync.
+    remaining = qty
+    cost_total = 0.0
+    for lot in get_purchase_items_for_med(med):
+        if remaining <= 0:
+            break
+        available = to_int(lot.remaining_qty)
+        if available <= 0:
+            continue
+        take = min(available, remaining)
+        lot.remaining_qty = available - take
+        cost_total += take * to_float(lot.purchase_rate)
+        remaining -= take
+    med.qty = 0
+    db.session.add(StockHistory(
+        medicine_id=med.id,
+        medicine_name=med.name,
+        batch=med.batch,
+        action="EXPIRY_WRITE_OFF",
+        stock_before=qty,
+        qty_change=-qty,
+        stock_after=0,
+        user=session.get("username"),
+        remark=f"Expired stock written off (cost value Rs {round_currency(cost_total):.2f})",
+    ))
+    db.session.commit()
+    record_audit_event(
+        action="Wrote off expired stock",
+        entity_type="MEDICINE",
+        entity_id=med.id,
+        ref_code=f"{med.name} / {med.batch}",
+        before={"qty": qty},
+        after={"qty": 0},
+        extra={"cost_value": round_currency(cost_total)},
+    )
+    flash(f"{qty} expired unit(s) of {med.name} ({med.batch}) written off.", "warning")
+    return redirect("/expiring-soon")
+
+
+# ---------------- QUARANTINE (DAMAGED / EXPIRED RETURNS) ----------------
+@app.route("/quarantine-stock")
+@login_required
+def quarantine_stock():
+    status = (request.args.get("status") or "PENDING").strip().upper()
+    query = QuarantineStock.query
+    if status != "ALL":
+        query = query.filter(QuarantineStock.status == status)
+    rows = query.order_by(QuarantineStock.created_at.desc(), QuarantineStock.id.desc()).all()
+    return_numbers = {
+        r.id: (r.return_no or f"RB-{r.id:06d}")
+        for r in Return.query.filter(Return.id.in_([row.return_id for row in rows if row.return_id] or [0])).all()
+    }
+    pending_value = round_currency(sum(
+        to_int(row.qty) * to_float(row.cost_rate)
+        for row in QuarantineStock.query.filter_by(status="PENDING").all()
+    ))
+    return render_template(
+        "quarantine_stock.html",
+        rows=rows,
+        status=status,
+        return_numbers=return_numbers,
+        pending_value=pending_value,
+        is_admin=user_is_admin(),
+    )
+
+
+@app.route("/quarantine-stock/<int:qid>/restock", methods=["POST"])
+@login_required
+@admin_only
+def quarantine_restock(qid):
+    row = QuarantineStock.query.get_or_404(qid)
+    if (row.status or "").upper() != "PENDING":
+        flash("This item is already resolved.", "info")
+        return redirect("/quarantine-stock")
+    med = Medicine.query.get(row.medicine_id) if row.medicine_id else None
+    if not med:
+        med = Medicine.query.filter_by(name=row.medicine_name, batch=row.batch).first()
+    if not med:
+        flash("Medicine batch not found in master.", "danger")
+        return redirect("/quarantine-stock")
+    med = lock_medicine_for_update(med)
+    qty = to_int(row.qty)
+    old_stock = to_int(med.qty)
+    med.qty = old_stock + qty
+    if row.invoice_item_id:
+        fifo_return(row.invoice_item_id, qty, row.cost_rate)
+    else:
+        allocations, _cost = restock_lots_for_manual_return(med, qty, row.cost_rate)
+        for lot, take, rate in allocations:
+            db.session.add(ReturnLotAllocation(
+                return_item_id=row.return_item_id or 0,
+                purchase_item_id=lot.id,
+                qty=take,
+                cost_rate=rate,
+            ))
+    db.session.add(StockHistory(
+        medicine_id=med.id,
+        medicine_name=med.name,
+        batch=med.batch,
+        action="QUARANTINE_RESTOCK",
+        stock_before=old_stock,
+        qty_change=qty,
+        stock_after=med.qty,
+        user=session.get("username"),
+        remark=f"Quarantine #{row.id} checked OK and moved back to sellable stock",
+    ))
+    row.status = "RESTOCKED"
+    row.resolved_by = session.get("username")
+    row.resolved_at = datetime.utcnow()
+    db.session.commit()
+    flash(f"{qty} unit(s) of {row.medicine_name} moved back to sellable stock.", "success")
+    return redirect("/quarantine-stock")
+
+
+@app.route("/quarantine-stock/<int:qid>/write-off", methods=["POST"])
+@login_required
+@admin_only
+def quarantine_write_off(qid):
+    row = QuarantineStock.query.get_or_404(qid)
+    if (row.status or "").upper() != "PENDING":
+        flash("This item is already resolved.", "info")
+        return redirect("/quarantine-stock")
+    note = (request.form.get("note") or "").strip()
+    row.status = "WRITTEN_OFF"
+    if note:
+        row.note = note[:255]
+    row.resolved_by = session.get("username")
+    row.resolved_at = datetime.utcnow()
+    db.session.add(StockHistory(
+        medicine_id=row.medicine_id,
+        medicine_name=row.medicine_name,
+        batch=row.batch,
+        action="QUARANTINE_WRITE_OFF",
+        stock_before=None,
+        qty_change=0,
+        stock_after=None,
+        user=session.get("username"),
+        remark=f"Quarantine #{row.id}: {row.qty} {row.reason} unit(s) written off (loss Rs {to_int(row.qty) * to_float(row.cost_rate):.2f})",
+    ))
+    db.session.commit()
+    flash(f"{row.qty} unit(s) of {row.medicine_name} written off.", "warning")
+    return redirect("/quarantine-stock")
+
+
+# ---------------- GST SUMMARY REPORT ----------------
+def build_gst_summary(start_date, end_date):
+    start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
+
+    def blank():
+        return {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "total": 0.0, "qty": 0}
+
+    sales_by_rate = {}
+    invoices = active_invoice_query().filter(
+        Invoice.created_at >= start_bound, Invoice.created_at < end_bound
+    ).all()
+    invoice_map = {inv.id: inv for inv in invoices}
+    items = InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(list(invoice_map) or [0])).all()
+    for item in items:
+        invoice = invoice_map.get(item.invoice_id)
+        net = to_float(item.net_amount if item.net_amount is not None else item.amount)
+        if item.gst_amount is not None and item.taxable_amount is not None:
+            rate = snap_gst_slab(item.gst_percent)
+            half = round_currency(to_float(item.gst_amount) / 2)
+            gst = {"taxable_amount": to_float(item.taxable_amount), "cgst": half, "sgst": half}
+        else:
+            rate = invoice_item_gst_percent(invoice, item)
+            gst = split_inclusive_gst(net, rate)
+        row = sales_by_rate.setdefault(rate, blank())
+        row["taxable"] += gst["taxable_amount"]
+        row["cgst"] += gst["cgst"]
+        row["sgst"] += gst["sgst"]
+        row["total"] += net
+        row["qty"] += to_int(item.qty)
+
+    returns_by_rate = {}
+    return_rows = (
+        db.session.query(ReturnItem)
+        .join(Return, ReturnItem.return_id == Return.id)
+        .filter(
+            Return.created_at >= start_bound,
+            Return.created_at < end_bound,
+            falsey_or_null_column_expr(Return.is_cancelled),
+        )
+        .all()
+    )
+    for item in return_rows:
+        rate = snap_gst_slab(item.gst_percent)
+        net = to_float(item.net_amount if item.net_amount is not None else item.amount)
+        gst = split_inclusive_gst(net, rate)
+        row = returns_by_rate.setdefault(rate, blank())
+        row["taxable"] += gst["taxable_amount"]
+        row["cgst"] += gst["cgst"]
+        row["sgst"] += gst["sgst"]
+        row["total"] += net
+        row["qty"] += to_int(item.qty)
+
+    purchases_by_rate = {}
+    purchase_rows = (
+        db.session.query(VendorPurchaseItem)
+        .join(VendorPurchase, VendorPurchaseItem.purchase_id == VendorPurchase.id)
+        .filter(VendorPurchase.purchase_date >= start_bound, VendorPurchase.purchase_date < end_bound)
+        .all()
+    )
+    for item in purchase_rows:
+        rate = snap_gst_slab(item.gst_percent)
+        base = to_int(item.qty) * to_float(item.purchase_rate)
+        taxable = base - base * to_float(item.discount_percent) / 100
+        tax = taxable * rate / 100
+        row = purchases_by_rate.setdefault(rate, blank())
+        row["taxable"] += taxable
+        row["cgst"] += tax / 2
+        row["sgst"] += tax / 2
+        row["total"] += taxable + tax
+        row["qty"] += to_int(item.qty) + to_int(item.free_qty)
+
+    def finish(bucket):
+        out = []
+        for key, row in sorted(bucket.items(), key=lambda kv: (str(kv[0]))):
+            out.append({
+                "key": key,
+                **{name: (round_currency(value) if name != "qty" else value) for name, value in row.items()},
+            })
+        return out
+
+    def total(rows):
+        agg = blank()
+        for row in rows:
+            for name in agg:
+                agg[name] += row[name]
+        return {name: (round_currency(value) if name != "qty" else value) for name, value in agg.items()}
+
+    sales = finish(sales_by_rate)
+    returns = finish(returns_by_rate)
+    purchases = finish(purchases_by_rate)
+    sales_total, returns_total, purchase_total = total(sales), total(returns), total(purchases)
+    output_tax = round_currency(sales_total["cgst"] + sales_total["sgst"] - returns_total["cgst"] - returns_total["sgst"])
+    input_tax = round_currency(purchase_total["cgst"] + purchase_total["sgst"])
+    return {
+        "sales": sales,
+        "returns": returns,
+        "purchases": purchases,
+        "sales_total": sales_total,
+        "returns_total": returns_total,
+        "purchase_total": purchase_total,
+        "output_tax": output_tax,
+        "input_tax": input_tax,
+        "net_tax": round_currency(output_tax - input_tax),
+        "invoice_count": len(invoices),
+    }
+
+
+@app.route("/reports/gst")
+@login_required
+@reports_permission_required
+def gst_report():
+    start_date, end_date = parse_report_date_range("month")
+    data = build_gst_summary(start_date, end_date)
+    if (request.args.get("format") or "").lower() == "xlsx":
+        def rate_rows(rows):
+            return [[f'{row["key"]}%', row["qty"], row["taxable"], row["cgst"], row["sgst"], row["total"]] for row in rows]
+        headers = ["GST Rate", "Qty", "Taxable Value", "CGST", "SGST", "Total"]
+        return excel_response(
+            [
+                ("Sales (Outward)", headers, rate_rows(data["sales"])),
+                ("Returns (Credit Notes)", headers, rate_rows(data["returns"])),
+                ("Purchases (Input)", headers, rate_rows(data["purchases"])),
+                ("Summary", ["Item", "Amount"], [
+                    ["Output GST (sales - returns)", data["output_tax"]],
+                    ["Input GST (purchases)", data["input_tax"]],
+                    ["Net GST payable (estimate)", data["net_tax"]],
+                ]),
+            ],
+            f"GST_Summary_{start_date.isoformat()}_{end_date.isoformat()}.xlsx",
+        )
+    return render_template("gst_report.html", data=data, start_date=start_date, end_date=end_date)
+
+
+# ---------------- SCHEDULE H1 / X REGISTER ----------------
+def build_schedule_register(start_date, end_date, schedules=("H1", "X")):
+    start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
+    scheduled = {
+        ((m.name or "").strip().lower(), (m.batch or "").strip().lower()): normalize_schedule_type(m.schedule_type)
+        for m in Medicine.query.filter(Medicine.schedule_type.in_(list(schedules))).all()
+    }
+    scheduled_names = {}
+    for (name, _batch), code in scheduled.items():
+        scheduled_names[name] = code
+    if not scheduled_names:
+        return []
+    rows = []
+    invoices = active_invoice_query().filter(
+        Invoice.created_at >= start_bound, Invoice.created_at < end_bound
+    ).order_by(Invoice.created_at.asc(), Invoice.id.asc()).all()
+    invoice_map = {inv.id: inv for inv in invoices}
+    for item in InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(list(invoice_map) or [0])).order_by(InvoiceItem.id.asc()).all():
+        key = ((item.name or "").strip().lower(), (item.batch or "").strip().lower())
+        code = scheduled.get(key) or scheduled_names.get(key[0])
+        if not code:
+            continue
+        inv = invoice_map[item.invoice_id]
+        local_dt = storage_datetime_to_local(inv.created_at) or inv.created_at
+        rows.append({
+            "date": local_dt.strftime("%d-%m-%Y") if local_dt else "",
+            "invoice_no": inv.invoice_no,
+            "patient": inv.customer or "",
+            "mobile": inv.mobile or "",
+            "doctor": inv.doctor or "",
+            "medicine": item.name,
+            "batch": item.batch,
+            "qty": item.qty,
+            "schedule": code,
+        })
+    return rows
+
+
+@app.route("/reports/schedule-h1")
+@login_required
+@reports_permission_required
+def schedule_h1_register():
+    start_date, end_date = parse_report_date_range("month")
+    rows = build_schedule_register(start_date, end_date)
+    if (request.args.get("format") or "").lower() == "xlsx":
+        return excel_response(
+            [(
+                "Schedule H1 Register",
+                ["Date", "Invoice No", "Patient", "Mobile", "Prescriber (Doctor)", "Medicine", "Batch", "Qty", "Schedule"],
+                [[r["date"], r["invoice_no"], r["patient"], r["mobile"], r["doctor"], r["medicine"], r["batch"], r["qty"], r["schedule"]] for r in rows],
+            )],
+            f"Schedule_H1_Register_{start_date.isoformat()}_{end_date.isoformat()}.xlsx",
+        )
+    return render_template("schedule_register.html", rows=rows, start_date=start_date, end_date=end_date)
+
+
+# ---------------- DATA HEALTH ----------------
+def build_data_health_report():
+    meds = Medicine.query.all()
+    groups = {}
+    for med in meds:
+        key = ((med.name or "").strip().lower(), (med.batch or "").strip().lower())
+        groups.setdefault(key, []).append(med)
+    duplicates = [sorted(rows, key=lambda m: m.id) for rows in groups.values() if len(rows) > 1]
+
+    today = clinic_now().date()
+    expired = []
+    for med in meds:
+        exp_dt = parse_expiry_date(med.expiry)
+        if exp_dt and exp_dt < today and to_int(med.qty) > 0:
+            expired.append(med)
+
+    lot_totals = dict(
+        db.session.query(VendorPurchaseItem.medicine_id, db.func.coalesce(db.func.sum(VendorPurchaseItem.remaining_qty), 0))
+        .filter(VendorPurchaseItem.medicine_id.isnot(None))
+        .group_by(VendorPurchaseItem.medicine_id)
+        .all()
+    )
+    mismatches = []
+    for med in meds:
+        if med.id in lot_totals and to_int(med.qty) != to_int(lot_totals[med.id]):
+            mismatches.append({"medicine": med, "lot_qty": to_int(lot_totals[med.id])})
+
+    costly_lots = []
+    for lot in VendorPurchaseItem.query.filter(VendorPurchaseItem.mrp > 0).all():
+        landed = to_float(lot.purchase_rate) * (1 + to_float(lot.gst_percent) / 100)
+        if landed > to_float(lot.mrp):
+            costly_lots.append({"lot": lot, "landed": round_currency(landed)})
+
+    negative = [med for med in meds if to_int(med.qty) < 0]
+    return {
+        "duplicates": duplicates,
+        "expired": expired,
+        "mismatches": mismatches,
+        "costly_lots": costly_lots,
+        "negative": negative,
+    }
+
+
+@app.route("/data-health")
+@login_required
+@admin_only
+def data_health():
+    return render_template("data_health.html", report=build_data_health_report())
+
+
+@app.route("/data-health/merge-duplicate", methods=["POST"])
+@login_required
+@admin_only
+def merge_duplicate_medicine():
+    keep = Medicine.query.get_or_404(to_int_safe(request.form.get("keep_id"), 0))
+    drop = Medicine.query.get_or_404(to_int_safe(request.form.get("merge_id"), 0))
+    same_key = (
+        (keep.name or "").strip().lower() == (drop.name or "").strip().lower()
+        and (keep.batch or "").strip().lower() == (drop.batch or "").strip().lower()
+    )
+    if keep.id == drop.id or not same_key:
+        flash("Only two rows of the same medicine and batch can be merged.", "danger")
+        return redirect("/data-health")
+    keep = lock_medicine_for_update(keep)
+    drop = lock_medicine_for_update(drop)
+    moved_qty = to_int(drop.qty)
+    old_keep = to_int(keep.qty)
+    keep.qty = old_keep + moved_qty
+    drop.qty = 0
+    drop.is_active = False
+    VendorPurchaseItem.query.filter_by(medicine_id=drop.id).update({"medicine_id": keep.id})
+    ReturnItem.query.filter_by(medicine_id=drop.id).update({"medicine_id": keep.id})
+    VendorNoteItem.query.filter_by(medicine_id=drop.id).update({"medicine_id": keep.id})
+    QuarantineStock.query.filter_by(medicine_id=drop.id).update({"medicine_id": keep.id})
+    for field in ("barcode", "composition", "company"):
+        if not getattr(keep, field, None) and getattr(drop, field, None):
+            setattr(keep, field, getattr(drop, field))
+    db.session.add(StockHistory(
+        medicine_id=keep.id,
+        medicine_name=keep.name,
+        batch=keep.batch,
+        action="MERGE",
+        stock_before=old_keep,
+        qty_change=moved_qty,
+        stock_after=keep.qty,
+        user=session.get("username"),
+        remark=f"Merged duplicate row #{drop.id} into #{keep.id}",
+    ))
+    db.session.commit()
+    record_audit_event(
+        action="Merged duplicate medicine rows",
+        entity_type="MEDICINE",
+        entity_id=keep.id,
+        ref_code=f"{keep.name} / {keep.batch}",
+        before={"keep_qty": old_keep, "merged_row": drop.id, "merged_qty": moved_qty},
+        after={"keep_qty": keep.qty},
+    )
+    flash(f"Merged duplicate row #{drop.id} into #{keep.id} ({moved_qty} unit(s) moved). The duplicate is archived.", "success")
+    return redirect("/data-health")
 
 
 # ---------------- MEDICINES ----------------
@@ -6463,7 +7699,7 @@ def build_patient_medicine_usage_report(
         return [], [], None, "To date must be greater than or equal to from date."
 
     start_bound, end_bound = local_date_range_to_storage_bounds(start_date, end_date)
-    invoices = Invoice.query.filter(
+    invoices = active_invoice_query().filter(
         Invoice.created_at >= start_bound,
         Invoice.created_at < end_bound
     ).order_by(
@@ -6620,7 +7856,8 @@ def build_profit_report_summary(from_date_raw, to_date_raw):
 
     sales_total = db.session.query(db.func.coalesce(db.func.sum(Invoice.subtotal), 0)).filter(
         Invoice.created_at >= start_bound,
-        Invoice.created_at < end_bound
+        Invoice.created_at < end_bound,
+        active_invoice_expr(),
     ).scalar() or 0
     returns_total = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.net_amount), 0)).join(
         Return, ReturnItem.return_id == Return.id
@@ -6633,7 +7870,8 @@ def build_profit_report_summary(from_date_raw, to_date_raw):
         Invoice, InvoiceItem.invoice_id == Invoice.id
     ).filter(
         Invoice.created_at >= start_bound,
-        Invoice.created_at < end_bound
+        Invoice.created_at < end_bound,
+        active_invoice_expr(),
     ).scalar() or 0
     return_cogs = db.session.query(db.func.coalesce(db.func.sum(ReturnItem.cost_amount), 0)).join(
         Return, ReturnItem.return_id == Return.id
@@ -6758,7 +7996,7 @@ def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query=
         row["inward_qty"] += qty + free_qty
         row["inward_purchase_value"] += to_float(item.total_value)
 
-    sales_query = InvoiceItem.query.join(Invoice, InvoiceItem.invoice_id == Invoice.id)
+    sales_query = InvoiceItem.query.join(Invoice, InvoiceItem.invoice_id == Invoice.id).filter(active_invoice_expr())
     if start_bound:
         sales_query = sales_query.filter(Invoice.created_at >= start_bound)
     if end_bound:
@@ -6878,6 +8116,14 @@ def add_medicine():
         if pack_qty_raw and (pack_qty is None or pack_qty < 1):
             flash("Pack quantity must be at least 1", "danger")
             return redirect("/medicines/add")
+        gst_percent = normalize_gst_percent(request.form.get("gst_percent"), default_gst_percent())
+        existing_batch = find_medicine_by_name_batch(name, batch)
+        if existing_batch:
+            flash(
+                f"{existing_batch.name} batch {existing_batch.batch} already exists. Edit that batch instead of adding a duplicate.",
+                "danger",
+            )
+            return redirect("/medicines/add")
 
         med = Medicine(
             name=name,
@@ -6891,7 +8137,9 @@ def add_medicine():
             discount_percent=to_int_safe(request.form.get("discount_percent"), 0),
             barcode=barcode,
             reorder_level=reorder_level,
-            is_active=True
+            is_active=True,
+            gst_percent=gst_percent,
+            schedule_type=normalize_schedule_type(request.form.get("schedule_type")),
         )
 
         med = persist_new_medicine_record(med)
@@ -6923,7 +8171,7 @@ def add_medicine():
         flash("Medicine added successfully", "success")
         return redirect("/medicines")
 
-    return render_template("add_medicine.html")
+    return render_template("add_medicine.html", **medicine_form_choices())
 
 @app.route("/medicines/edit/<int:id>", methods=["GET", "POST"])
 @login_required
@@ -6946,6 +8194,13 @@ def edit_medicine(id):
         if not name or not batch or not expiry:
             flash("Name, batch and expiry are required", "danger")
             return redirect(request.url)
+        clash = find_medicine_by_name_batch(name, batch)
+        if clash and clash.id != med.id:
+            flash(f"Another row already has {clash.name} batch {clash.batch}. Use Data Health > merge duplicates.", "danger")
+            return redirect(request.url)
+        med.gst_percent = normalize_gst_percent(request.form.get("gst_percent"), medicine_gst_percent(med))
+        if "schedule_type" in request.form:
+            med.schedule_type = normalize_schedule_type(request.form.get("schedule_type"))
         med.name = name
         med.batch = batch
         med.expiry = expiry
@@ -6995,9 +8250,9 @@ def edit_medicine(id):
         flash("Medicine updated successfully", "success")
         return redirect("/medicines")
 
-    return render_template("edit_medicine.html", med=med)
+    return render_template("edit_medicine.html", med=med, **medicine_form_choices())
 
-@app.route("/medicines/delete/<int:id>")
+@app.route("/medicines/delete/<int:id>", methods=["POST"])
 @login_required
 def delete_medicine(id):
     user = active_user_by_id(session.get("user_id"))
@@ -7040,6 +8295,58 @@ def delete_medicine(id):
 
 
 # ---------------- BILLING ----------------
+@app.route("/billing/return-search")
+@login_required
+@invoice_access_required
+def billing_return_search():
+    query_text = (request.args.get("q") or "").strip()
+    if len(query_text) < 2:
+        return jsonify({"ok": True, "invoices": []})
+
+    like = f"%{query_text}%"
+    digits = normalize_patient_mobile(query_text)
+    conditions = [
+        Invoice.invoice_no.ilike(like),
+        Invoice.customer.ilike(like),
+    ]
+    if digits:
+        conditions.append(Invoice.mobile.ilike(f"%{digits}%"))
+    else:
+        conditions.append(Invoice.mobile.ilike(like))
+
+    invoices = (
+        active_invoice_query().filter(or_(*conditions))
+        .order_by(Invoice.created_at.desc(), Invoice.id.desc())
+        .limit(20)
+        .all()
+    )
+    return jsonify({
+        "ok": True,
+        "invoices": [
+            {
+                "id": invoice.id,
+                "invoice_no": invoice.invoice_no,
+                "customer": invoice.customer,
+                "mobile": invoice.mobile,
+                "date": (storage_datetime_to_local(invoice.created_at) or invoice.created_at).strftime("%d-%m-%Y")
+                if invoice.created_at else "",
+                "total": round_currency(invoice.total),
+            }
+            for invoice in invoices
+        ],
+    })
+
+
+@app.route("/billing/return-invoice/<int:invoice_id>")
+@login_required
+@invoice_access_required
+def billing_return_invoice(invoice_id):
+    invoice = Invoice.query.get_or_404(invoice_id)
+    if bool(getattr(invoice, "is_cancelled", False)):
+        return jsonify({"ok": False, "error": "This invoice is cancelled. Items cannot be returned."}), 400
+    return jsonify({"ok": True, "invoice": build_returnable_invoice_payload(invoice)})
+
+
 @app.route("/billing", methods=["GET", "POST"])
 @login_required
 @invoice_access_required
@@ -7056,9 +8363,14 @@ def billing():
         return redirect("/billing")
 
     if request.method == "POST":
+        exchange_invoice, exchange_return_requests, exchange_error = build_exchange_return_requests(request.form)
+        has_exchange_return = bool(exchange_return_requests)
         validation_error = validate_billing_submission(request.form)
-        if validation_error:
+        if validation_error and not has_exchange_return:
             flash(validation_error, "danger")
+            return redirect_to_billing_with_context()
+        if exchange_error:
+            flash(exchange_error, "danger")
             return redirect_to_billing_with_context()
         requested_payment_mode = (request.form.get("payment_mode") or "CASH").strip().upper() or "CASH"
         if requested_payment_mode not in payment_modes:
@@ -7066,6 +8378,9 @@ def billing():
             return redirect_to_billing_with_context()
         subtotal = 0
         total_discount = 0
+        total_gst_cgst = 0.0
+        total_gst_sgst = 0.0
+        scheduled_items = []
 
         meds_list = request.form.getlist("medicine_name")
         batch_overrides = request.form.getlist("batch_override[]")
@@ -7088,13 +8403,16 @@ def billing():
             if batch_override:
                 med = Medicine.query.filter_by(name=name, batch=batch_override).first()
                 if not med:
+                    db.session.rollback()
                     flash(f"Batch not found for {name}", "danger")
                     return redirect_to_billing_with_context()
                 exp_dt = parse_expiry_date(med.expiry)
                 if exp_dt and exp_dt < date.today():
+                    db.session.rollback()
                     flash(f"Batch {med.batch} of {med.name} is expired", "danger")
                     return redirect_to_billing_with_context()
                 if qty > med.qty:
+                    db.session.rollback()
                     flash(f"Not enough stock for {med.name} ({med.batch})", "danger")
                     return redirect_to_billing_with_context()
                 allocations.append((med, qty))
@@ -7102,9 +8420,11 @@ def billing():
                 candidates = get_batch_candidates(name)
                 total_available = sum(m.qty for m in candidates)
                 if total_available <= 0:
+                    db.session.rollback()
                     flash(f"No stock available for {name}", "danger")
                     return redirect_to_billing_with_context()
                 if qty > total_available:
+                    db.session.rollback()
                     flash(f"Not enough stock for {name}. Available: {total_available}", "danger")
                     return redirect_to_billing_with_context()
                 remaining = qty
@@ -7118,12 +8438,27 @@ def billing():
                         break
 
             for med, take_qty in allocations:
+                # Lock the stock row and re-check: two counters billing the
+                # last strips at the same time must not push stock below zero.
+                med = lock_medicine_for_update(med)
+                if med is None or to_int_safe(med.qty, 0) < take_qty:
+                    db.session.rollback()
+                    flash(
+                        f"Stock for {name} changed while billing (another counter sold it). Please re-check the quantity.",
+                        "danger",
+                    )
+                    return redirect_to_billing_with_context()
+                if normalize_schedule_type(getattr(med, "schedule_type", "")) in ("H1", "X"):
+                    scheduled_items.append(med.name)
                 discp = med.discount_percent or 0
                 amount = take_qty * med.mrp
                 disc_amt = amount * discp / 100
                 net_amt = amount - disc_amt
                 subtotal += net_amt
                 total_discount += disc_amt
+                line_gst = split_inclusive_gst(net_amt, medicine_gst_percent(med))
+                total_gst_cgst += line_gst["cgst"]
+                total_gst_sgst += line_gst["sgst"]
 
                 old_stock = med.qty
                 med.qty -= take_qty
@@ -7157,16 +8492,43 @@ def billing():
                     "net_amount": net_amt,
                     "cost_price": cost_price,
                     "cost_amount": cost_amount,
+                    "gst_percent": line_gst["gst_percent"],
+                    "taxable_amount": line_gst["taxable_amount"],
+                    "gst_amount": line_gst["gst_amount"],
                     "allocations": fifo_alloc
                 })
 
-        cgst = round(subtotal * 0.025, 2)
-        sgst = round(subtotal * 0.025, 2)
+        if not cart and not exchange_return_requests:
+            flash("Please add at least one sale item or one return adjustment item.", "danger")
+            db.session.rollback()
+            return redirect_to_billing_with_context()
+
+        if scheduled_items and not (request.form.get("doctor") or "").strip():
+            db.session.rollback()
+            names = ", ".join(sorted(set(scheduled_items)))
+            flash(
+                f"Doctor name is required for Schedule H1/X medicines ({names}). Please enter the prescribing doctor.",
+                "danger",
+            )
+            return redirect_to_billing_with_context()
+
+        cgst = round_currency(total_gst_cgst)
+        sgst = round_currency(total_gst_sgst)
         total = round(subtotal, 2)
         rounded_total = compute_invoice_rounded_total(total)
+        return_credit_total = round_currency(sum(row["amounts"]["net_amount"] for row in exchange_return_requests))
+        final_payable = round_currency(rounded_total - return_credit_total)
+        collectable_amount = max(final_payable, 0.0)
+        return_credit_used = min(return_credit_total, rounded_total)
+        exchange_refund_amount = max(round_currency(return_credit_total - rounded_total), 0.0)
+        effective_payment_mode = (
+            "ADJUSTMENT"
+            if return_credit_total > 0 and collectable_amount <= 0
+            else requested_payment_mode
+        )
         payment_breakdown, payment_error = calculate_invoice_payment_breakdown(
-            payment_mode=requested_payment_mode,
-            rounded_amount=rounded_total,
+            payment_mode=effective_payment_mode,
+            rounded_amount=collectable_amount,
             split_cash_amount_raw=request.form.get("split_cash_amount"),
         )
         if payment_error:
@@ -7182,81 +8544,207 @@ def billing():
         patient, normalized_mobile = upsert_patient_from_invoice(customer, mobile, request.form.get("gender", ""))
         if patient and not patient.id:
             db.session.flush()
-        inv = Invoice(
-            invoice_no=None,
-            patient_id=patient.id if patient else None,
-            customer=customer,
-            mobile=normalized_mobile or mobile,
-            doctor=request.form.get("doctor", ""),
-            gender=request.form.get("gender", ""),
-            subtotal=subtotal,
-            discount=total_discount,
-            cgst=cgst,
-            sgst=sgst,
-            total=total,
-            payment_mode=payment_breakdown["payment_mode"],
-            cash_amount=payment_breakdown["cash_amount"],
-            online_amount=payment_breakdown["online_amount"],
-            is_split_payment=payment_breakdown["is_split_payment"],
-            internal_note=internal_note,
-            created_by=session.get("username"),
-            created_at=invoice_created_at,
-        )
-        apply_invoice_print_profile(inv, invoice_print_date)
+        inv = None
+        ret = None
+        try:
+            if cart:
+                inv = Invoice(
+                    invoice_no=None,
+                    patient_id=patient.id if patient else None,
+                    customer=customer,
+                    mobile=normalized_mobile or mobile,
+                    doctor=request.form.get("doctor", ""),
+                    gender=request.form.get("gender", ""),
+                    subtotal=subtotal,
+                    discount=total_discount,
+                    cgst=cgst,
+                    sgst=sgst,
+                    total=total,
+                    payment_mode=payment_breakdown["payment_mode"],
+                    cash_amount=payment_breakdown["cash_amount"],
+                    online_amount=payment_breakdown["online_amount"],
+                    is_split_payment=payment_breakdown["is_split_payment"],
+                    return_credit_used=return_credit_used,
+                    final_payable=collectable_amount,
+                    refund_amount=exchange_refund_amount,
+                    internal_note=internal_note,
+                    created_by=session.get("username"),
+                    created_at=invoice_created_at,
+                )
+                apply_invoice_print_profile(inv, invoice_print_date)
 
-        db.session.add(inv)
-        db.session.flush()
-        assign_invoice_number(inv, invoice_print_date)
+                db.session.add(inv)
+                db.session.flush()
+                assign_invoice_number(inv, invoice_print_date)
 
-        for item in cart:
-            inv_item = InvoiceItem(
-                invoice_id=inv.id,
-                name=item["name"],
-                qty=item["qty"],
-                price=item["price"],
-                amount=item["amount"],
-                batch=item["batch"],
-                expiry=item["expiry"],
-                discount_percent=item["discount_percent"],
-                discount_amount=item["discount_amount"],
-                net_amount=item["net_amount"],
-                cost_price=item["cost_price"],
-                cost_amount=item["cost_amount"]
+                for item in cart:
+                    inv_item = InvoiceItem(
+                        invoice_id=inv.id,
+                        name=item["name"],
+                        qty=item["qty"],
+                        price=item["price"],
+                        amount=item["amount"],
+                        batch=item["batch"],
+                        expiry=item["expiry"],
+                        discount_percent=item["discount_percent"],
+                        discount_amount=item["discount_amount"],
+                        net_amount=item["net_amount"],
+                        cost_price=item["cost_price"],
+                        cost_amount=item["cost_amount"],
+                        gst_percent=item["gst_percent"],
+                        taxable_amount=item["taxable_amount"],
+                        gst_amount=item["gst_amount"],
+                    )
+                    db.session.add(inv_item)
+                    db.session.flush()
+                    for alloc in item["allocations"]:
+                        db.session.add(SalesAllocation(
+                            invoice_item_id=inv_item.id,
+                            purchase_item_id=alloc["purchase_item"].id if alloc["purchase_item"] else None,
+                            qty=alloc["qty"],
+                            cost_rate=alloc["cost_rate"],
+                            returned_qty=0
+                        ))
+
+            if exchange_return_requests:
+                ret = Return(
+                    invoice_id=exchange_invoice.id,
+                    invoice_no=exchange_invoice.invoice_no,
+                    customer=exchange_invoice.customer or customer,
+                    mobile=exchange_invoice.mobile or normalized_mobile or mobile,
+                    total_refund=return_credit_total,
+                    cgst=round_currency(sum(row["amounts"]["cgst"] for row in exchange_return_requests)),
+                    sgst=round_currency(sum(row["amounts"]["sgst"] for row in exchange_return_requests)),
+                    payment_mode="ADJUSTMENT",
+                    adjusted_invoice_id=inv.id if inv else None,
+                    adjusted_amount=return_credit_used,
+                    refund_amount=exchange_refund_amount,
+                    cash_refund_amount=0,
+                    online_refund_amount=0,
+                    is_split_refund=False,
+                    created_by=session.get("username"),
+                    created_at=invoice_created_at,
+                )
+                db.session.add(ret)
+                db.session.flush()
+                ret.return_no = f"RB-{ret.id:06d}"
+
+                for row in exchange_return_requests:
+                    item = row["item"]
+                    qty = row["qty"]
+                    med = row["medicine"]
+                    disposition = normalize_return_disposition(row.get("disposition"))
+                    if not med:
+                        med = Medicine(
+                            name=item.name,
+                            batch=item.batch,
+                            expiry=item.expiry,
+                            mrp=item.price or 0,
+                            qty=0,
+                            discount_percent=int(item.discount_percent or 0),
+                            gst_percent=normalize_gst_percent(row["amounts"].get("gst_percent"), default_gst_percent()),
+                        )
+                        med = persist_new_medicine_record(med)
+
+                    amounts = row["amounts"]
+                    fallback_rate = item.cost_price or item.price or 0
+                    cost_total, lot_allocations = apply_return_line_stock(
+                        ret=ret,
+                        med=med,
+                        qty=qty,
+                        disposition=disposition,
+                        invoice_item_id=item.id,
+                        fallback_rate=fallback_rate,
+                        actor=session.get("username"),
+                        remark=f"Exchange Return {ret.return_no} (Inv {exchange_invoice.invoice_no})",
+                    )
+                    cost_price = round(cost_total / qty, 4) if qty else 0
+
+                    exchange_return_item = ReturnItem(
+                        return_id=ret.id,
+                        invoice_item_id=item.id,
+                        medicine_id=med.id,
+                        medicine_name=item.name,
+                        batch=item.batch,
+                        expiry=item.expiry,
+                        qty=qty,
+                        price=item.price,
+                        amount=amounts["amount"],
+                        purchase_rate=0,
+                        selling_rate=item.price or 0,
+                        gst_percent=amounts["gst_percent"],
+                        reason=row["reason"],
+                        discount_percent=amounts["discount_percent"],
+                        discount_amount=amounts["discount_amount"],
+                        net_amount=amounts["net_amount"],
+                        cost_price=cost_price,
+                        cost_amount=cost_total,
+                        disposition=disposition,
+                    )
+                    db.session.add(exchange_return_item)
+                    db.session.flush()
+                    record_return_line_followups(
+                        ret=ret,
+                        return_item=exchange_return_item,
+                        med=med,
+                        disposition=disposition,
+                        lot_allocations=lot_allocations,
+                        cost_price=cost_price,
+                        actor=session.get("username"),
+                    )
+
+            if posted_hold_bill_id > 0:
+                held_bill = find_pending_bill_record(posted_hold_bill_id)
+                if held_bill:
+                    held_bill.is_deleted = True
+                    held_bill.deleted_at = datetime.utcnow()
+                    held_bill.deleted_by = session.get("username")
+
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Exchange billing transaction failed")
+            flash("Billing transaction failed. No stock or invoice changes were saved.", "danger")
+            return redirect_to_billing_with_context()
+
+        if inv:
+            record_audit_event(
+                action="Created invoice",
+                entity_type="INVOICE",
+                entity_id=inv.id,
+                ref_code=inv.invoice_no,
+                before=None,
+                after=build_invoice_audit_snapshot(inv),
+                extra={
+                    "item_count": len(cart),
+                    "payment_mode": inv.payment_mode,
+                    "cash_amount": payment_breakdown["cash_amount"],
+                    "online_amount": payment_breakdown["online_amount"],
+                    "is_split_payment": payment_breakdown["is_split_payment"],
+                    "return_credit_used": return_credit_used,
+                    "exchange_return_id": ret.id if ret else None,
+                }
             )
-            db.session.add(inv_item)
-            db.session.flush()
-            for alloc in item["allocations"]:
-                db.session.add(SalesAllocation(
-                    invoice_item_id=inv_item.id,
-                    purchase_item_id=alloc["purchase_item"].id if alloc["purchase_item"] else None,
-                    qty=alloc["qty"],
-                    cost_rate=alloc["cost_rate"],
-                    returned_qty=0
-                ))
+        if ret:
+            record_audit_event(
+                action="Created exchange return bill" if inv else "Created return bill",
+                entity_type="RETURN_BILL",
+                entity_id=ret.id,
+                ref_code=ret.return_no,
+                before=None,
+                after=build_return_audit_snapshot(ret),
+                extra={
+                    "original_invoice_id": exchange_invoice.id,
+                    "adjusted_invoice_id": inv.id if inv else None,
+                    "adjusted_amount": return_credit_used,
+                    "refund_amount": exchange_refund_amount,
+                    "item_count": len(exchange_return_requests),
+                },
+            )
 
-        if posted_hold_bill_id > 0:
-            held_bill = find_pending_bill_record(posted_hold_bill_id)
-            if held_bill:
-                held_bill.is_deleted = True
-                held_bill.deleted_at = datetime.utcnow()
-                held_bill.deleted_by = session.get("username")
-
-        db.session.commit()
-        record_audit_event(
-            action="Created invoice",
-            entity_type="INVOICE",
-            entity_id=inv.id,
-            ref_code=inv.invoice_no,
-            before=None,
-            after=build_invoice_audit_snapshot(inv),
-            extra={
-                "item_count": len(cart),
-                "payment_mode": inv.payment_mode,
-                "cash_amount": payment_breakdown["cash_amount"],
-                "online_amount": payment_breakdown["online_amount"],
-                "is_split_payment": payment_breakdown["is_split_payment"],
-            }
-        )
+        if not inv and ret:
+            flash("Return credit note generated. Stock updated.", "success")
+            return redirect(f"/return-invoice/{ret.id}")
 
         return render_template(
             "invoice.html",
@@ -7264,6 +8752,12 @@ def billing():
             print_profile=resolve_invoice_print_profile(inv),
             payment_breakdown=payment_breakdown,
             cart=cart,
+            exchange_return_bill=ret,
+            exchange_return_items=exchange_return_requests,
+            return_credit_total=return_credit_total,
+            return_credit_used=return_credit_used,
+            exchange_refund_amount=exchange_refund_amount,
+            final_payable=collectable_amount,
             customer=inv.customer,
             mobile=inv.mobile,
             doctor=inv.doctor,
@@ -8184,6 +9678,7 @@ def return_medicine():
         if return_validation_error:
             flash(return_validation_error, "danger")
             return redirect("/return-medicine")
+        actor = session.get("username")
 
         # ---------------- MANUAL RETURN ----------------
         if mode == "manual":
@@ -8199,6 +9694,10 @@ def return_medicine():
             purchase_rates = request.form.getlist("manual_purchase_rate")
             gst_percents = request.form.getlist("manual_gst")
             reasons = request.form.getlist("manual_reason")
+            dispositions = request.form.getlist("manual_disposition")
+
+            def pick(values, idx, default=""):
+                return values[idx] if idx < len(values) else default
 
             total_refund = 0
             total_cgst = 0
@@ -8208,105 +9707,127 @@ def return_medicine():
             for idx, mid in enumerate(ids):
                 if not mid:
                     continue
-                med = Medicine.query.get(int(mid))
+                med = Medicine.query.get(to_int_safe(mid, 0))
                 if not med:
                     continue
-                qty = int(qtys[idx] or 0)
+                qty = to_int_safe(pick(qtys, idx), 0)
                 if qty <= 0:
                     continue
 
-                sold_qty = int(sold_qtys[idx] or 0)
+                sold_qty = to_int_safe(pick(sold_qtys, idx), 0)
                 if sold_qty and qty > sold_qty:
                     flash(f"Return qty cannot exceed sold qty for {med.name} ({med.batch})", "danger")
                     return redirect("/return-medicine")
 
-                selling_rate = float(selling_rates[idx] or med.mrp or 0)
-                purchase_rate = float(purchase_rates[idx] or 0)
-                gst_percent = float(gst_percents[idx] or 0)
-                reason = (reasons[idx] or "").strip()
+                selling_rate = to_float_safe(pick(selling_rates, idx), 0) or to_float_safe(med.mrp, 0)
+                purchase_rate = to_float_safe(pick(purchase_rates, idx), 0)
+                gst_percent = normalize_gst_percent(pick(gst_percents, idx), medicine_gst_percent(med))
+                reason = (pick(reasons, idx) or "").strip()
+                disposition = normalize_return_disposition(pick(dispositions, idx, "RESTOCK"))
 
-                amount = qty * selling_rate
-                tax_amt = amount * gst_percent / 100
-                cgst_amt = tax_amt / 2
-                sgst_amt = tax_amt / 2
-                net_amt = amount
+                amount = round_currency(qty * selling_rate)
+                gst = split_inclusive_gst(amount, gst_percent)
 
-                total_refund += net_amt
-                total_cgst += cgst_amt
-                total_sgst += sgst_amt
+                total_refund += amount
+                total_cgst += gst["cgst"]
+                total_sgst += gst["sgst"]
 
                 line_items.append({
                     "med": med,
                     "qty": qty,
                     "selling_rate": selling_rate,
                     "purchase_rate": purchase_rate,
-                    "gst_percent": gst_percent,
+                    "gst_percent": gst["gst_percent"],
                     "reason": reason,
+                    "disposition": disposition,
                     "amount": amount,
-                    "net_amount": net_amt
+                    "net_amount": amount,
                 })
 
             if not line_items:
                 flash("Please select at least one medicine to return", "danger")
                 return redirect("/return-medicine")
 
-            ret = Return(
-                invoice_id=0,
-                invoice_no=original_invoice_no,
-                customer=customer,
-                mobile=mobile,
-                total_refund=0,
-                cgst=round(total_cgst, 2),
-                sgst=round(total_sgst, 2),
-                payment_mode=payment_mode,
-                created_by=session.get("username")
-            )
-            db.session.add(ret)
-            db.session.flush()
-            ret.return_no = f"RB-{ret.id:06d}"
-
-            for item in line_items:
-                med = item["med"]
-                old_stock = med.qty
-                med.qty += item["qty"]
-
-                history = StockHistory(
-                    medicine_id=med.id,
-                    medicine_name=med.name,
-                    batch=med.batch,
-                    action="RETURN",
-                    stock_before=old_stock,
-                    qty_change=item["qty"],
-                    stock_after=med.qty,
-                    user=session.get("username"),
-                    remark=f"Return Bill {ret.return_no}"
+            try:
+                ret = Return(
+                    invoice_id=0,
+                    invoice_no=original_invoice_no,
+                    customer=customer,
+                    mobile=mobile,
+                    total_refund=0,
+                    cgst=round_currency(total_cgst),
+                    sgst=round_currency(total_sgst),
+                    payment_mode=payment_mode,
+                    created_by=actor
                 )
-                db.session.add(history)
+                db.session.add(ret)
+                db.session.flush()
+                ret.return_no = f"RB-{ret.id:06d}"
 
-                db.session.add(ReturnItem(
-                    return_id=ret.id,
-                    invoice_item_id=0,
-                    medicine_id=med.id,
-                    medicine_name=med.name,
-                    batch=med.batch,
-                    expiry=med.expiry,
-                    qty=item["qty"],
-                    price=item["selling_rate"],
-                    amount=item["amount"],
-                    purchase_rate=item["purchase_rate"],
-                    selling_rate=item["selling_rate"],
-                    gst_percent=item["gst_percent"],
-                    reason=item["reason"],
-                    discount_percent=0,
-                    discount_amount=0,
-                    net_amount=item["net_amount"],
-                    cost_price=item["purchase_rate"] if item["purchase_rate"] else item["selling_rate"],
-                    cost_amount=(item["purchase_rate"] if item["purchase_rate"] else item["selling_rate"]) * item["qty"]
-                ))
+                for item in line_items:
+                    med = item["med"]
+                    fallback_rate = item["purchase_rate"] or item["selling_rate"]
+                    cost_total, lot_allocations = apply_return_line_stock(
+                        ret=ret,
+                        med=med,
+                        qty=item["qty"],
+                        disposition=item["disposition"],
+                        invoice_item_id=None,
+                        fallback_rate=fallback_rate,
+                        actor=actor,
+                        remark=f"Return Bill {ret.return_no}",
+                    )
+                    cost_price = round(cost_total / item["qty"], 4) if item["qty"] else 0
+                    return_item = ReturnItem(
+                        return_id=ret.id,
+                        invoice_item_id=0,
+                        medicine_id=med.id,
+                        medicine_name=med.name,
+                        batch=med.batch,
+                        expiry=med.expiry,
+                        qty=item["qty"],
+                        price=item["selling_rate"],
+                        amount=item["amount"],
+                        purchase_rate=item["purchase_rate"],
+                        selling_rate=item["selling_rate"],
+                        gst_percent=item["gst_percent"],
+                        reason=item["reason"],
+                        discount_percent=0,
+                        discount_amount=0,
+                        net_amount=item["net_amount"],
+                        cost_price=cost_price,
+                        cost_amount=cost_total,
+                        disposition=item["disposition"],
+                    )
+                    db.session.add(return_item)
+                    db.session.flush()
+                    record_return_line_followups(
+                        ret=ret,
+                        return_item=return_item,
+                        med=med,
+                        disposition=item["disposition"],
+                        lot_allocations=lot_allocations,
+                        cost_price=cost_price,
+                        actor=actor,
+                    )
 
-            ret.total_refund = round(total_refund, 2)
-            db.session.commit()
-            flash("Medicine returned successfully. Stock updated & Return Bill generated.", "success")
+                ret.total_refund = round_currency(total_refund)
+                db.session.commit()
+            except SQLAlchemyError:
+                db.session.rollback()
+                app.logger.exception("Manual return failed")
+                flash("Return could not be saved. No stock was changed.", "danger")
+                return redirect("/return-medicine")
+            record_audit_event(
+                action="Created return bill",
+                entity_type="RETURN_BILL",
+                entity_id=ret.id,
+                ref_code=ret.return_no,
+                before=None,
+                after=build_return_audit_snapshot(ret),
+                extra={"mode": "manual", "item_count": len(line_items)},
+            )
+            flash(return_success_message(line_items), "success")
             return redirect(f"/return-invoice/{ret.id}")
 
         # ---------------- INVOICE RETURN ----------------
@@ -8319,130 +9840,154 @@ def return_medicine():
         if not invoice:
             flash("Invoice not found", "danger")
             return redirect(f"/return-medicine?invoice_no={invoice_no}")
+        if bool(getattr(invoice, "is_cancelled", False)):
+            flash("This invoice is cancelled. Items cannot be returned.", "danger")
+            return redirect("/return-medicine")
+
+        is_admin = (session.get("role") or "").strip().lower() == "admin"
+        override_window = is_admin and (request.form.get("override_window") or "").strip() == "1"
+        if not override_window and not is_invoice_return_window_open(invoice):
+            flash(
+                f"Return is allowed only within {return_window_days()} days of the invoice date."
+                + (" Tick 'Allow late return' to override." if is_admin else " Ask an admin to approve a late return."),
+                "danger",
+            )
+            return redirect(f"/return-medicine?invoice_no={invoice_no}")
 
         items = InvoiceItem.query.filter_by(invoice_id=invoice.id).all()
-        returned_map = dict(
-            db.session.query(ReturnItem.invoice_item_id, db.func.sum(ReturnItem.qty))
-            .join(Return, Return.id == ReturnItem.return_id)
-            .filter(
-                Return.invoice_id == invoice.id,
-                falsey_or_null_column_expr(Return.is_cancelled)
-            )
-            .group_by(ReturnItem.invoice_item_id)
-            .all()
-        )
+        returned_map = returned_qty_map_for_invoice(invoice.id)
 
         return_requests = []
         for it in items:
             already_returned = int(returned_map.get(it.id) or 0)
             remaining = it.qty - already_returned
-            req_qty = int(request.form.get(f"return_qty_{it.id}", 0) or 0)
+            req_qty = to_int_safe(request.form.get(f"return_qty_{it.id}", 0), 0)
             reason = request.form.get(f"reason_{it.id}", "").strip()
+            disposition = normalize_return_disposition(request.form.get(f"disposition_{it.id}"))
             if req_qty < 0 or req_qty > remaining:
                 flash(f"Invalid return qty for {it.name}", "danger")
                 return redirect(f"/return-medicine?invoice_no={invoice_no}")
             if req_qty > 0:
-                return_requests.append((it, req_qty, remaining, reason))
+                med = find_medicine_for_invoice_item(it)
+                if is_cold_chain_medicine(med, it) and not override_window:
+                    flash(f"Cold-chain/refrigerated item cannot be returned: {it.name}.", "danger")
+                    return redirect(f"/return-medicine?invoice_no={invoice_no}")
+                return_requests.append((it, req_qty, med, reason, disposition))
 
         if not return_requests:
             flash("Please enter return quantity", "danger")
             return redirect(f"/return-medicine?invoice_no={invoice_no}")
 
-        gst_rate = 0
-        if invoice.subtotal and (invoice.cgst or invoice.sgst):
-            gst_rate = ((invoice.cgst + invoice.sgst) / invoice.subtotal) * 100
         refund_multiplier = 1.0
         if to_float(invoice.subtotal) > 0 and to_float(invoice.total) > 0:
             refund_multiplier = to_float(invoice.total) / to_float(invoice.subtotal)
 
-        ret = Return(
-            invoice_id=invoice.id,
-            invoice_no=invoice.invoice_no,
-            customer=invoice.customer,
-            mobile=invoice.mobile,
-            payment_mode=request.form.get("payment_mode", "CASH"),
-            created_by=session.get("username")
-        )
-        db.session.add(ret)
-        db.session.flush()
-        ret.return_no = f"RB-{ret.id:06d}"
+        try:
+            ret = Return(
+                invoice_id=invoice.id,
+                invoice_no=invoice.invoice_no,
+                customer=invoice.customer,
+                mobile=invoice.mobile,
+                payment_mode=request.form.get("payment_mode", "CASH"),
+                created_by=actor
+            )
+            db.session.add(ret)
+            db.session.flush()
+            ret.return_no = f"RB-{ret.id:06d}"
 
-        subtotal_return = 0
-        total_cgst = 0
-        total_sgst = 0
+            subtotal_return = 0
+            total_cgst = 0
+            total_sgst = 0
+            summary_lines = []
 
-        for it, req_qty, _, reason in return_requests:
-            med = Medicine.query.filter_by(name=it.name, batch=it.batch).first()
-            if not med:
-                med = Medicine(
-                    name=it.name,
+            for it, req_qty, med, reason, disposition in return_requests:
+                if not med:
+                    med = persist_new_medicine_record(Medicine(
+                        name=it.name,
+                        batch=it.batch,
+                        expiry=it.expiry,
+                        mrp=it.price or 0,
+                        qty=0,
+                        discount_percent=int(it.discount_percent or 0),
+                        gst_percent=invoice_item_gst_percent(invoice, it),
+                    ))
+
+                amounts = return_item_amount_snapshot(invoice, it, req_qty)
+                subtotal_return += amounts["net_amount"]
+                total_cgst += amounts["cgst"]
+                total_sgst += amounts["sgst"]
+
+                fallback_rate = it.cost_price or it.price or 0
+                cost_total, lot_allocations = apply_return_line_stock(
+                    ret=ret,
+                    med=med,
+                    qty=req_qty,
+                    disposition=disposition,
+                    invoice_item_id=it.id,
+                    fallback_rate=fallback_rate,
+                    actor=actor,
+                    remark=f"Return Bill {ret.return_no} (Inv {invoice.invoice_no})",
+                )
+                cost_price = round(cost_total / req_qty, 4) if req_qty else 0
+
+                return_item = ReturnItem(
+                    return_id=ret.id,
+                    invoice_item_id=it.id,
+                    medicine_id=med.id,
+                    medicine_name=it.name,
                     batch=it.batch,
                     expiry=it.expiry,
-                    mrp=it.price or 0,
-                    qty=0,
-                    discount_percent=int(it.discount_percent or 0)
+                    qty=req_qty,
+                    price=it.price,
+                    amount=amounts["amount"],
+                    purchase_rate=0,
+                    selling_rate=it.price or 0,
+                    gst_percent=amounts["gst_percent"],
+                    reason=reason,
+                    discount_percent=amounts["discount_percent"],
+                    discount_amount=amounts["discount_amount"],
+                    net_amount=amounts["net_amount"],
+                    cost_price=cost_price,
+                    cost_amount=cost_total,
+                    disposition=disposition,
                 )
-                med = persist_new_medicine_record(med)
+                db.session.add(return_item)
+                db.session.flush()
+                record_return_line_followups(
+                    ret=ret,
+                    return_item=return_item,
+                    med=med,
+                    disposition=disposition,
+                    lot_allocations=lot_allocations,
+                    cost_price=cost_price,
+                    actor=actor,
+                )
+                summary_lines.append({"disposition": disposition, "qty": req_qty})
 
-            old_stock = med.qty
-            med.qty += req_qty
-
-            history = StockHistory(
-                medicine_id=med.id,
-                medicine_name=med.name,
-                batch=med.batch,
-                action="RETURN",
-                stock_before=old_stock,
-                qty_change=req_qty,
-                stock_after=med.qty,
-                user=session.get("username"),
-                remark=f"Return Bill {ret.return_no} (Inv {invoice.invoice_no})"
-            )
-            db.session.add(history)
-
-            amount = req_qty * (it.price or 0)
-            discp = it.discount_percent or 0
-            disc_amt = amount * discp / 100
-            net_amt = amount - disc_amt
-
-            tax_amt = net_amt * gst_rate / 100
-            cgst_amt = tax_amt / 2
-            sgst_amt = tax_amt / 2
-
-            subtotal_return += net_amt
-            total_cgst += cgst_amt
-            total_sgst += sgst_amt
-
-            fallback_rate = it.cost_price or it.price or 0
-            cost_total = fifo_return(it.id, req_qty, fallback_rate)
-            cost_price = round(cost_total / req_qty, 4) if req_qty else 0
-
-            db.session.add(ReturnItem(
-                return_id=ret.id,
-                invoice_item_id=it.id,
-                medicine_id=med.id,
-                medicine_name=it.name,
-                batch=it.batch,
-                expiry=it.expiry,
-                qty=req_qty,
-                price=it.price,
-                amount=amount,
-                purchase_rate=0,
-                selling_rate=it.price or 0,
-                gst_percent=gst_rate,
-                reason=reason,
-                discount_percent=discp,
-                discount_amount=disc_amt,
-                net_amount=net_amt,
-                cost_price=cost_price,
-                cost_amount=cost_total
-            ))
-
-        ret.cgst = round(total_cgst, 2)
-        ret.sgst = round(total_sgst, 2)
-        ret.total_refund = round(subtotal_return * refund_multiplier, 2)
-        db.session.commit()
-        flash("Medicine returned successfully. Stock updated & Return Bill generated.", "success")
+            ret.cgst = round_currency(total_cgst)
+            ret.sgst = round_currency(total_sgst)
+            ret.total_refund = round_currency(subtotal_return * refund_multiplier)
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            app.logger.exception("Invoice return failed for invoice %s", invoice_no)
+            flash("Return could not be saved. No stock was changed.", "danger")
+            return redirect(f"/return-medicine?invoice_no={invoice_no}")
+        record_audit_event(
+            action="Created return bill",
+            entity_type="RETURN_BILL",
+            entity_id=ret.id,
+            ref_code=ret.return_no,
+            before=None,
+            after=build_return_audit_snapshot(ret),
+            extra={
+                "mode": "invoice",
+                "original_invoice_id": invoice.id,
+                "window_override": bool(override_window),
+                "item_count": len(return_requests),
+            },
+        )
+        flash(return_success_message(summary_lines), "success")
         return redirect(f"/return-invoice/{ret.id}")
 
     # ---------------- SEARCH (GET) ----------------
@@ -8466,7 +10011,8 @@ def return_medicine():
                 items_payload.append({
                     "item": it,
                     "returned": already_returned,
-                    "remaining": remaining
+                    "remaining": remaining,
+                    "cold_chain": is_cold_chain_medicine(find_medicine_for_invoice_item(it), it),
                 })
         else:
             flash("Invoice not found", "danger")
@@ -8486,6 +10032,10 @@ def return_medicine():
     return render_template(
         "return_medicine.html",
         invoice=invoice,
+        invoice_cancelled=bool(invoice and getattr(invoice, "is_cancelled", False)),
+        return_window_open=is_invoice_return_window_open(invoice) if invoice else True,
+        return_window_days=return_window_days(),
+        is_admin=(session.get("role") or "").strip().lower() == "admin",
         items=items_payload,
         invoice_no=invoice_no,
         medicines=medicines,
@@ -8676,7 +10226,7 @@ def restore_bill(id):
         return redirect("/pending-bills")
     return redirect(url_for("billing", hold_bill_id=hb.id))
 
-@app.route("/delete-hold/<int:id>")
+@app.route("/delete-hold/<int:id>", methods=["POST"])
 @login_required
 @invoice_access_required
 def delete_hold(id):
@@ -8703,7 +10253,22 @@ def delete_return_bill(id):
     items = ReturnItem.query.filter_by(return_id=id).all()
     item_medicines = {}
     required_stock = {}
+    quarantine_by_item = {
+        q.return_item_id: q
+        for q in QuarantineStock.query.filter_by(return_id=ret.id).all()
+    }
+
+    def stock_was_added(item):
+        """True when this returned line is currently inside sellable stock."""
+        disposition = normalize_return_disposition(getattr(item, "disposition", "RESTOCK"))
+        if disposition == "RESTOCK":
+            return True
+        quarantine = quarantine_by_item.get(item.id)
+        return bool(quarantine and (quarantine.status or "").upper() == "RESTOCKED")
+
     for it in items:
+        if not stock_was_added(it):
+            continue
         med = None
         if it.medicine_id:
             med = Medicine.query.get(it.medicine_id)
@@ -8728,12 +10293,22 @@ def delete_return_bill(id):
             return redirect("/return-bills")
 
     for it in items:
+        quarantine = quarantine_by_item.get(it.id)
+        if not stock_was_added(it):
+            # Units never entered sellable stock: just close the quarantine record.
+            if quarantine and (quarantine.status or "").upper() == "PENDING":
+                quarantine.status = "CANCELLED"
+                quarantine.resolved_by = session.get("username")
+                quarantine.resolved_at = datetime.utcnow()
+            continue
         med = item_medicines.get(it.id)
         if not med:
             continue
         if it.invoice_item_id:
             fallback_rate = it.cost_price or it.selling_rate or it.price or 0
             fifo_cancel_return(it.invoice_item_id, it.qty, fallback_rate)
+        else:
+            reverse_manual_return_lots(it.id)
         old_stock = med.qty
         med.qty -= it.qty
         history = StockHistory(
@@ -8748,6 +10323,10 @@ def delete_return_bill(id):
             remark=f"Return Bill cancelled {ret.return_no or f'RB-{ret.id:06d}'}"
         )
         db.session.add(history)
+        if quarantine:
+            quarantine.status = "CANCELLED"
+            quarantine.resolved_by = session.get("username")
+            quarantine.resolved_at = datetime.utcnow()
 
     ret.is_cancelled = True
     ret.cancelled_by = session.get("username")
@@ -8825,6 +10404,19 @@ def render_invoice_page(inv, *, share_url="", is_public_invoice=False):
     items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
     rounded_total = compute_invoice_rounded_total(inv.total if inv.total not in (None, "") else inv.subtotal)
     payment_breakdown = build_invoice_payment_breakdown(inv, rounded_total)
+    exchange_return_bill = Return.query.filter_by(adjusted_invoice_id=inv.id).first()
+    exchange_return_items = []
+    return_credit_total = round_currency(getattr(inv, "return_credit_used", 0))
+    exchange_refund_amount = round_currency(getattr(inv, "refund_amount", 0))
+    final_payable = round_currency(getattr(inv, "final_payable", rounded_total))
+    if exchange_return_bill and not bool(getattr(exchange_return_bill, "is_cancelled", False)):
+        exchange_return_items = [
+            {"item": item, "qty": item.qty, "amounts": {"net_amount": item.net_amount}}
+            for item in ReturnItem.query.filter_by(return_id=exchange_return_bill.id).all()
+        ]
+        return_credit_total = round_currency(getattr(exchange_return_bill, "total_refund", return_credit_total))
+        exchange_refund_amount = round_currency(getattr(exchange_return_bill, "refund_amount", exchange_refund_amount))
+        final_payable = round_currency(max(rounded_total - return_credit_total, 0))
 
     return render_template(
         "invoice.html",
@@ -8834,6 +10426,12 @@ def render_invoice_page(inv, *, share_url="", is_public_invoice=False):
         print_profile=resolve_invoice_print_profile(inv),
         payment_breakdown=payment_breakdown,
         cart=items,
+        exchange_return_bill=exchange_return_bill,
+        exchange_return_items=exchange_return_items,
+        return_credit_total=return_credit_total,
+        return_credit_used=round_currency(getattr(inv, "return_credit_used", 0)),
+        exchange_refund_amount=exchange_refund_amount,
+        final_payable=final_payable,
         customer=inv.customer,
         customer_gst_no=(inv.customer_gst_no or "").strip(),
         mobile=inv.mobile,
@@ -8849,6 +10447,14 @@ def render_invoice_page(inv, *, share_url="", is_public_invoice=False):
         date=(storage_datetime_to_local(inv.created_at) or inv.created_at).strftime("%d-%m-%Y"),
         bill_time=(storage_datetime_to_local(inv.created_at) or inv.created_at).strftime("%I:%M %p")
     )
+
+
+def excel_item_gst_split(inv, item, net_amount):
+    if getattr(item, "gst_amount", None) is not None:
+        half = round_currency(to_float_safe(item.gst_amount, 0) / 2)
+        return half, half
+    gst = split_inclusive_gst(net_amount, invoice_item_gst_percent(inv, item))
+    return gst["cgst"], gst["sgst"]
 
 
 def build_single_invoice_excel(inv):
@@ -8959,8 +10565,7 @@ def build_single_invoice_excel(inv):
             money(item.discount_percent),
             money(item.discount_amount),
             net_amount,
-            round(net_amount * 0.025, 2),
-            round(net_amount * 0.025, 2),
+            *excel_item_gst_split(inv, item, net_amount),
         ])
 
     total_row = detail.max_row + 1
@@ -9030,6 +10635,9 @@ def edit_invoice(id):
         flash("Access denied", "danger")
         return redirect("/invoices")
     invoice = Invoice.query.get_or_404(id)
+    if bool(getattr(invoice, "is_cancelled", False)):
+        flash("A cancelled invoice cannot be edited.", "warning")
+        return redirect("/invoices")
     items = InvoiceItem.query.filter_by(invoice_id=id).all()
     payment_modes = POS_PAYMENT_MODES
 
@@ -9084,9 +10692,82 @@ def edit_invoice(id):
         items=items,
         payment_modes=payment_modes
     )
-@app.route("/delete-invoice/<int:id>")
+def cancel_invoice_record(inv, *, actor_username, reason):
+    """Cancel an invoice: restore stock and FIFO lots, keep the record.
+
+    GST rules require issued invoice numbers to stay in the books, so the
+    invoice and its items are kept and marked cancelled instead of deleted.
+    Returns an error message, or None on success (caller commits).
+    """
+    if bool(getattr(inv, "is_cancelled", False)):
+        return "Invoice is already cancelled."
+    has_returns = Return.query.filter(
+        Return.invoice_id == inv.id,
+        falsey_or_null_column_expr(Return.is_cancelled)
+    ).first()
+    if has_returns:
+        return "Cannot cancel an invoice that has returns. Cancel the return bills first."
+    if Return.query.filter(
+        Return.adjusted_invoice_id == inv.id,
+        falsey_or_null_column_expr(Return.is_cancelled)
+    ).first():
+        return "This invoice used an exchange return credit. Cancel that return bill first."
+
+    items = InvoiceItem.query.filter_by(invoice_id=inv.id).all()
+    for it in items:
+        med = (
+            Medicine.query.filter_by(name=it.name, batch=it.batch, expiry=it.expiry).first()
+            or Medicine.query.filter_by(name=it.name, batch=it.batch).first()
+        )
+        if not med:
+            med = persist_new_medicine_record(Medicine(
+                name=it.name,
+                batch=it.batch,
+                expiry=it.expiry or "",
+                mrp=it.price or 0,
+                qty=0,
+                discount_percent=int(it.discount_percent or 0),
+                gst_percent=normalize_gst_percent(getattr(it, "gst_percent", None), default_gst_percent()),
+            ))
+        med = lock_medicine_for_update(med)
+        old_stock = to_int_safe(med.qty, 0)
+        med.qty = old_stock + to_int_safe(it.qty, 0)
+        db.session.add(StockHistory(
+            medicine_id=med.id,
+            medicine_name=med.name,
+            batch=med.batch,
+            action="INVOICE_CANCEL",
+            stock_before=old_stock,
+            qty_change=to_int_safe(it.qty, 0),
+            stock_after=med.qty,
+            user=actor_username,
+            remark=f"Invoice {inv.invoice_no} cancelled (stock returned)",
+            ref_table="invoice",
+            ref_id=inv.id,
+        ))
+
+        for alloc in SalesAllocation.query.filter_by(invoice_item_id=it.id).all():
+            still_sold = to_int(alloc.qty) - to_int(alloc.returned_qty)
+            if still_sold <= 0:
+                continue
+            if alloc.purchase_item_id:
+                pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                if pi:
+                    pi.remaining_qty = to_int(pi.remaining_qty) + still_sold
+            # Mark the allocation fully returned so nothing can restore it twice.
+            alloc.returned_qty = to_int(alloc.qty)
+
+    inv.is_cancelled = True
+    inv.cancelled_at = datetime.utcnow()
+    inv.cancelled_by = actor_username
+    inv.cancel_reason = (reason or "").strip()[:255] or "Cancelled"
+    return None
+
+
+@app.route("/invoice/cancel/<int:id>", methods=["POST"])
+@app.route("/delete-invoice/<int:id>", methods=["POST"])
 @login_required
-def delete_invoice(id):
+def cancel_invoice(id):
     user = active_user_by_id(session.get("user_id"))
     if not user:
         flash("Access denied", "danger")
@@ -9096,56 +10777,32 @@ def delete_invoice(id):
         return redirect("/invoices")
     inv = Invoice.query.get_or_404(id)
     before_snapshot = build_invoice_audit_snapshot(inv)
-    has_returns = Return.query.filter(
-        Return.invoice_id == inv.id,
-        falsey_or_null_column_expr(Return.is_cancelled)
-    ).first()
-    if has_returns:
-        flash("Cannot delete invoice with returns. Cancel returns first.", "danger")
+    reason = (request.form.get("reason") or "").strip()
+    try:
+        error = cancel_invoice_record(inv, actor_username=session.get("username"), reason=reason)
+        if error:
+            db.session.rollback()
+            flash(error, "danger")
+            return redirect("/invoices")
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Invoice cancel failed for id=%s", id)
+        flash("Invoice could not be cancelled. No stock was changed.", "danger")
         return redirect("/invoices")
-    items = InvoiceItem.query.filter_by(invoice_id=id).all()
-    for it in items:
-        med = Medicine.query.filter_by(name=it.name, batch=it.batch).first()
-        if med:
-            old_stock = med.qty
-            med.qty += it.qty
-            history = StockHistory(
-                medicine_id=med.id,
-                medicine_name=med.name,
-                batch=med.batch,
-                action="RETURN",
-                stock_before=old_stock,
-                qty_change=it.qty,
-                stock_after=med.qty,
-                user=session.get("username"),
-                remark="Invoice deleted (stock returned)"
-            )
-            db.session.add(history)
-
-        allocations = SalesAllocation.query.filter_by(invoice_item_id=it.id).all()
-        for alloc in allocations:
-            sold_qty = to_int(alloc.qty) - to_int(alloc.returned_qty)
-            if sold_qty <= 0:
-                continue
-            if alloc.purchase_item_id:
-                pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
-                if pi:
-                    pi.remaining_qty = to_int(pi.remaining_qty) + sold_qty
-        SalesAllocation.query.filter_by(invoice_item_id=it.id).delete()
-
-    InvoiceItem.query.filter_by(invoice_id=id).delete()
-    db.session.delete(inv)
-    db.session.commit()
     record_audit_event(
-        action="Deleted invoice",
+        action="Cancelled invoice",
         entity_type="INVOICE",
-        entity_id=before_snapshot.get("id") if before_snapshot else None,
-        ref_code=before_snapshot.get("invoice_no", "") if before_snapshot else "",
+        entity_id=inv.id,
+        ref_code=inv.invoice_no,
         before=before_snapshot,
-        after=None
+        after=build_invoice_audit_snapshot(inv),
+        extra={"reason": inv.cancel_reason},
     )
-    flash("Invoice deleted and stock restored.", "info")
+    flash(f"Invoice {inv.invoice_no} cancelled. Stock restored and record kept for GST.", "info")
     return redirect("/invoices")
+
+
 @app.route("/company")
 @login_required
 def company():
@@ -9685,6 +11342,16 @@ def add_vendor_purchase(id):
     if not line_items:
         return purchase_error("Please add at least one medicine to purchase")
 
+    # Warn (not block) when the landed cost per unit is above MRP: this is
+    # almost always a typing mistake and would mean selling at a loss.
+    costly_lines = [
+        f'{row["name"]} ({row["batch"]})'
+        for row in line_items
+        if to_float_safe(row.get("mrp"), 0) > 0
+        and to_float_safe(row.get("purchase_rate"), 0) * (1 + to_float_safe(row.get("gst_percent"), 0) / 100)
+        > to_float_safe(row.get("mrp"), 0)
+    ]
+
     saved_bill_attachment_ref = ""
     try:
         purchase = VendorPurchase(
@@ -9739,6 +11406,7 @@ def add_vendor_purchase(id):
                     expiry=item["expiry"],
                     mrp=item["mrp"] or 0,
                     qty=0,
+                    gst_percent=normalize_gst_percent(item.get("gst_percent"), default_gst_percent()),
                     # Keep selling discount in sync across new batches of the same medicine.
                     discount_percent=int(
                         to_float_safe(
@@ -9761,6 +11429,8 @@ def add_vendor_purchase(id):
                     med.pack_type = item["pack_type"]
                 if item.get("pack_qty") is not None:
                     med.pack_qty = item["pack_qty"]
+                if to_float_safe(item.get("gst_percent"), 0) > 0:
+                    med.gst_percent = normalize_gst_percent(item.get("gst_percent"), medicine_gst_percent(med))
             if target_code:
                 med.medicine_code = target_code
             if item["barcode"]:
@@ -9867,10 +11537,19 @@ def add_vendor_purchase(id):
         )
 
     success_message = "Purchase saved. Stock updated."
+    cost_warning = ""
+    if costly_lines:
+        cost_warning = (
+            "Check rates: cost incl. GST is above MRP for "
+            + ", ".join(costly_lines[:5])
+            + ("..." if len(costly_lines) > 5 else "")
+        )
+        success_message = f"{success_message} WARNING: {cost_warning}"
     if accepts_json:
         return jsonify({
             "ok": True,
             "message": success_message,
+            "warnings": [cost_warning] if cost_warning else [],
             "purchase_id": purchase.id,
             "purchase_no": purchase.purchase_no,
             "redirect_url": f"/vendor/edit/{vendor.id}",
@@ -9882,7 +11561,9 @@ def add_vendor_purchase(id):
                 "rounded_total": round(total_amount),
             },
         }), 200
-    flash(success_message, "success")
+    flash("Purchase saved. Stock updated.", "success")
+    if cost_warning:
+        flash(cost_warning, "warning")
     return redirect(f"/vendor/edit/{vendor.id}")
 
 @app.route("/vendor/purchase/<int:purchase_id>")
@@ -9939,7 +11620,7 @@ def upload_vendor_purchase_bill_file(purchase_id):
     flash("Bill photo uploaded successfully", "success")
     return redirect(url_for("view_vendor_purchase", purchase_id=purchase.id))
 
-@app.route("/vendor/purchase/delete/<int:purchase_id>")
+@app.route("/vendor/purchase/delete/<int:purchase_id>", methods=["POST"])
 @login_required
 @inventory_access_required
 def delete_vendor_purchase(purchase_id):
@@ -10871,7 +12552,7 @@ def api_delete_vendor_note(note_id):
     db.session.commit()
     return jsonify({"message": "Vendor note deleted"}), 200
 
-@app.route("/vendor/delete/<int:id>")
+@app.route("/vendor/delete/<int:id>", methods=["POST"])
 @login_required
 @inventory_access_required
 def delete_vendor(id):
@@ -10905,7 +12586,7 @@ def build_patient_invoice_query(patient):
         )
     if not conditions:
         return Invoice.query.filter(text("1=0"))
-    return Invoice.query.filter(or_(*conditions))
+    return active_invoice_query().filter(or_(*conditions))
 
 def build_patient_appointment_query(patient):
     patient_name = (patient.name or "").strip()
@@ -12105,6 +13786,8 @@ def ensure_inventory_runtime_schema():
         {
             "medicine": [
                 ("is_active", "BOOLEAN DEFAULT TRUE"),
+                ("gst_percent", "REAL DEFAULT 5"),
+                ("schedule_type", "TEXT DEFAULT ''"),
             ],
             "vendor": [
                 ("is_active", "BOOLEAN DEFAULT TRUE"),
@@ -14394,6 +16077,8 @@ def export_excel():
                 "Online Collection": payment_breakdown["online_amount"],
                 "Is Split Payment": "Yes" if payment_breakdown["is_split_payment"] else "No",
                 "Internal Note": i.internal_note or "",
+                "Status": "CANCELLED" if bool(getattr(i, "is_cancelled", False)) else "ACTIVE",
+                "Cancel Reason": getattr(i, "cancel_reason", "") or "",
                 "Created By": i.created_by,
                 "Created At": i.created_at.strftime("%d-%m-%Y %I:%M %p") if i.created_at else ""
             })
@@ -14433,6 +16118,9 @@ def export_excel():
             "Discount %": it.discount_percent,
             "Discount Amount": it.discount_amount,
             "Net Amount": it.net_amount,
+            "GST %": getattr(it, "gst_percent", None),
+            "Taxable Value": getattr(it, "taxable_amount", None),
+            "GST Amount": getattr(it, "gst_amount", None),
             "Cost Price": it.cost_price,
             "Cost Amount": it.cost_amount
         } for it in rows]
@@ -14449,7 +16137,7 @@ def export_excel():
         medicine_query = (request.args.get("medicine_query") or "").strip()
         top_n = request.args.get("top_n")
 
-        query = Invoice.query
+        query = active_invoice_query()
         returns_query = Return.query.filter(falsey_or_null_column_expr(Return.is_cancelled))
         applied_filter = "all"
         if report_type == "daily":
@@ -14741,6 +16429,8 @@ def export_excel():
                 "Online Collection": collection_summary["online_collection"],
                 "Cash Refund": collection_summary["cash_refund_total"],
                 "Online Refund": collection_summary["online_refund_total"],
+                "Adjusted Payment": collection_summary["adjusted_payment_total"],
+                "Refund Due": collection_summary["refund_due_total"],
                 "Split Payment Count": collection_summary["split_payment_count"],
                 "Cash Received Invoices": collection_summary["cash_invoice_count"],
                 "Online Received Invoices": collection_summary["online_invoice_count"],
@@ -14839,6 +16529,9 @@ def export_excel():
             "Customer": r.customer,
             "Mobile": r.mobile,
             "Total Refund": r.total_refund,
+            "Adjusted Invoice ID": getattr(r, "adjusted_invoice_id", None),
+            "Adjusted Amount": getattr(r, "adjusted_amount", 0),
+            "Refund Due": getattr(r, "refund_amount", 0),
             "Cash Refund": refund_breakdown["cash_refund_amount"],
             "Online Refund": refund_breakdown["online_refund_amount"],
             "Refund Type": refund_breakdown["refund_type"],
@@ -15162,7 +16855,7 @@ def change_user_password(user_id):
         require_current_password=False,
         page_title=f"Change Password - {user.username}"
     )
-@app.route("/users/delete/<int:user_id>")
+@app.route("/users/delete/<int:user_id>", methods=["POST"])
 @login_required
 @admin_required
 def delete_user(user_id):
@@ -15365,8 +17058,9 @@ def delete_stock_history(id):
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    debug_flag = (os.environ.get("FLASK_DEBUG") or os.environ.get("DEBUG") or "1").strip().lower()
-    debug = debug_flag not in {"0", "false", "no", "off"}
+    # Debug mode exposes an interactive console; keep it off unless explicitly enabled.
+    debug_flag = (os.environ.get("FLASK_DEBUG") or os.environ.get("DEBUG") or "0").strip().lower()
+    debug = (not IS_PROD) and debug_flag in {"1", "true", "yes", "on"}
     port = prepare_local_server(is_production=IS_PROD)
     schedule_browser_open(is_production=IS_PROD)
     app.run(host="0.0.0.0", port=port, debug=debug)

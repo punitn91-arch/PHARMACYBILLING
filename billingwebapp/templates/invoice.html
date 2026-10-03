@@ -290,6 +290,21 @@ body {
     word-break: break-word;
 }
 
+.product-meta {
+    font-size: 9px;
+    color: #666;
+    line-height: 1.2;
+}
+
+.return-adjustment-row td {
+    background: #fff7ed;
+    color: #7a3b00;
+}
+
+.return-adjustment-row .product-name {
+    color: #9a3412;
+}
+
 .footer-zone {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 52%);
@@ -503,10 +518,16 @@ body {
             {% set gross_total.value = gross_total.value + line_amount %}
             {% set disc_amt = line_amount * ((item.discount_percent or 0)|float) / 100 %}
             {% set net_amt = (item.net_amount if item.net_amount is not none else (line_amount - disc_amt))|float %}
-            {% set cgst_amt = net_amt * 0.025 %}
-            {% set sgst_amt = net_amt * 0.025 %}
+            {% set gst_rate = (item.gst_percent if item.gst_percent is not none else 5)|float %}
+            {% if item.gst_amount is not none %}
+            {% set gst_amt = item.gst_amount|float %}
+            {% else %}
+            {% set gst_amt = (net_amt - (net_amt * 100 / (100 + gst_rate))) if gst_rate > 0 else 0 %}
+            {% endif %}
+            {% set cgst_amt = (gst_amt / 2)|round(2) %}
+            {% set sgst_amt = cgst_amt %}
             <tr>
-                <td><div class="product-name">{{ item.name }}</div></td>
+                <td><div class="product-name">{{ item.name }}</div><div class="product-meta">GST {{ "%g"|format(gst_rate) }}%</div></td>
                 <td>{{ item.qty }}</td>
                 <td>{{ item.batch or '-' }}</td>
                 <td>{{ item.expiry or '-' }}</td>
@@ -518,6 +539,28 @@ body {
                 <td><strong>₹{{ "%.2f"|format((item.net_amount or 0)|float) }}</strong></td>
             </tr>
             {% endfor %}
+            {% if exchange_return_items %}
+            {% for row in exchange_return_items %}
+            {% set item = row.item %}
+            {% set return_qty = row.qty or item.qty or 0 %}
+            {% set return_net = (row.amounts.net_amount if row.amounts is defined else item.net_amount)|float %}
+            {% set return_price = (item.price or item.selling_rate or 0)|float %}
+            {% set return_discount = (item.discount_percent or 0)|float %}
+            {% set return_gst = ((row.amounts.gst_percent if row.amounts is defined else item.gst_percent) or 0)|float %}
+            <tr class="return-adjustment-row">
+                <td><div class="product-name">RETURN: {{ item.name or item.medicine_name }}</div></td>
+                <td>-{{ return_qty }}</td>
+                <td>{{ item.batch or '-' }}</td>
+                <td>{{ item.expiry or '-' }}</td>
+                <td>₹{{ "%.2f"|format(return_price) }}</td>
+                <td>-₹{{ "%.2f"|format(return_net * return_gst / 200) }}</td>
+                <td>-₹{{ "%.2f"|format(return_net * return_gst / 200) }}</td>
+                <td>-₹{{ "%.2f"|format(return_qty * return_price) }}</td>
+                <td>{{ return_discount }}%</td>
+                <td><strong>-₹{{ "%.2f"|format(return_net) }}</strong></td>
+            </tr>
+            {% endfor %}
+            {% endif %}
         </tbody>
     </table>
 </div>
@@ -548,6 +591,22 @@ body {
                 <span>Rounded Amount</span>
                 <strong>₹{{ "%.2f"|format(rounded_total or total) }}</strong>
             </div>
+            {% if return_credit_total %}
+            <div class="summary-row">
+                <span>Return Adjustment</span>
+                <strong>-₹{{ "%.2f"|format(return_credit_total or 0) }}</strong>
+            </div>
+            <div class="summary-row grand">
+                <span>Final Payable</span>
+                <strong>₹{{ "%.2f"|format(final_payable or 0) }}</strong>
+            </div>
+            {% if exchange_refund_amount %}
+            <div class="summary-row grand">
+                <span>Refund/Credit Due</span>
+                <strong>₹{{ "%.2f"|format(exchange_refund_amount or 0) }}</strong>
+            </div>
+            {% endif %}
+            {% endif %}
         </div>
 
         {% if payment_breakdown and payment_breakdown.is_split_payment %}

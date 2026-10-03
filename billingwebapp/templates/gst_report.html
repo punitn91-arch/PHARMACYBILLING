@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}GST Summary{% endblock %}
+{% block body %}
+{% macro money(v) -%}Rs {{ '%.2f'|format((v or 0)|float) }}{%- endmacro %}
+{% macro rate_table(rows, totals, label) %}
+<section class="app-table-shell" style="margin-bottom:14px;">
+    <div class="app-table-scroll">
+        <table class="app-table">
+            <thead>
+                <tr><th colspan="6" style="text-align:left;">{{ label }}</th></tr>
+                <tr><th>GST Rate</th><th>Qty</th><th>Taxable Value</th><th>CGST</th><th>SGST</th><th>Total</th></tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ '%g'|format(row.key|float) }}%</td>
+                    <td>{{ row.qty }}</td>
+                    <td>{{ money(row.taxable) }}</td>
+                    <td>{{ money(row.cgst) }}</td>
+                    <td>{{ money(row.sgst) }}</td>
+                    <td>{{ money(row.total) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6">No entries in this period.</td></tr>
+                {% endfor %}
+                {% if rows %}
+                <tr style="font-weight:700;">
+                    <td>Total</td>
+                    <td>{{ totals.qty }}</td>
+                    <td>{{ money(totals.taxable) }}</td>
+                    <td>{{ money(totals.cgst) }}</td>
+                    <td>{{ money(totals.sgst) }}</td>
+                    <td>{{ money(totals.total) }}</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endmacro %}
+
+<div class="app-page-stack">
+    <section class="app-surface">
+        <h2 style="margin:0 0 4px;">GST Summary</h2>
+        <div class="app-inline-help">
+            Sales are taken from active (not cancelled) invoices. MRP includes GST, so taxable value = amount × 100 / (100 + rate).
+            This is a working summary for GSTR-1 / GSTR-3B; please verify with your CA before filing.
+        </div>
+        <form method="get" class="app-filter-grid" style="margin-top:10px;">
+            <div class="app-field" style="grid-column: span 3;">
+                <label>From</label>
+                <input type="date" name="from" value="{{ start_date.isoformat() }}">
+            </div>
+            <div class="app-field" style="grid-column: span 3;">
+                <label>To</label>
+                <input type="date" name="to" value="{{ end_date.isoformat() }}">
+            </div>
+            <div class="app-actions" style="grid-column: span 6; justify-content:flex-end;">
+                <button type="submit" class="app-button">Show</button>
+                <a class="app-button secondary" href="/reports/gst?from={{ start_date.isoformat() }}&to={{ end_date.isoformat() }}&format=xlsx">Download Excel</a>
+            </div>
+        </form>
+    </section>
+
+    <section class="app-stat-grid">
+        <article class="app-stat-card">
+            <div class="app-stat-label">Output GST (sales − returns)</div>
+            <div class="app-stat-value">{{ money(data.output_tax) }}</div>
+            <div class="app-stat-sub">{{ data.invoice_count }} invoice(s)</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Input GST (purchases)</div>
+            <div class="app-stat-value">{{ money(data.input_tax) }}</div>
+            <div class="app-stat-sub">From vendor purchase bills</div>
+        </article>
+        <article class="app-stat-card">
+            <div class="app-stat-label">Net GST payable (estimate)</div>
+            <div class="app-stat-value">{{ money(data.net_tax) }}</div>
+            <div class="app-stat-sub">Output − input</div>
+        </article>
+    </section>
+
+    {{ rate_table(data.sales, data.sales_total, "Outward supplies (Sales)") }}
+    {{ rate_table(data.returns, data.returns_total, "Sales returns (Credit notes)") }}
+    {{ rate_table(data.purchases, data.purchase_total, "Inward supplies (Purchases)") }}
+
+</div>
+{% endblock %}

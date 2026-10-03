@@ -699,7 +699,7 @@
                                             {% if session.get("role") == "admin" or session.get("can_delete_medicine") %}
                                             <a
                                                 class="inline-link danger"
-                                                href="/medicines/delete/{{ batch.id }}"
+                                                href="/medicines/delete/{{ batch.id }}" data-method="post"
                                                 data-async-action="true"
                                                 onclick="return confirm('Delete this batch?')"
                                                 title="Delete"

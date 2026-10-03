@@ -12,6 +12,7 @@ try:
         available_slots,
         begin_idempotency,
         book_appointment,
+        book_appointment_with_contact,
         cancel_appointment,
         complete_idempotency,
         mark_late_arrival,
@@ -40,6 +41,7 @@ except ImportError:  # pragma: no cover
         available_slots,
         begin_idempotency,
         book_appointment,
+        book_appointment_with_contact,
         cancel_appointment,
         complete_idempotency,
         mark_late_arrival,
@@ -126,16 +128,50 @@ def get_appointment_slots():
 @ai_api_bp.post("/appointments")
 @require_ai_scope("appointment:create")
 def create_appointment():
+    """Books a NEW appointment. Two ways to identify the patient, chosen by
+    what the request actually sends -- both existed before this change made
+    the second one possible, neither replaces the other:
+
+    1. ``X-Patient-Session`` header (unchanged, pre-existing): an
+       OTP-verified session from ``verified_patient_session`` -- the
+       original, still-required path for any caller that does not send
+       ``patient_name``/``mobile`` in the body.
+    2. ``patient_name`` + ``mobile`` in the JSON body (new, additive):
+       books without OTP verification -- a clinic policy decision that
+       booking a NEW appointment needs to know who it is for, not proof
+       the caller currently holds that phone, the same standard already
+       applied to reception callbacks/complaints (see ai_callbacks_api.py),
+       which also never required OTP.
+
+    Viewing, cancelling or rescheduling an *existing* appointment (see
+    ``_mutating_appointment_request`` below) always still requires the
+    verified session -- this new path only ever creates a brand new
+    appointment. Reports and any endpoint reading an existing patient's
+    data keep requiring real OTP verification unchanged.
+    """
     set_ai_audit_action("APPOINTMENT_CREATE")
     payload = json_object_body()
-    patient_session = verified_patient_session()
-    replay_payload = {
-        "patient_id": patient_session.patient_id,
-        "doctor_id": payload.get("doctor_id"),
-        "location_id": payload.get("location_id"),
-        "start_at": payload.get("start_at"),
-        "reason": str(payload.get("reason") or "")[:255],
-    }
+    patient_name = str(payload.get("patient_name") or "").strip()
+    mobile = str(payload.get("mobile") or "").strip()
+    using_contact_path = bool(patient_name and mobile)
+
+    if using_contact_path:
+        replay_payload = {
+            "mobile": mobile,
+            "doctor_id": payload.get("doctor_id"),
+            "location_id": payload.get("location_id"),
+            "start_at": payload.get("start_at"),
+            "reason": str(payload.get("reason") or "")[:255],
+        }
+    else:
+        patient_session = verified_patient_session()
+        replay_payload = {
+            "patient_id": patient_session.patient_id,
+            "doctor_id": payload.get("doctor_id"),
+            "location_id": payload.get("location_id"),
+            "start_at": payload.get("start_at"),
+            "reason": str(payload.get("reason") or "")[:255],
+        }
     try:
         record, replay, replay_status = begin_idempotency(
             db.session,
@@ -146,17 +182,31 @@ def create_appointment():
         )
         if replay is not None:
             return success_response(replay, replay_status)
-        appointment = book_appointment(
-            db.session,
-            patient_session=patient_session,
-            doctor_id=positive_int(payload.get("doctor_id"), "doctor_id"),
-            location_id=positive_int(payload.get("location_id"), "location_id"),
-            start_at=payload.get("start_at"),
-            reason=payload.get("reason"),
-            call_id=getattr(g, "ai_call_id", None),
-            session_id=getattr(g, "ai_session_id", None),
-            request_id=getattr(g, "ai_request_id", None),
-        )
+        if using_contact_path:
+            appointment = book_appointment_with_contact(
+                db.session,
+                patient_name=patient_name,
+                mobile=mobile,
+                doctor_id=positive_int(payload.get("doctor_id"), "doctor_id"),
+                location_id=positive_int(payload.get("location_id"), "location_id"),
+                start_at=payload.get("start_at"),
+                reason=payload.get("reason"),
+                call_id=getattr(g, "ai_call_id", None),
+                session_id=getattr(g, "ai_session_id", None),
+                request_id=getattr(g, "ai_request_id", None),
+            )
+        else:
+            appointment = book_appointment(
+                db.session,
+                patient_session=patient_session,
+                doctor_id=positive_int(payload.get("doctor_id"), "doctor_id"),
+                location_id=positive_int(payload.get("location_id"), "location_id"),
+                start_at=payload.get("start_at"),
+                reason=payload.get("reason"),
+                call_id=getattr(g, "ai_call_id", None),
+                session_id=getattr(g, "ai_session_id", None),
+                request_id=getattr(g, "ai_request_id", None),
+            )
         result = serialize_appointment(appointment)
         complete_idempotency(
             record,

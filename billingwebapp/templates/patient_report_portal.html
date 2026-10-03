@@ -3,6 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ app_csrf_token() }}">
+    <script src="{{ url_for('static', filename='csrf.js') }}"></script>
     <meta name="robots" content="noindex, nofollow, noarchive">
     <title>View Lab Reports</title>
     <style>

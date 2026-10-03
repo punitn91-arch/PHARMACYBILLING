@@ -30,6 +30,7 @@ class PublicPatientPortalTests(unittest.TestCase):
         cls.db_path = os.path.join(cls.temp_dir.name, "public_portals_test.db")
         os.environ["DATABASE_URL"] = f"sqlite:///{cls.db_path}"
         os.environ["SECRET_KEY"] = "public-portals-test-secret"
+        os.environ["CSRF_PROTECTION"] = "0"
         os.environ["APP_TIMEZONE"] = "Asia/Kolkata"
         os.environ["ENABLE_BACKGROUND_JOBS"] = "0"
         os.environ["APP_STORAGE_ROOT"] = os.path.join(cls.temp_dir.name, "uploads")

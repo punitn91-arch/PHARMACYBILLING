@@ -35,6 +35,7 @@ class OmnidimGatewayTests(unittest.TestCase):
                     os.path.join(cls.temp_dir.name, "omnidim_gateway.db")
                 ),
                 "SECRET_KEY": "omnidim-gateway-test-session-secret",
+                "CSRF_PROTECTION": "0",
                 "APP_TIMEZONE": "Asia/Kolkata",
                 "APP_STORAGE_ROOT": os.path.join(cls.temp_dir.name, "uploads"),
                 "APP_PRIVATE_STORAGE_ROOT": os.path.join(cls.temp_dir.name, "private"),

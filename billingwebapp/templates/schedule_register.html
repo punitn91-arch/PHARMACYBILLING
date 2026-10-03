@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Schedule H1 Register{% endblock %}
+{% block body %}
+<div class="app-page-stack">
+    <section class="app-surface">
+        <h2 style="margin:0 0 4px;">Schedule H1 / X Register</h2>
+        <div class="app-inline-help">
+            Every sale of a medicine marked <strong>Schedule H1</strong> or <strong>Schedule X</strong> in Medicine Master, with patient and prescribing doctor.
+            Billing will not allow these medicines without a doctor name. Mark medicines in Medicine Master → Edit → Drug Schedule.
+        </div>
+        <form method="get" class="app-filter-grid" style="margin-top:10px;">
+            <div class="app-field" style="grid-column: span 3;">
+                <label>From</label>
+                <input type="date" name="from" value="{{ start_date.isoformat() }}">
+            </div>
+            <div class="app-field" style="grid-column: span 3;">
+                <label>To</label>
+                <input type="date" name="to" value="{{ end_date.isoformat() }}">
+            </div>
+            <div class="app-actions" style="grid-column: span 6; justify-content:flex-end;">
+                <button type="submit" class="app-button">Show</button>
+                <a class="app-button secondary" href="/reports/schedule-h1?from={{ start_date.isoformat() }}&to={{ end_date.isoformat() }}&format=xlsx">Download Excel</a>
+            </div>
+        </form>
+    </section>
+
+    <section class="app-table-shell">
+        <div class="app-table-scroll">
+            <table class="app-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Invoice</th>
+                        <th>Patient</th>
+                        <th>Mobile</th>
+                        <th>Prescriber</th>
+                        <th>Medicine</th>
+                        <th>Batch</th>
+                        <th>Qty</th>
+                        <th>Schedule</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                    <tr>
+                        <td>{{ r.date }}</td>
+                        <td>{{ r.invoice_no }}</td>
+                        <td>{{ r.patient }}</td>
+                        <td>{{ r.mobile }}</td>
+                        <td>{% if r.doctor %}{{ r.doctor }}{% else %}<span class="app-badge danger">Missing</span>{% endif %}</td>
+                        <td><strong>{{ r.medicine }}</strong></td>
+                        <td>{{ r.batch }}</td>
+                        <td>{{ r.qty }}</td>
+                        <td><span class="app-badge warning">{{ r.schedule }}</span></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="9"><div class="app-empty"><strong>No entries</strong> No Schedule H1/X sales in this period (or no medicine is marked H1/X yet).</div></td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

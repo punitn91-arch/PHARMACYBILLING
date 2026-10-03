@@ -174,7 +174,7 @@ td {
             </td>
             <td>
                 <a href="/vendor/edit/{{ v.id }}" title="Edit">Edit</a> |
-                <a href="/vendor/delete/{{ v.id }}" data-async-action="true" onclick="return confirm('Archive this vendor?')" title="Archive">Archive</a>
+                <a href="/vendor/delete/{{ v.id }}" data-method="post" data-async-action="true" onclick="return confirm('Archive this vendor?')" title="Archive">Archive</a>
             </td>
         </tr>
         {% endfor %}

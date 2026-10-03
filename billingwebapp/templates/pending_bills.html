@@ -107,7 +107,7 @@
 
             <!-- REMOVE HOLD BILL -->
             <a class="btn delete"
-               href="/delete-hold/{{ b.id }}"
+               href="/delete-hold/{{ b.id }}" data-method="post"
                data-async-action="true"
                onclick="return confirm('Remove this pending bill from the active hold list?')">
                 🗑 Remove

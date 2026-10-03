@@ -359,6 +359,9 @@ body {
                     <div class="detail-row"><span>Ref. By</span><strong>{{ doctor or '-' }}</strong></div>
                     <div class="detail-row"><span>Refund Mode</span><strong>{{ payment_breakdown.display_mode }}</strong></div>
                     <div class="detail-row"><span>Return Date</span><strong>{{ return_date }}{% if return_time %} Time {{ return_time }}{% endif %}</strong></div>
+                    {% if adjusted_invoice %}
+                    <div class="detail-row"><span>Adjusted Bill</span><strong>{{ adjusted_invoice.invoice_no }}</strong></div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -386,6 +389,7 @@ body {
                     <td>
                         <div class="product-name">{{ item.medicine_name or '-' }}</div>
                         {% if item.reason %}<div class="return-reason"><strong>Reason:</strong> {{ item.reason }}</div>{% endif %}
+                        {% if item.disposition and item.disposition != 'RESTOCK' %}<div class="return-reason"><strong>Condition:</strong> {{ item.disposition|title }} (kept aside, not resold)</div>{% endif %}
                     </td>
                     <td>{{ item.qty }}</td>
                     <td>{{ item.batch or '-' }}</td>
@@ -421,6 +425,12 @@ body {
                 <div class="summary-row"><span>Total Amount</span><strong>₹{{ "%.2f"|format(gross_total) }}</strong></div>
                 <div class="summary-row"><span>Total Discount</span><strong>₹{{ "%.2f"|format(discount_total) }}</strong></div>
                 <div class="summary-row"><span>Net Return Value</span><strong>₹{{ "%.2f"|format(net_total) }}</strong></div>
+                {% if adjusted_amount %}
+                <div class="summary-row"><span>Adjusted Against Sale</span><strong>₹{{ "%.2f"|format(adjusted_amount) }}</strong></div>
+                {% endif %}
+                {% if refund_due %}
+                <div class="summary-row"><span>Refund/Credit Due</span><strong>₹{{ "%.2f"|format(refund_due) }}</strong></div>
+                {% endif %}
                 <div class="summary-row grand"><span>Final Refund Amount</span><strong>₹{{ "%.2f"|format(refund_total) }}</strong></div>
             </div>
             <div class="summary-card">
@@ -428,7 +438,7 @@ body {
                 <div class="summary-row"><span>CGST Snapshot</span><strong>₹{{ "%.2f"|format(cgst_total) }}</strong></div>
                 <div class="summary-row"><span>SGST Snapshot</span><strong>₹{{ "%.2f"|format(sgst_total) }}</strong></div>
                 <div class="summary-row"><span>Refund Type</span><strong>{{ payment_breakdown.refund_type }}</strong></div>
-                <div class="tax-note">GST values are reference snapshots from the return transaction. They are not added again to the final refund amount.</div>
+                <div class="tax-note">GST shown is already included in the returned MRP (credit note). It is not added again to the final refund amount.</div>
             </div>
         </div>
     </section>
@@ -441,6 +451,7 @@ body {
         {% endif %}
         <div class="action-links">
             {% if original_invoice %}<a href="{{ url_for('view_invoice', id=original_invoice.id) }}">View Original Invoice</a> | {% endif %}
+            {% if adjusted_invoice %}<a href="{{ url_for('view_invoice', id=adjusted_invoice.id) }}">View Adjusted Sale</a> | {% endif %}
             <a href="{{ url_for('return_bills') }}">Return Bills</a> |
             <a href="{{ url_for('return_medicine') }}">New Return</a> |
             <a href="/">Home</a>

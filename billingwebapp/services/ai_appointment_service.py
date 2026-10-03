@@ -388,6 +388,78 @@ def book_appointment(
     return appointment
 
 
+def find_or_create_patient_by_contact(db_session, *, name, mobile):
+    """Finds an existing patient by phone, or creates one from just name +
+    mobile -- the identification path AI-initiated NEW appointment booking
+    uses instead of OTP-verified ``patient_session`` (see
+    routes/ai_appointments_api.py's ``create_appointment``): clinic policy
+    is that booking a new appointment needs the caller's name and mobile
+    number only, never phone-possession proof. This intentionally reuses
+    the exact same phone-normalization/lookup
+    ``ai_patient_service.normalize_phone`` / ``_patient_for_phone`` the
+    OTP-based identification flow already uses, so a caller who later does
+    verify (e.g. to view existing appointments or reports, which still
+    require it) resolves to this same ``Patient`` row rather than a
+    duplicate. Never touches OTP/verification for any other endpoint.
+    """
+    try:
+        from .ai_patient_service import PatientAccessError, _patient_for_phone, normalize_phone
+    except ImportError:  # pragma: no cover
+        from services.ai_patient_service import PatientAccessError, _patient_for_phone, normalize_phone
+
+    clean_name = str(name or "").strip()
+    if not (2 <= len(clean_name) <= 120):
+        raise AppointmentAPIError("INVALID_REQUEST", "Patient name must be 2-120 characters", 400)
+    try:
+        normalized_mobile = normalize_phone(mobile)
+    except PatientAccessError as exc:
+        raise AppointmentAPIError(exc.code, exc.message, exc.status_code)
+
+    patient = _patient_for_phone(normalized_mobile)
+    if patient is None:
+        patient = Patient(name=clean_name, mobile=normalized_mobile)
+        db_session.add(patient)
+        db_session.flush()
+    elif not patient.name:
+        patient.name = clean_name
+    return patient
+
+
+def book_appointment_with_contact(
+    db_session,
+    *,
+    patient_name,
+    mobile,
+    doctor_id,
+    location_id,
+    start_at,
+    reason=None,
+    call_id=None,
+    session_id=None,
+    request_id=None,
+):
+    """Same booking logic as ``book_appointment`` above, for the
+    unverified "just name + mobile, no OTP" AI booking path -- resolves a
+    ``Patient`` row via ``find_or_create_patient_by_contact`` instead of
+    requiring a ``patient_session``."""
+    patient = find_or_create_patient_by_contact(db_session, name=patient_name, mobile=mobile)
+
+    class _ContactOnlySession:
+        patient_id = patient.id
+
+    return book_appointment(
+        db_session,
+        patient_session=_ContactOnlySession(),
+        doctor_id=doctor_id,
+        location_id=location_id,
+        start_at=start_at,
+        reason=reason,
+        call_id=call_id,
+        session_id=session_id,
+        request_id=request_id,
+    )
+
+
 def patient_appointments(patient_session, *, appointment_no=None, limit=20, offset=0):
     query = Appointment.query.filter(
         Appointment.patient_id == patient_session.patient_id,

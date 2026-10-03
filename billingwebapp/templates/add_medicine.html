@@ -81,6 +81,22 @@ button {
        min="0" max="100" value="{{ medicine.discount_percent if medicine else 0 }}"
        required>
 
+
+        <label class="field-label" for="gstPercent">GST % (included in MRP)</label>
+        <select name="gst_percent" id="gstPercent">
+            {% for r in gst_rate_choices %}
+            <option value="{{ r }}" {% if r == 5 %}selected{% endif %}>{{ r }}%</option>
+            {% endfor %}
+        </select>
+
+
+        <label class="field-label" for="scheduleType">Drug Schedule</label>
+        <select name="schedule_type" id="scheduleType">
+            {% for code, label in schedule_choices %}
+            <option value="{{ code }}" {% if code == "" %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+
         <label class="field-label" for="reorderLevel">Reorder Level</label>
         <input type="number" id="reorderLevel" name="reorder_level" min="0" step="1" value="10" placeholder="Low stock alert level">
 

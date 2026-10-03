@@ -181,6 +181,11 @@ th {
                 <div class="info-box"><b>Customer:</b> {{ invoice.customer }}</div>
                 <div class="info-box"><b>Mobile:</b> {{ invoice.mobile }}</div>
             </div>
+            {% if invoice_cancelled %}
+            <div class="flash flash-danger" style="margin:10px 0;">This invoice is CANCELLED. Items cannot be returned.</div>
+            {% elif not return_window_open %}
+            <div class="flash flash-warning" style="margin:10px 0;">This invoice is older than {{ return_window_days }} days (return window closed).{% if is_admin %} Tick "Allow late return" below to override.{% else %} Only an admin can approve a late return.{% endif %}</div>
+            {% endif %}
 
             <form method="POST" onsubmit="return confirm('Generate Return Bill and update stock?')">
                 <input type="hidden" name="mode" value="invoice">
@@ -195,6 +200,7 @@ th {
                         <th>Remaining</th>
                         <th>Selling Rate</th>
                         <th>Return Qty</th>
+                        <th>Condition</th>
                         <th>Reason</th>
                     </tr>
                     {% for row in items %}
@@ -208,6 +214,14 @@ th {
                         <td>{{ row.item.price }}</td>
                         <td>
                             <input class="return-input" type="number" min="0" max="{{ row.remaining }}" name="return_qty_{{ row.item.id }}" value="0">
+                            {% if row.cold_chain %}<div style="color:#b00020;font-size:11px;">Cold-chain: not returnable</div>{% endif %}
+                        </td>
+                        <td>
+                            <select name="disposition_{{ row.item.id }}" title="Where should this stock go?">
+                                <option value="RESTOCK">Good - back to stock</option>
+                                <option value="DAMAGED">Damaged - keep aside</option>
+                                <option value="EXPIRED">Expired - keep aside</option>
+                            </select>
                         </td>
                         <td>
                             <input type="text" name="reason_{{ row.item.id }}" placeholder="Optional">
@@ -226,10 +240,16 @@ th {
                             <option value="ADJUSTMENT">Adjustment</option>
                         </select>
                     </div>
+                    {% if is_admin %}
+                    <div>
+                        <label><input type="checkbox" name="override_window" value="1"> Allow late return / cold-chain (admin)</label>
+                    </div>
+                    {% endif %}
                 </div>
+                <p style="font-size:12px;color:#555;margin-top:6px;">"Good" items go back to sellable stock. Damaged/expired items go to <a href="/quarantine-stock">Quarantine Stock</a> and are never billed again until an admin decides.</p>
 
                 <div class="actions">
-                    <button class="btn-primary" type="submit">Submit Return</button>
+                    <button class="btn-primary" type="submit" {% if invoice_cancelled %}disabled{% endif %}>Submit Return</button>
                 </div>
             </form>
         </div>
@@ -269,11 +289,12 @@ th {
                         <th>Medicine (Batch)</th>
                         <th>Batch</th>
                         <th>Expiry</th>
-                        <th>Selling Rate</th>
+                        <th>Selling Rate (after discount, incl. GST)</th>
                         <th>Purchase Rate</th>
                         <th>Sold Qty</th>
                         <th>Return Qty</th>
                         <th>GST %</th>
+                        <th>Condition</th>
                         <th>Reason</th>
                     </tr>
                 </thead>
@@ -286,6 +307,7 @@ th {
                                 <option value="{{ m.id }}"
                                     data-batch="{{ m.batch }}"
                                     data-expiry="{{ m.expiry }}"
+                                    data-gst="{{ m.gst_percent if m.gst_percent is not none else 5 }}"
                                     data-mrp="{{ m.mrp }}">
                                     {{ m.name }} | {{ m.batch }} | {{ m.expiry }}
                                 </option>
@@ -299,6 +321,13 @@ th {
                         <td><input type="number" name="manual_sold_qty" min="0"></td>
                         <td><input type="number" name="manual_qty" min="0"></td>
                         <td><input type="number" step="any" inputmode="decimal" class="decimal-input" name="manual_gst" min="0"></td>
+                        <td>
+                            <select name="manual_disposition">
+                                <option value="RESTOCK">Good - back to stock</option>
+                                <option value="DAMAGED">Damaged - keep aside</option>
+                                <option value="EXPIRED">Expired - keep aside</option>
+                            </select>
+                        </td>
                         <td><input type="text" name="manual_reason"></td>
                     </tr>
                 </tbody>
@@ -340,6 +369,9 @@ function updateManualRow(row) {
     let batchInput = row.querySelector(".manual-batch");
     let expiryInput = row.querySelector(".manual-expiry");
     let sellingInput = row.querySelector("input[name='manual_selling_rate']");
+    let gstInput = row.querySelector("input[name='manual_gst']");
+    let gst = opt ? opt.getAttribute("data-gst") : "";
+    if (gstInput && !gstInput.value) gstInput.value = gst || "";
     if (batchInput) batchInput.value = batch || "";
     if (expiryInput) expiryInput.value = expiry || "";
     if (sellingInput && !sellingInput.value) sellingInput.value = mrp || "";
@@ -366,8 +398,7 @@ if (addBtn) {
         if (!first) return;
         let clone = first.cloneNode(true);
         clone.querySelectorAll("input").forEach(i => i.value = "");
-        let select = clone.querySelector("select");
-        if (select) select.selectedIndex = 0;
+        clone.querySelectorAll("select").forEach(sel => sel.selectedIndex = 0);
         table.appendChild(clone);
     });
 }
