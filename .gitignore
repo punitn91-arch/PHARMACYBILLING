@@ -9,3 +9,4 @@ instance/
 !.env.example
 !billingwebapp/.env.example
 static/uploads/
+.DS_Store

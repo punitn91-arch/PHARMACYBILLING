@@ -208,6 +208,33 @@ class SystemSmokeTests(unittest.TestCase):
         self.assertIn(b"This Week", response.data)
         self.assertIn(b"Alt + P", response.data)
 
+    def test_appointments_search_matches_word_and_mobile_prefixes(self):
+        self.login()
+        row_marker = b'data-search-name="Ravi Kumar"'
+        expectations = {
+            "r": True,
+            "RAV": True,
+            "ku": True,
+            "ravi kum": True,
+            "98765": True,
+            "APT-10": True,
+            "avi": False,
+            "umar": False,
+            "43210": False,
+        }
+        for term, should_match in expectations.items():
+            with self.subTest(term=term):
+                response = self.client.get("/appointments", query_string={"search": term})
+                self.assertEqual(response.status_code, 200)
+                if should_match:
+                    self.assertIn(row_marker, response.data)
+                else:
+                    self.assertNotIn(row_marker, response.data)
+
+        response = self.client.get("/appointments")
+        self.assertIn(b"setupAppointmentLiveSearch()", response.data)
+        self.assertIn(b'id="appointmentSearchEmptyRow"', response.data)
+
     def test_medicines_page_renders_barcode_filter(self):
         self.login()
         response = self.client.get("/medicines")

@@ -14257,6 +14257,30 @@ def build_appointment_calendar_days(appointments, calendar_view, focus_date):
         })
     return days
 
+def appointment_matches_search(appointment, search_query):
+    """Prefix match for the appointments search box.
+
+    Mirrored by the live filter in appointments.html so the table, Excel export
+    and print show the same rows: any word of the patient name, the appointment
+    number, or (for numeric input) the mobile number must start with the text.
+    """
+    term = " ".join((search_query or "").lower().split())
+    if not term:
+        return True
+    name = " ".join((appointment.patient_name or "").lower().split())
+    if name.startswith(term) or any(word.startswith(term) for word in name.split()):
+        return True
+    if (appointment.appointment_no or "").lower().startswith(term):
+        return True
+    if re.fullmatch(r"[\d\s+\-]+", term):
+        term_digits = normalize_patient_mobile(term)
+        mobile_digits = normalize_patient_mobile(appointment.mobile)
+        if term_digits and mobile_digits and (
+            mobile_digits.startswith(term_digits) or mobile_digits[-10:].startswith(term_digits)
+        ):
+            return True
+    return False
+
 def build_appointment_report_payload(args, flash_errors=False, include_search=True):
     today = date.today()
     legacy_date = parse_date(args.get("date"))
@@ -14357,19 +14381,13 @@ def build_appointment_report_payload(args, flash_errors=False, include_search=Tr
             report_label = selected_date.strftime("%d-%m-%Y")
             focus_date = selected_date
 
-    if include_search and search_query:
-        like = f"%{search_query}%"
-        query = query.filter(or_(
-            Appointment.appointment_no.ilike(like),
-            Appointment.patient_name.ilike(like),
-            Appointment.mobile.ilike(like)
-        ))
-
     appointments = query.order_by(
         Appointment.appointment_date.asc(),
         Appointment.appointment_time.asc(),
         Appointment.id.asc()
     ).all()
+    if include_search and search_query:
+        appointments = [a for a in appointments if appointment_matches_search(a, search_query)]
 
     return {
         "appointments": appointments,

@@ -426,7 +426,7 @@
                 {% set has_mobile = ((a.mobile or '')|trim) != '' %}
                 {% set is_public_fcfs = (a.created_by|default('')|upper) == 'PUBLIC_QR' %}
                 {% set public_token_assigned = is_public_fcfs and a.token_no is not none and a.token_no != '' %}
-                <tr class="transition duration-150 appointment-row" data-appointment-id="{{ a.id }}">
+                <tr class="transition duration-150 appointment-row" data-appointment-id="{{ a.id }}" data-search-name="{{ a.patient_name or '' }}" data-search-no="{{ a.appointment_no or '' }}" data-search-mobile="{{ a.mobile or '' }}">
                     <td class="px-4 py-4 text-sm font-semibold text-slate-900">
                         {{ a.appointment_no }}
                         {% if is_public_fcfs and not public_token_assigned %}
@@ -528,6 +528,11 @@
                     <td colspan="10" class="px-4 py-10 text-center text-sm text-slate-500">No appointments found for selected filters.</td>
                 </tr>
                 {% endfor %}
+                {% if appointments %}
+                <tr id="appointmentSearchEmptyRow" hidden>
+                    <td colspan="10" class="px-4 py-10 text-center text-sm text-slate-500">No patient matches this search.</td>
+                </tr>
+                {% endif %}
             </tbody>
         </table>
     </div>
@@ -773,8 +778,65 @@ document.addEventListener('app:async-success', function (event) {
     }
 });
 
+// Same rule as appointment_matches_search() in app.py, so export/print match the table.
+function appointmentRowMatchesSearch(row, term) {
+    if (!term) return true;
+    const name = String(row.dataset.searchName || '').toLowerCase().split(/\s+/).filter(Boolean).join(' ');
+    if (name.startsWith(term) || name.split(' ').some(function (word) { return word.startsWith(term); })) return true;
+    if (String(row.dataset.searchNo || '').toLowerCase().startsWith(term)) return true;
+    if (/^[\d\s+\-]+$/.test(term)) {
+        const termDigits = term.replace(/\D/g, '');
+        const mobileDigits = String(row.dataset.searchMobile || '').replace(/\D/g, '');
+        if (termDigits && mobileDigits && (mobileDigits.startsWith(termDigits) || mobileDigits.slice(-10).startsWith(termDigits))) return true;
+    }
+    return false;
+}
+
+function setupAppointmentLiveSearch() {
+    const input = document.getElementById('appointment_search');
+    if (!input) return;
+    const rows = Array.from(document.querySelectorAll('.appointments-ui tr.appointment-row'));
+    const emptyRow = document.getElementById('appointmentSearchEmptyRow');
+
+    const syncSearchParam = function (url, value) {
+        if (value) {
+            url.searchParams.set('search', value);
+        } else {
+            url.searchParams.delete('search');
+        }
+    };
+
+    const applySearch = function () {
+        const value = input.value.trim();
+        const term = value.toLowerCase().split(/\s+/).filter(Boolean).join(' ');
+        let visibleCount = 0;
+        rows.forEach(function (row) {
+            const visible = appointmentRowMatchesSearch(row, term);
+            row.hidden = !visible;
+            if (visible) visibleCount += 1;
+        });
+        if (emptyRow) emptyRow.hidden = visibleCount > 0;
+
+        // Keep the text in the URL and quick filter links so a reload after an
+        // action (Mark Paid, Check In...) keeps the same search.
+        const pageUrl = new URL(window.location.href);
+        syncSearchParam(pageUrl, value);
+        window.history.replaceState(window.history.state, '', pageUrl.toString());
+        document.querySelectorAll('.appointments-ui a[href*="quick_filter="]').forEach(function (link) {
+            const linkUrl = new URL(link.href, window.location.origin);
+            syncSearchParam(linkUrl, value);
+            link.href = linkUrl.toString();
+        });
+    };
+
+    input.setAttribute('autocomplete', 'off');
+    input.addEventListener('input', applySearch);
+    if (input.value.trim()) applySearch();
+}
+
 toggleAppointmentFilters("{{ report_filters.appointment_report_type }}");
 setupAppointmentActionMenus();
+setupAppointmentLiveSearch();
 restoreAppointmentsViewport();
 </script>
 {% endblock %}

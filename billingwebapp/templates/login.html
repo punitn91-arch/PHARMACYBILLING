@@ -1,139 +1,646 @@
-{% extends "base.html" %}
-{% block body %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="csrf-token" content="{{ app_csrf_token() }}">
+    <script src="{{ url_for('static', filename='csrf.js') }}"></script>
+    <title>Sign In | The Endo Pharmacy</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #1E40AF;
+            --link: #1E40AF;
+            --bg: #F8FAFC;
+            --bg-glow-1: rgba(30, 64, 175, 0.10);
+            --bg-glow-2: rgba(13, 148, 136, 0.10);
+            --card: #FFFFFF;
+            --input-bg: #FFFFFF;
+            --text: #0F172A;
+            --muted: #64748B;
+            --border: #E2E8F0;
+            --focus-ring: rgba(30, 64, 175, 0.16);
+            --shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+            --error: #DC2626;
+            --error-bg: #FEF2F2;
+            --error-border: #FECACA;
+            --warning: #B45309;
+            --warning-bg: #FFFBEB;
+            --warning-border: #FDE68A;
+            --success: #16A34A;
+            --success-bg: #F0FDF4;
+            --success-border: #BBF7D0;
+            --info: #1E40AF;
+            --info-bg: #EFF6FF;
+            --info-border: #BFDBFE;
+        }
 
-<style>
-    .login-container {
-        width: 380px;
-        margin: 120px auto; /* center vertically */
-        background: white;
-        padding: 35px;
-        border-radius: 12px;
-        box-shadow: 0 0 20px rgba(0,0,0,0.15);
-        text-align: center;
-    }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary: #3B82F6;
+                --link: #93C5FD;
+                --bg: #0B1220;
+                --bg-glow-1: rgba(59, 130, 246, 0.14);
+                --bg-glow-2: rgba(20, 184, 166, 0.10);
+                --card: #111A2E;
+                --input-bg: #0B1426;
+                --text: #E2E8F0;
+                --muted: #94A3B8;
+                --border: #24324D;
+                --focus-ring: rgba(59, 130, 246, 0.25);
+                --shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+                --error: #F87171;
+                --error-bg: rgba(248, 113, 113, 0.10);
+                --error-border: rgba(248, 113, 113, 0.35);
+                --warning: #FBBF24;
+                --warning-bg: rgba(251, 191, 36, 0.10);
+                --warning-border: rgba(251, 191, 36, 0.35);
+                --success: #4ADE80;
+                --success-bg: rgba(74, 222, 128, 0.10);
+                --success-border: rgba(74, 222, 128, 0.35);
+                --info: #93C5FD;
+                --info-bg: rgba(59, 130, 246, 0.12);
+                --info-border: rgba(59, 130, 246, 0.35);
+            }
+        }
 
-    .login-title {
-        font-size: 26px;
-        font-weight: bold;
-        margin-bottom: 20px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #333;
-    }
+        *, *::before, *::after { box-sizing: border-box; }
+        [hidden] { display: none !important; }
 
-    .login-title i {
-        font-size: 30px;
-        margin-right: 10px;
-        color: #ff9800;
-    }
+        body {
+            position: relative;
+            isolation: isolate;
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 32px 16px;
+            font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            font-size: 15px;
+            color: var(--text);
+            background: var(--bg);
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
 
-    .login-input {
-        width: 90%;
-        padding: 12px;
-        margin: 10px 0;
-        border: 1px solid #999;
-        border-radius: 6px;
-        font-size: 16px;
-    }
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            pointer-events: none;
+        }
 
-    .password-field {
-        width: 90%;
-        margin: 10px auto 0;
-        position: relative;
-    }
+        body::before {
+            inset: 0;
+            z-index: -2;
+            background: url("{{ url_for('static', filename='login-background.png') }}") center / cover no-repeat;
+            opacity: 0.34;
+            transform-origin: center;
+        }
 
-    .password-field .login-input {
-        width: 100%;
-        margin: 0;
-        padding-right: 46px;
-    }
+        body::after {
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at 15% 10%, var(--bg-glow-1), transparent 45%),
+                radial-gradient(circle at 85% 90%, var(--bg-glow-2), transparent 45%),
+                rgba(248, 250, 252, 0.58);
+        }
 
-    .toggle-password {
-        position: absolute;
-        top: 50%;
-        right: 12px;
-        transform: translateY(-50%);
-        border: none;
-        background: transparent;
-        padding: 0;
-        cursor: pointer;
-        color: #666;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
+        @media (prefers-color-scheme: dark) {
+            body::after { background:
+                radial-gradient(circle at 15% 10%, var(--bg-glow-1), transparent 45%),
+                radial-gradient(circle at 85% 90%, var(--bg-glow-2), transparent 45%),
+                rgba(11, 18, 32, 0.68);
+            }
+        }
 
-    .toggle-password:hover {
-        color: #007bff;
-    }
+        .auth {
+            position: relative;
+            z-index: 0;
+            width: 100%;
+            max-width: 400px;
+        }
 
-    .toggle-password svg {
-        width: 20px;
-        height: 20px;
-    }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            padding: 28px 40px 36px;
+            animation: rise 300ms ease-out both;
+        }
 
-    .login-btn {
-        width: 95%;
-        background: #007bff;
-        padding: 12px;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        margin-top: 12px;
-        font-size: 18px;
-        cursor: pointer;
-    }
+        .brand { text-align: center; }
 
-    .login-btn:hover {
-        background: #0056b3;
-    }
-</style>
+        .logo-tile {
+            width: 156px;
+            height: 156px;
+            margin: 0 auto 10px;
+            display: grid;
+            place-items: center;
+            border-radius: 28px;
+            background: #FFFFFF;
+            /* Always light: the logo has a white background in both themes. */
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+        }
 
-<div class="login-container">
+        .logo-tile img {
+            width: 142px;
+            height: 142px;
+            display: block;
+        }
 
-    <div class="login-title">
-        <i>🔒</i> Login
-    </div>
+        .tagline {
+            margin: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--muted);
+        }
 
-    <form method="POST" autocomplete="off">
-        <input type="text" name="username" placeholder="Username" class="login-input" autocomplete="off" required>
-        <div class="password-field">
-            <input type="password" name="password" id="password" placeholder="Password" class="login-input" autocomplete="new-password" required>
-            <button type="button" class="toggle-password" id="togglePassword" aria-label="Show password" aria-pressed="false">
-                <svg id="eyeOpen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-                <svg id="eyeClosed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="display: none;">
-                    <path d="M3 3l18 18"></path>
-                    <path d="M10.6 10.7a3 3 0 0 0 4.2 4.2"></path>
-                    <path d="M9.4 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7a21.7 21.7 0 0 1-5 5.8"></path>
-                    <path d="M6.7 6.7A21.5 21.5 0 0 0 1 12s4 7 11 7a10.7 10.7 0 0 0 5.3-1.3"></path>
-                </svg>
-            </button>
-        </div>
+        .tagline svg { width: 14px; height: 14px; }
 
-        <button type="submit" class="login-btn">Login</button>
-    </form>
+        .divider {
+            height: 1px;
+            border: 0;
+            margin: 24px 0;
+            background: var(--border);
+        }
 
-</div>
+        h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
 
-<script>
-    const passwordInput = document.getElementById("password");
-    const togglePassword = document.getElementById("togglePassword");
-    const eyeOpen = document.getElementById("eyeOpen");
-    const eyeClosed = document.getElementById("eyeClosed");
+        .subtitle {
+            margin: 6px 0 24px;
+            font-size: 14px;
+            color: var(--muted);
+        }
 
-    togglePassword.addEventListener("click", function () {
-        const showPassword = passwordInput.type === "password";
+        .alert {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 0 0 18px;
+            padding: 10px 12px;
+            border: 1px solid var(--info-border);
+            border-radius: 8px;
+            background: var(--info-bg);
+            color: var(--info);
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 1.45;
+            animation: drop 200ms ease-out both;
+        }
 
-        passwordInput.type = showPassword ? "text" : "password";
-        togglePassword.setAttribute("aria-label", showPassword ? "Hide password" : "Show password");
-        togglePassword.setAttribute("aria-pressed", showPassword ? "true" : "false");
-        eyeOpen.style.display = showPassword ? "none" : "block";
-        eyeClosed.style.display = showPassword ? "block" : "none";
-    });
-</script>
+        .alert svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+        .alert-danger, .alert-error { color: var(--error); background: var(--error-bg); border-color: var(--error-border); }
+        .alert-warning { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-border); }
+        .alert-success { color: var(--success); background: var(--success-bg); border-color: var(--success-border); }
 
-{% endblock %}
+        .field { margin-bottom: 18px; }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .control { position: relative; }
+
+        .control .icon {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            width: 16px;
+            height: 16px;
+            transform: translateY(-50%);
+            color: var(--muted);
+            pointer-events: none;
+            transition: color 200ms ease;
+        }
+
+        .control:focus-within .icon { color: var(--primary); }
+
+        .input {
+            width: 100%;
+            height: 44px;
+            padding: 0 16px 0 40px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            background: var(--input-bg);
+            color: var(--text);
+            font: inherit;
+            font-size: 15px;
+            transition: border-color 200ms ease, box-shadow 200ms ease;
+        }
+
+        .input::placeholder { color: var(--muted); opacity: 0.85; }
+
+        .input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px var(--focus-ring);
+        }
+
+        .input[aria-invalid="true"] { border-color: var(--error); }
+        .input[aria-invalid="true"]:focus { box-shadow: 0 0 0 4px var(--error-bg); }
+        .input[readonly] { opacity: 0.75; }
+
+        .password .input { padding-right: 48px; }
+
+        .toggle {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            width: 34px;
+            height: 34px;
+            transform: translateY(-50%);
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--muted);
+            cursor: pointer;
+            transition: color 200ms ease;
+        }
+
+        .toggle:hover { color: var(--primary); }
+        .toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+        .toggle:disabled { cursor: default; }
+
+        .toggle svg {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 18px;
+            height: 18px;
+            transform: translate(-50%, -50%) scale(1);
+            transition: opacity 200ms ease, transform 200ms ease;
+        }
+
+        .toggle .eye-closed { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+        .toggle[aria-pressed="true"] .eye-open { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+        .toggle[aria-pressed="true"] .eye-closed { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+        .field-error {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 6px 0 0;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--error);
+            animation: drop 200ms ease-out both;
+        }
+
+        .field-error svg { width: 14px; height: 14px; flex: none; }
+
+        .row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 4px 0 22px;
+            font-size: 13px;
+        }
+
+        .remember {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .remember input {
+            width: 16px;
+            height: 16px;
+            margin: 0;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+
+        .link-btn {
+            padding: 0;
+            border: 0;
+            background: none;
+            color: var(--link);
+            font: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .link-btn:hover { text-decoration: underline; }
+        .link-btn:focus-visible, .remember input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 3px; }
+
+        .help-note { margin-top: -8px; }
+
+        .submit {
+            width: 100%;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            border: 0;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #1E40AF 0%, #0F766E 100%);
+            color: #FFFFFF;
+            font: inherit;
+            font-size: 16px;
+            font-weight: 700;
+            box-shadow: 0 8px 20px rgba(30, 64, 175, 0.25);
+            cursor: pointer;
+            transition: transform 200ms ease, box-shadow 200ms ease, filter 200ms ease, opacity 200ms ease;
+        }
+
+        .submit:hover:not(:disabled) { transform: scale(1.02); filter: brightness(0.94); box-shadow: 0 12px 26px rgba(30, 64, 175, 0.30); }
+        .submit:active:not(:disabled) { transform: scale(0.98); }
+        .submit:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+        .submit:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.45);
+            border-top-color: #FFFFFF;
+            border-radius: 50%;
+            animation: spin 800ms linear infinite;
+        }
+
+
+        .secure {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin: 20px 0 0;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .secure svg { width: 12px; height: 12px; }
+
+        .foot {
+            margin: 20px 0 0;
+            text-align: center;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            margin: -1px;
+            padding: 0;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+        @keyframes drop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (min-width: 480px) and (max-width: 768px) {
+            .auth { max-width: 420px; }
+        }
+
+        @media (max-width: 479px) {
+            body { padding: 16px; font-size: 14px; }
+            .card { padding: 20px 24px 24px; border-radius: 14px; }
+            .logo-tile { width: 132px; height: 132px; border-radius: 24px; }
+            .logo-tile img { width: 120px; height: 120px; }
+            .divider { margin: 16px 0; }
+            h1 { font-size: 24px; }
+            .submit { height: 44px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+            .spinner { animation-duration: 1.6s !important; }
+        }
+    </style>
+</head>
+<body>
+    <main class="auth">
+        <section class="card" aria-labelledby="loginHeading">
+            <header class="brand">
+                <div class="logo-tile">
+                    <img src="{{ url_for('static', filename='endo-pharmacy-logo-240.png') }}" alt="The Endo Pharmacy" width="92" height="92">
+                </div>
+                <p class="tagline">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    Secure Staff Portal
+                </p>
+            </header>
+
+            <hr class="divider">
+
+            <h1 id="loginHeading">Welcome Back</h1>
+            <p class="subtitle">Sign in to continue to your account</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for cat, msg in messages %}
+                <div class="alert alert-{{ (cat or 'info')|lower }}" role="alert">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>
+                    <span>{{ msg }}</span>
+                </div>
+                {% endfor %}
+            {% endwith %}
+
+            <form id="loginForm" method="POST" action="{{ url_for('login') }}" novalidate>
+                <div class="field">
+                    <label for="username">Username</label>
+                    <div class="control">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                        <input id="username" class="input" type="text" name="username" value="{{ request.form.get('username', '') }}" placeholder="Enter your username" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="usernameError" required>
+                    </div>
+                    <p id="usernameError" class="field-error" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>
+                        <span>Please enter your username.</span>
+                    </p>
+                </div>
+
+                <div class="field">
+                    <label for="password">Password</label>
+                    <div class="control password">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                        <input id="password" class="input" type="password" name="password" placeholder="Enter your password" autocomplete="new-password" aria-describedby="passwordError" required>
+                        <button type="button" class="toggle" id="togglePassword" aria-label="Show password" aria-pressed="false" aria-controls="password">
+                            <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 10.7a3 3 0 0 0 4.2 4.2"></path><path d="M9.4 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7a21.7 21.7 0 0 1-5 5.8"></path><path d="M6.7 6.7A21.5 21.5 0 0 0 1 12s4 7 11 7a10.7 10.7 0 0 0 5.3-1.3"></path></svg>
+                        </button>
+                    </div>
+                    <p id="passwordError" class="field-error" hidden>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>
+                        <span>Please enter your password.</span>
+                    </p>
+                </div>
+
+                <div class="row">
+                    <label class="remember" for="rememberMe">
+                        <input id="rememberMe" type="checkbox">
+                        Remember me
+                    </label>
+                    <button type="button" class="link-btn" id="forgotToggle" aria-expanded="false" aria-controls="forgotHelp">Forgot password?</button>
+                </div>
+
+                <div id="forgotHelp" class="alert help-note" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+                    <span>Forgot your password? Ask your administrator to reset it from the Users page.</span>
+                </div>
+
+                <button type="submit" class="submit" id="submitButton">
+                    <span class="spinner" id="submitSpinner" hidden aria-hidden="true"></span>
+                    <span id="submitLabel">Sign In</span>
+                </button>
+                <p class="sr-only" id="submitStatus" role="status" aria-live="polite"></p>
+            </form>
+
+            <p class="secure" id="secureBadge" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                Secure connection
+            </p>
+        </section>
+
+        <p class="foot">&copy; <span id="copyrightYear">2026</span> The Endo Pharmacy. All rights reserved.</p>
+    </main>
+
+    <script>
+    (function () {
+        "use strict";
+        // Only the username is remembered, never the password.
+        var REMEMBER_KEY = "endoPharmacy.rememberedUsername";
+
+        var form = document.getElementById("loginForm");
+        var username = document.getElementById("username");
+        var password = document.getElementById("password");
+        var usernameError = document.getElementById("usernameError");
+        var passwordError = document.getElementById("passwordError");
+        var togglePassword = document.getElementById("togglePassword");
+        var rememberMe = document.getElementById("rememberMe");
+        var forgotToggle = document.getElementById("forgotToggle");
+        var forgotHelp = document.getElementById("forgotHelp");
+        var submitButton = document.getElementById("submitButton");
+        var submitSpinner = document.getElementById("submitSpinner");
+        var submitLabel = document.getElementById("submitLabel");
+        var submitStatus = document.getElementById("submitStatus");
+        var submitting = false;
+        var touched = { username: false, password: false };
+
+        function readRemembered() {
+            try { return window.localStorage.getItem(REMEMBER_KEY) || ""; } catch (_err) { return ""; }
+        }
+
+        function writeRemembered(value) {
+            try {
+                if (value) {
+                    window.localStorage.setItem(REMEMBER_KEY, value);
+                } else {
+                    window.localStorage.removeItem(REMEMBER_KEY);
+                }
+            } catch (_err) { /* storage blocked: remembering is optional */ }
+        }
+
+        function showFieldError(input, errorEl, invalid) {
+            input.setAttribute("aria-invalid", invalid ? "true" : "false");
+            errorEl.hidden = !invalid;
+        }
+
+        function validate(forceShow) {
+            var usernameInvalid = username.value.trim() === "";
+            var passwordInvalid = password.value === "";
+            if (forceShow || touched.username) showFieldError(username, usernameError, usernameInvalid);
+            if (forceShow || touched.password) showFieldError(password, passwordError, passwordInvalid);
+            return { username: !usernameInvalid, password: !passwordInvalid };
+        }
+
+        function setSubmitting(isSubmitting) {
+            submitting = isSubmitting;
+            submitButton.disabled = isSubmitting;
+            submitSpinner.hidden = !isSubmitting;
+            submitLabel.textContent = isSubmitting ? "Signing In..." : "Sign In";
+            submitStatus.textContent = isSubmitting ? "Signing in, please wait." : "";
+            form.setAttribute("aria-busy", isSubmitting ? "true" : "false");
+            // readOnly (not disabled) so the values are still sent with the form.
+            username.readOnly = isSubmitting;
+            password.readOnly = isSubmitting;
+            togglePassword.disabled = isSubmitting;
+            rememberMe.disabled = isSubmitting;
+        }
+
+        var remembered = readRemembered();
+        if (remembered) {
+            rememberMe.checked = true;
+            if (!username.value) username.value = remembered;
+        }
+
+        username.addEventListener("input", function () { validate(false); });
+        password.addEventListener("input", function () { validate(false); });
+        username.addEventListener("blur", function () { touched.username = true; validate(false); });
+        password.addEventListener("blur", function () { touched.password = true; validate(false); });
+
+        togglePassword.addEventListener("click", function () {
+            var show = password.type === "password";
+            password.type = show ? "text" : "password";
+            togglePassword.setAttribute("aria-pressed", show ? "true" : "false");
+            togglePassword.setAttribute("aria-label", show ? "Hide password" : "Show password");
+            password.focus();
+        });
+
+        forgotToggle.addEventListener("click", function () {
+            var open = forgotHelp.hidden;
+            forgotHelp.hidden = !open;
+            forgotToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+
+        form.addEventListener("submit", function (event) {
+            if (submitting) {
+                event.preventDefault();
+                return;
+            }
+            touched.username = true;
+            touched.password = true;
+            var result = validate(true);
+            if (!result.username || !result.password) {
+                event.preventDefault();
+                (result.username ? password : username).focus();
+                return;
+            }
+            writeRemembered(rememberMe.checked ? username.value.trim() : "");
+            setSubmitting(true);
+        });
+
+        // Coming back with the browser Back button restores this page from cache:
+        // reset the button so it is not stuck on "Signing In...".
+        window.addEventListener("pageshow", function (event) {
+            if (event.persisted) setSubmitting(false);
+        });
+
+        if (window.location.protocol === "https:") {
+            document.getElementById("secureBadge").hidden = false;
+        }
+        document.getElementById("copyrightYear").textContent = String(new Date().getFullYear());
+
+        (username.value ? password : username).focus();
+    })();
+    </script>
+</body>
+</html>
