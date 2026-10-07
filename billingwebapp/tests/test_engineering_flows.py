@@ -244,6 +244,67 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(len(stock_history), 1)
         self.assertNotIn(b"Handle quietly at counter", response.data)
 
+    def test_billing_page_suggests_one_spelling_per_doctor(self):
+        with self.app.app_context():
+            self._seed_vendor_purchase_stack(total_qty=10)
+            doctors = ["DR.A SHARMA", "DR.A SHARMA", "Dr A  Sharma", "dr typo", "d", "d", "d"]
+            for index, doctor in enumerate(doctors):
+                _patient, invoice = self._seed_invoice(customer=f"Patient {index}", mobile=f"90000000{index:02d}")
+                invoice.doctor = doctor
+                self.db.session.commit()
+
+        self.login()
+        html = self.client.get("/billing").get_data(as_text=True)
+        self.assertIn("Bill Summary", html)
+        self.assertIn("Payment Details", html)
+        self.assertIn('<option value="DR.A SHARMA">', html)
+        self.assertNotIn('<option value="Dr A Sharma">', html)
+        self.assertNotIn('<option value="dr typo">', html)
+        self.assertNotIn('<option value="d">', html)
+
+    def test_doctor_name_suggestions_pick_most_used_spelling(self):
+        from services.reports import doctor_name_suggestions
+
+        suggestions = doctor_name_suggestions([
+            ("DR RAO", 3),
+            ("Dr. Mehta", 2),
+            ("DR MEHTA", 5),
+            ("dr typo", 1),
+            ("", 10),
+            ("d", 4),
+            (None, 2),
+        ])
+        self.assertEqual(suggestions, ["DR MEHTA", "DR RAO"])
+
+    def test_billing_print_button_saves_bill_and_opens_print_dialog(self):
+        with self.app.app_context():
+            self._seed_patient()
+            self._seed_vendor_purchase_stack(total_qty=10)
+
+        self.login()
+        bill = {
+            "customer": "Ravi Kumar",
+            "mobile": "9876543210",
+            "doctor": "Dr. Test",
+            "gender": "MALE",
+            "payment_mode": "CASH",
+            "medicine_name": ["PARACETAMOL 650"],
+            "qty": ["1"],
+            "batch_override[]": ["B123"],
+        }
+        printed = self.client.post("/billing", data={**bill, "auto_print": "1"}, follow_redirects=True)
+        self.assertEqual(printed.status_code, 200)
+        self.assertIn(b"INV-", printed.data)
+        self.assertIn(b'id="autoPrintInvoice"', printed.data)
+
+        saved = self.client.post("/billing", data=bill, follow_redirects=True)
+        self.assertEqual(saved.status_code, 200)
+        self.assertIn(b"INV-", saved.data)
+        self.assertNotIn(b'id="autoPrintInvoice"', saved.data)
+
+        with self.app.app_context():
+            self.assertEqual(self.app_module.Invoice.query.count(), 2)
+
     def test_billing_flow_records_split_payment_breakdown(self):
         with self.app.app_context():
             self._seed_patient()
@@ -2603,6 +2664,87 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Internal Note", response.data)
         self.assertIn(b"Doctor sample adjustment", response.data)
+
+    def test_doctor_wise_report_groups_spellings_and_counts_returns_on_original_doctor(self):
+        today = self.app_module.clinic_now().date()
+        with self.app.app_context():
+            def seed(doctor, total, customer, mobile, **kwargs):
+                _patient, invoice = self._seed_invoice(customer=customer, mobile=mobile, total=total, **kwargs)
+                invoice.doctor = doctor
+                self.db.session.commit()
+                return invoice
+
+            seed("DR.ABHISHEK PRAKASH", 100.0, "Ravi Kumar", "9876543210")
+            seed("Dr Abhishek  Prakash", 200.0, "Sita Devi", "9123456780")
+            seed("DR MEERA SHAH", 50.0, "Amit Jain", "9000000001")
+            seed("d", 30.0, "Walk In", "9000000002")
+            cancelled = seed("DR MEERA SHAH", 999.0, "Cancelled Patient", "9000000003")
+            cancelled.is_cancelled = True
+            old_invoice = seed(
+                "DR.ABHISHEK PRAKASH", 80.0, "Old Patient", "9000000004",
+                created_at=datetime.utcnow() - timedelta(days=5),
+            )
+            self.db.session.add(self.app_module.Return(
+                invoice_id=old_invoice.id,
+                invoice_no=old_invoice.invoice_no,
+                customer=old_invoice.customer,
+                mobile=old_invoice.mobile,
+                total_refund=40.0,
+                payment_mode="CASH",
+                created_by="admin",
+                created_at=datetime.utcnow(),
+            ))
+            self.db.session.commit()
+
+            from sqlalchemy import or_
+            from services.reports import load_doctor_wise_report
+
+            report = load_doctor_wise_report(
+                today,
+                today,
+                doctor_query="",
+                local_date_range_to_storage_bounds=self.app_module.local_date_range_to_storage_bounds,
+                or_=or_,
+                summarize_invoice_collection=self.app_module.summarize_invoice_collection,
+            )
+
+        rows = {row["doctor"]: row for row in report["rows"]}
+        self.assertEqual(list(rows), ["DR.ABHISHEK PRAKASH", "DR MEERA SHAH", "Doctor not entered"])
+        abhishek = rows["DR.ABHISHEK PRAKASH"]
+        self.assertEqual(abhishek["other_spellings"], ["Dr Abhishek Prakash"])
+        self.assertEqual(abhishek["bill_count"], 2)
+        self.assertEqual(abhishek["patient_count"], 2)
+        self.assertEqual(abhishek["sale_total"], 300.0)
+        self.assertEqual(abhishek["return_total"], 40.0)
+        self.assertEqual(abhishek["net_sale"], 260.0)
+        self.assertEqual(rows["DR MEERA SHAH"]["sale_total"], 50.0)
+        self.assertEqual(rows["Doctor not entered"]["net_sale"], 30.0)
+        self.assertEqual(report["totals"]["net_sale"], 340.0)
+        self.assertEqual(report["totals"]["doctor_count"], 2)
+
+        self.login()
+        dates = {"from_date": today.isoformat(), "to_date": today.isoformat()}
+        response = self.client.post("/reports", data={"report_type": "doctor", **dates})
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("Doctor Wise Sale", html)
+        self.assertIn("Also written as: Dr Abhishek Prakash", html)
+        self.assertIn("Rs 260.0", html)
+
+        response = self.client.get("/reports", query_string={"report_type": "doctor", "doctor_query": "abhishek", **dates})
+        html = response.get_data(as_text=True)
+        self.assertIn("2 bill(s) for", html)
+        self.assertIn("Ravi Kumar", html)
+        self.assertNotIn("Amit Jain", html)
+
+        response = self.client.get("/reports/export", query_string={"scope": "filtered", "report_type": "doctor", **dates})
+        self.assertEqual(response.status_code, 200)
+        sheet = load_workbook(BytesIO(response.data))["DoctorWise"]
+        exported = {row[0]: row for row in sheet.iter_rows(min_row=2, values_only=True)}
+        self.assertEqual(exported["DR.ABHISHEK PRAKASH"][6], 260.0)
+
+        response = self.client.post("/reports", data={"report_type": "doctor", "from_date": "", "to_date": ""})
+        self.assertIn(b"Please select both from date and to date.", response.data)
 
     def test_reports_page_defaults_to_cutover_window_but_keeps_older_history_accessible(self):
         with self.app.app_context():

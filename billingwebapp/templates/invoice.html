@@ -695,5 +695,13 @@ function openInvoiceWhatsapp(button) {
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
 }
 </script>
+{% if auto_print %}
+<script id="autoPrintInvoice">
+// Opened from the POS "Print" button: the bill is saved, open the print dialog.
+window.addEventListener("load", function () {
+    window.print();
+});
+</script>
+{% endif %}
 </body>
 </html>

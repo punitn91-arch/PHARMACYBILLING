@@ -76,6 +76,7 @@ try:
     from .routes.appointments import render_appointments_page
     from .routes.billing import prepare_billing_context
     from .routes.reports import render_reports_page
+    from .services.reports import doctor_name_suggestions, load_doctor_wise_report
     from .routes.vendors import render_vendor_reports_page
     from .routes.telephony import handle_generic_telephony_webhook
     from .routes.ai_api import ai_api_bp
@@ -148,6 +149,7 @@ except ImportError:  # pragma: no cover - script/local fallback
     from routes.appointments import render_appointments_page
     from routes.billing import prepare_billing_context
     from routes.reports import render_reports_page
+    from services.reports import doctor_name_suggestions, load_doctor_wise_report
     from routes.vendors import render_vendor_reports_page
     from routes.telephony import handle_generic_telephony_webhook
     from routes.ai_api import ai_api_bp
@@ -8749,6 +8751,7 @@ def billing():
         return render_template(
             "invoice.html",
             inv=inv,
+            auto_print=request.form.get("auto_print") == "1",
             print_profile=resolve_invoice_print_profile(inv),
             payment_breakdown=payment_breakdown,
             cart=cart,
@@ -8782,9 +8785,11 @@ def billing():
         else:
             flash("Held bill not found. It may have been deleted.", "warning")
 
+    doctor_counts = db.session.query(Invoice.doctor, db.func.count(Invoice.id)).group_by(Invoice.doctor).all()
     return render_template(
         "billing.html",
         payment_modes=payment_modes,
+        doctor_suggestions=doctor_name_suggestions(doctor_counts),
         **prepare_billing_context(meds, restored_hold_bill)
     )
 
@@ -16153,6 +16158,7 @@ def export_excel():
         mobile_raw = (request.args.get("mobile") or "").strip()
         search_query = (request.args.get("search_query") or "").strip()
         medicine_query = (request.args.get("medicine_query") or "").strip()
+        doctor_query = (request.args.get("doctor_query") or "").strip()
         top_n = request.args.get("top_n")
 
         query = active_invoice_query()
@@ -16252,6 +16258,59 @@ def export_excel():
                 applied_filter = f"mobile ({mobile_raw})"
             else:
                 applied_filter = "mobile (blank, exported all)"
+        elif report_type == "doctor":
+            from_date_value = parse_date(from_date)
+            to_date_value = parse_date(to_date)
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                if from_date_value and to_date_value and to_date_value >= from_date_value:
+                    doctor_report = load_doctor_wise_report(
+                        from_date_value,
+                        to_date_value,
+                        doctor_query=doctor_query,
+                        local_date_range_to_storage_bounds=local_date_range_to_storage_bounds,
+                        or_=or_,
+                        summarize_invoice_collection=summarize_invoice_collection,
+                    )
+                    pd.DataFrame([{
+                        "Doctor": row["doctor"],
+                        "Also Written As": ", ".join(row["other_spellings"]),
+                        "Bills": row["bill_count"],
+                        "Patients": row["patient_count"],
+                        "Sale": row["sale_total"],
+                        "Returns": row["return_total"],
+                        "Net Sale": row["net_sale"],
+                        "Avg Bill": row["avg_bill"],
+                        "Share %": row["share_percent"],
+                    } for row in doctor_report["rows"]], columns=[
+                        "Doctor", "Also Written As", "Bills", "Patients", "Sale",
+                        "Returns", "Net Sale", "Avg Bill", "Share %",
+                    ]).to_excel(writer, sheet_name="DoctorWise", index=False)
+                    pd.DataFrame([{
+                        "Invoice No": i.invoice_no,
+                        "Date": i.created_at.strftime("%d-%m-%Y") if i.created_at else "",
+                        "Patient Name": i.customer,
+                        "Mobile": i.mobile,
+                        "Doctor": i.doctor or "",
+                        "Total": i.total,
+                    } for i in doctor_report["invoices"]], columns=[
+                        "Invoice No", "Date", "Patient Name", "Mobile", "Doctor", "Total",
+                    ]).to_excel(writer, sheet_name="DoctorBills", index=False)
+                else:
+                    pd.DataFrame([{"Error": "Please select a valid from date and to date."}]).to_excel(
+                        writer,
+                        sheet_name="DoctorWise",
+                        index=False
+                    )
+            output.seek(0)
+            filename = f"Doctor_Wise_Report_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            return send_file(
+                output,
+                as_attachment=True,
+                download_name=filename,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                max_age=0
+            )
         elif report_type == "profit":
             profit_summary, profit_error = build_profit_report_summary(from_date, to_date)
             output = BytesIO()

@@ -179,7 +179,7 @@ def validate_report_request(form_data, *, parse_date):
         year = _to_int(form_data.get("year"), 0)
         if month < 1 or month > 12 or year < 1900:
             return "Please enter a valid month and year."
-    elif report_type in {"custom", "profit", "patient_medicine"}:
+    elif report_type in {"custom", "profit", "patient_medicine", "doctor"}:
         from_date = (form_data.get("from_date") or "").strip()
         to_date = (form_data.get("to_date") or "").strip()
         if not from_date or not to_date:

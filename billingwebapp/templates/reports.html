@@ -242,6 +242,22 @@
     font-size: 14px;
 }
 
+.doctor-link {
+    color: #0f4fbf;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.doctor-link:hover {
+    text-decoration: underline;
+}
+
+.doctor-aka {
+    margin-top: 4px;
+    color: #607089;
+    font-size: 12px;
+}
+
 @media (max-width: 1080px) {
     .report-grid,
     .summary-row {
@@ -292,6 +308,7 @@
                         <option value="patient_medicine" {% if report_type == "patient_medicine" %}selected{% endif %}>Patient Medicine Usage</option>
                         <option value="profit" {% if report_type == "profit" %}selected{% endif %}>Profit / Loss (FIFO)</option>
                         <option value="medicine" {% if report_type == "medicine" %}selected{% endif %}>Medicine Summary / Fast Movers</option>
+                        <option value="doctor" {% if report_type == "doctor" %}selected{% endif %}>Doctor Wise</option>
                     </select>
                 </div>
 
@@ -331,6 +348,11 @@
                     <input type="text" name="medicine_query" placeholder="Medicine Name (optional)" value="{{ report_filters.medicine_query if report_filters else '' }}">
                 </div>
 
+                <div id="doctorBox" class="field-box" style="display:none;">
+                    <label>Doctor Name</label>
+                    <input type="text" name="doctor_query" placeholder="Doctor Name (optional)" value="{{ report_filters.doctor_query if report_filters else '' }}">
+                </div>
+
                 <div id="topNBox" class="field-box" style="display:none;">
                     <label>Top Medicines</label>
                     <input type="number" name="top_n" min="1" max="100" placeholder="Top N (default 10)" value="{{ report_filters.top_n if report_filters else '10' }}">
@@ -350,6 +372,7 @@
                     mobile=(report_filters.mobile if report_filters else ''),
                     search_query=(report_filters.search_query if report_filters else ''),
                     medicine_query=(report_filters.medicine_query if report_filters else ''),
+                    doctor_query=(report_filters.doctor_query if report_filters else ''),
                     top_n=(report_filters.top_n if report_filters else '')
                 ) }}" class="report-link">Export Filtered</a>
                 <a href="{{ url_for('export_excel', scope='all') }}" class="report-link">Meta Report</a>
@@ -551,6 +574,107 @@
         {% endif %}
     </section>
 
+    {% elif report_type == "doctor" and doctor_report %}
+    <section class="reports-card">
+        <div class="section-head">
+            <div>
+                <h3>Doctor Wise Sale</h3>
+                <p>Range: {{ doctor_report.from_date }} to {{ doctor_report.to_date }}{% if doctor_report.doctor_filter %} &middot; Doctor: "{{ doctor_report.doctor_filter }}"{% endif %}. Returns are counted against the doctor on the original bill.</p>
+            </div>
+        </div>
+
+        <div class="summary-row">
+            <div class="summary-pill"><small>Doctors</small><strong>{{ doctor_report.totals.doctor_count }}</strong></div>
+            <div class="summary-pill"><small>Bills</small><strong>{{ doctor_report.totals.bill_count }}</strong></div>
+            <div class="summary-pill"><small>Patients</small><strong>{{ doctor_report.totals.patient_count }}</strong></div>
+            <div class="summary-pill"><small>Sale</small><strong>Rs {{ doctor_report.totals.sale_total }}</strong></div>
+            <div class="summary-pill"><small>Returns</small><strong>Rs {{ doctor_report.totals.return_total }}</strong></div>
+            <div class="summary-pill"><small>Net Sale</small><strong>Rs {{ doctor_report.totals.net_sale }}</strong></div>
+        </div>
+    </section>
+
+    <section class="reports-card">
+        <div class="section-head">
+            <div>
+                <h3>Doctor Breakdown</h3>
+                <p>Click a doctor to see their bills. Spellings such as "DR." and "Dr" are combined into one row.</p>
+            </div>
+        </div>
+        {% if doctor_report.rows %}
+        <table class="reports-table">
+            <tr>
+                <th>#</th>
+                <th>Doctor</th>
+                <th>Bills</th>
+                <th>Patients</th>
+                <th>Sale</th>
+                <th>Returns</th>
+                <th>Net Sale</th>
+                <th>Avg Bill</th>
+                <th>Share</th>
+            </tr>
+            {% for row in doctor_report.rows %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>
+                    {% if row.is_unassigned %}
+                    <em>{{ row.doctor }}</em>
+                    {% else %}
+                    <a class="doctor-link" href="{{ url_for('reports', report_type='doctor', from_date=doctor_report.from_date, to_date=doctor_report.to_date, doctor_query=row.doctor) }}">{{ row.doctor }}</a>
+                    {% if row.other_spellings %}
+                    <div class="doctor-aka">Also written as: {{ row.other_spellings|join(', ') }}</div>
+                    {% endif %}
+                    {% endif %}
+                </td>
+                <td>{{ row.bill_count }}</td>
+                <td>{{ row.patient_count }}</td>
+                <td>Rs {{ row.sale_total }}</td>
+                <td>Rs {{ row.return_total }}</td>
+                <td>Rs {{ row.net_sale }}</td>
+                <td>Rs {{ row.avg_bill }}</td>
+                <td>{{ row.share_percent }}%</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p class="empty-note">No bills found for this doctor in the selected dates.</p>
+        {% endif %}
+    </section>
+
+    {% if doctor_report.doctor_filter and invoice_rows %}
+    <section class="reports-card">
+        <div class="section-head">
+            <div>
+                <h3>Bills</h3>
+                <p>{{ invoice_rows|length }} bill(s) for "{{ doctor_report.doctor_filter }}" in the selected dates.</p>
+            </div>
+        </div>
+        <table class="reports-table">
+            <tr>
+                <th>Invoice</th>
+                <th>Date</th>
+                <th>Patient</th>
+                <th>Mobile</th>
+                <th>Doctor</th>
+                <th>Payment Mode</th>
+                <th>Total</th>
+            </tr>
+            {% for row in invoice_rows %}
+            {% set i = row.invoice %}
+            <tr>
+                <td>{{ i.invoice_no }}</td>
+                <td>{{ i.created_at.strftime('%d-%m-%Y') if i.created_at else '' }}</td>
+                <td>{{ i.customer }}</td>
+                <td>{{ i.mobile }}</td>
+                <td>{{ i.doctor }}</td>
+                <td>{{ row.payment.display_mode }}</td>
+                <td>Rs {{ i.total }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </section>
+    {% endif %}
+
     {% elif report_type == "profit" and profit_summary %}
     <section class="reports-card">
         <div class="section-head">
@@ -669,9 +793,10 @@ function toggleFilters(type) {
     document.getElementById("searchBox").style.display = "none";
     document.getElementById("medicineFilterBox").style.display = "none";
     document.getElementById("topNBox").style.display = "none";
+    document.getElementById("doctorBox").style.display = "none";
 
     if (type === "monthly") document.getElementById("monthBox").style.display = "block";
-    if (type === "custom" || type === "profit" || type === "medicine" || type === "patient_medicine") {
+    if (type === "custom" || type === "profit" || type === "medicine" || type === "patient_medicine" || type === "doctor") {
         document.getElementById("dateBox").style.display = "block";
     }
     if (type === "patient") document.getElementById("patientBox").style.display = "block";
@@ -679,6 +804,7 @@ function toggleFilters(type) {
     if (type === "patient_medicine") document.getElementById("searchBox").style.display = "block";
     if (type === "medicine") document.getElementById("medicineFilterBox").style.display = "block";
     if (type === "medicine") document.getElementById("topNBox").style.display = "block";
+    if (type === "doctor") document.getElementById("doctorBox").style.display = "block";
 }
 
 toggleFilters("{{ report_type or '' }}");

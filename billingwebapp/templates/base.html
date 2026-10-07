@@ -35,7 +35,8 @@
             font-family: Arial, sans-serif;
             background: #eaf3ff;
             --layout-topbar-height: 60px;
-            --layout-sidebar-width: 240px;
+            /* Fallback; the script after the sidebar sets the exact fit. */
+            --layout-sidebar-width: 164px;
         }
 
         /* ================= TOP BAR ================= */
@@ -280,7 +281,13 @@
             background: #0d6efd;
             overflow-y: auto;
             overflow-x: visible;
+            /* A scrollbar would eat into the fitted width; wheel/touch still scroll. */
+            scrollbar-width: none;
             transition: transform 0.2s ease-in-out;
+        }
+
+        .sidebar::-webkit-scrollbar {
+            display: none;
         }
 
         .sidebar-backdrop {
@@ -698,12 +705,12 @@
             font-weight: 800 !important;
             letter-spacing: 0.08em !important;
             text-align: center !important;
-            padding: 13px 16px !important;
+            padding: 13px 8px !important;
         }
 
         .sidebar a {
             font-size: 13px !important;
-            padding: 10px 16px !important;
+            padding: 10px 8px !important;
         }
 
         .content h1 { font-size: 22px !important; }
@@ -761,10 +768,6 @@
         }
 
         @media (max-width: 1360px) {
-            body {
-                --layout-sidebar-width: 224px;
-            }
-
             .topbar-search {
                 max-width: 380px;
             }
@@ -775,10 +778,6 @@
         }
 
         @media (max-width: 1180px) {
-            body {
-                --layout-sidebar-width: 208px;
-            }
-
             .content {
                 padding: 18px;
             }
@@ -803,10 +802,6 @@
         }
 
         @media (max-width: 1100px) {
-            body {
-                --layout-sidebar-width: 200px;
-            }
-
             .topbar-left {
                 max-width: min(34vw, 420px);
             }
@@ -819,7 +814,6 @@
 
         @media (max-width: 860px) {
             .sidebar {
-                width: 240px;
                 transform: translateX(-100%);
                 z-index: 1200;
                 box-shadow: 6px 0 20px rgba(0,0,0,0.25);
@@ -1053,6 +1047,22 @@
 {% endif %}
 {% endif %}
     </div>
+    <script>
+    // Keep the sidebar exactly as wide as its longest menu item (menus differ
+    // by role, and emoji/font widths differ by machine).
+    (function () {
+        var sidebar = document.querySelector(".sidebar");
+        if (!sidebar) return;
+        function fitSidebar() {
+            sidebar.style.width = "max-content";
+            var width = Math.ceil(sidebar.getBoundingClientRect().width);
+            sidebar.style.width = "";
+            if (width > 0) document.body.style.setProperty("--layout-sidebar-width", width + "px");
+        }
+        fitSidebar();
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitSidebar);
+    })();
+    </script>
     <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 
     <!-- MAIN CONTENT -->
