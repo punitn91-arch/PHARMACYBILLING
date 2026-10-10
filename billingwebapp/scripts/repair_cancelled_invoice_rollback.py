@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off cancelled-invoice rollback with explicit stock-shortage reconciliation.
+"""One-off cancelled-invoice rollback with global stock reservation preflight.
 
 This script does NOT invent purchases, medicine batches, or sellable quantity.
 For the five identified unavailable replacement allocations it preserves the
@@ -217,6 +217,150 @@ def replacement_lots_for(item, old_purchase_item_id, excluded_purchase_item_ids)
     return rows
 
 
+def restored_inventory_needs(plans):
+    """Reserve every original invoice allocation before picking a replacement lot.
+
+    Four cancelled invoices can refer to the same purchase lot or medicine row.
+    A per-line stock comparison misses that shared demand and causes the
+    approved 102-unit exception to grow when stock is moved into reserved lots.
+    """
+    restore_lots = Counter()
+    restore_medicines = Counter()
+    approved_lots = Counter()
+    approved_medicines = Counter()
+    freed_lots = Counter()
+    freed_medicines = Counter()
+
+    for plan in plans:
+        if not plan.invoice_id:
+            raise RuntimeError(f"Unknown invoice {plan.invoice_no}.")
+        for item in InvoiceItem.query.filter_by(invoice_id=plan.invoice_id).all():
+            medicine = app_module.find_medicine_for_invoice_item(item)
+            if medicine is None:
+                raise RuntimeError(f"Missing medicine row for original invoice item {item.id}.")
+            needed = to_int(item.qty)
+            for alloc in SalesAllocation.query.filter_by(invoice_item_id=item.id).order_by(SalesAllocation.id.desc()).all():
+                if needed <= 0:
+                    break
+                take = min(max(0, to_int(alloc.returned_qty)), needed)
+                if not take:
+                    continue
+                if alloc.purchase_item_id:
+                    restore_lots[alloc.purchase_item_id] += take
+                restore_medicines[medicine.id] += take
+                needed -= take
+            if needed:
+                raise RuntimeError(f"Original invoice {plan.invoice_no} item {item.id} has incomplete returned allocation ({needed}).")
+
+    for plan in plans:
+        for move in plan.moves:
+            item = db.session.get(InvoiceItem, move.invoice_item_id)
+            if item is None:
+                raise RuntimeError(f"Missing later-sale invoice item {move.invoice_item_id}.")
+            medicine = app_module.find_medicine_for_invoice_item(item)
+            if medicine is None:
+                raise RuntimeError(f"Missing later-sale medicine for item {item.id}.")
+            if is_protected_shortage(move):
+                approved_lots[move.old_purchase_item_id] += move.qty
+                approved_medicines[medicine.id] += move.qty
+            else:
+                freed_lots[move.old_purchase_item_id] += move.qty
+                freed_medicines[medicine.id] += move.qty
+
+    return {
+        "restore_lots": restore_lots,
+        "restore_medicines": restore_medicines,
+        "approved_lots": approved_lots,
+        "approved_medicines": approved_medicines,
+        "freed_lots": freed_lots,
+        "freed_medicines": freed_medicines,
+    }
+
+
+def replacement_spare_qty(lot_stock, medicine_stock, lot_id, medicine_id, budget,
+                          reserved_lot_usage, reserved_medicine_usage):
+    """Capacity remaining AFTER every cancelled invoice is restored.
+
+    Freed stock from the 13 later-sale reallocations is counted once. The five
+    approved shortages are not silently expanded when selecting another lot.
+    """
+    lot_free = (
+        to_int(lot_stock) + budget["freed_lots"][lot_id]
+        - budget["restore_lots"][lot_id] + budget["approved_lots"][lot_id]
+        - reserved_lot_usage[lot_id]
+    )
+    med_free = (
+        to_int(medicine_stock) + budget["freed_medicines"][medicine_id]
+        - budget["restore_medicines"][medicine_id]
+        + budget["approved_medicines"][medicine_id]
+        - reserved_medicine_usage[medicine_id]
+    )
+    return min(lot_free, med_free)
+
+
+def assign_safe_replacement_lots(plans):
+    """Select batches across the whole repair with shared, cumulative budgets."""
+    if any(p.blocked for p in plans):
+        return
+    budget = restored_inventory_needs(plans)
+    used_lots = Counter()
+    used_medicines = Counter()
+    execution_lots = {}
+    execution_medicines = {}
+
+    def lot_current(row):
+        return execution_lots.setdefault(row.id, to_int(row.remaining_qty))
+
+    def medicine_current(row):
+        return execution_medicines.setdefault(row.id, to_int(row.qty))
+
+    for plan in plans:
+        for move in plan.moves:
+            if is_protected_shortage(move):
+                continue
+            item = db.session.get(InvoiceItem, move.invoice_item_id)
+            old_pi = db.session.get(VendorPurchaseItem, move.old_purchase_item_id)
+            old_med = app_module.find_medicine_for_invoice_item(item) if item else None
+            if not item or not old_pi or not old_med:
+                move.blocked_reason = "Missing old purchase layer/medicine for safe selection."
+                continue
+            if can_represent_move(item, move.qty) == "blocked":
+                move.blocked_reason = "Later invoice line cannot be safely moved."
+                continue
+            candidates = replacement_lots_for(item, old_pi.id, set())
+            picked = None
+            for candidate_pi, candidate_med in candidates:
+                if candidate_med.id == old_med.id:
+                    continue
+                if replacement_spare_qty(
+                    candidate_pi.remaining_qty, candidate_med.qty,
+                    candidate_pi.id, candidate_med.id, budget,
+                    used_lots, used_medicines,
+                ) < move.qty:
+                    continue
+                # Apply moves in the printed order; a future move cannot supply
+                # stock that is needed by an earlier one.
+                if lot_current(candidate_pi) < move.qty or medicine_current(candidate_med) < move.qty:
+                    continue
+                picked = (candidate_pi, candidate_med)
+                break
+            if not picked:
+                move.blocked_reason = (
+                    "No replacement stock remains after reserving stock needed "
+                    "by the four cancelled invoices."
+                )
+                continue
+            candidate_pi, candidate_med = picked
+            move.new_purchase_item_id = candidate_pi.id
+            move.new_batch = candidate_pi.batch or candidate_med.batch or ""
+            used_lots[candidate_pi.id] += move.qty
+            used_medicines[candidate_med.id] += move.qty
+            execution_lots[old_pi.id] = lot_current(old_pi) + move.qty
+            execution_lots[candidate_pi.id] = lot_current(candidate_pi) - move.qty
+            execution_medicines[old_med.id] = medicine_current(old_med) + move.qty
+            execution_medicines[candidate_med.id] = medicine_current(candidate_med) - move.qty
+
+
 def build_plan(invoice_numbers, auto_replace=False, preserve_known_shortages=False):
     plans = []
     for invoice_no in invoice_numbers:
@@ -247,7 +391,7 @@ def build_plan(invoice_numbers, auto_replace=False, preserve_known_shortages=Fal
                 if not alloc.purchase_item_id:
                     plan.direct_restore.append((alloc.id, restorable))
                     continue
-                old_pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                old_pi = db.session.get(VendorPurchaseItem, alloc.purchase_item_id)
                 if not old_pi:
                     plan.blocked.append(f"Purchase lot missing for allocation {alloc.id}.")
                     continue
@@ -275,19 +419,6 @@ def build_plan(invoice_numbers, auto_replace=False, preserve_known_shortages=Fal
                     )
                     if preserve_known_shortages and is_protected_shortage(move):
                         move.blocked_reason = "PROTECTED SHORTFALL: keep later sale unchanged"
-                    elif auto_replace:
-                        used = {m.new_purchase_item_id for p in plans + [plan] for m in p.moves if m.new_purchase_item_id}
-                        candidates = replacement_lots_for(later_item, old_pi.id, used)
-                        picked = None
-                        for candidate_pi, candidate_med in candidates:
-                            if to_int(candidate_pi.remaining_qty) >= movable and to_int(candidate_med.qty) >= movable:
-                                picked = (candidate_pi, candidate_med)
-                                break
-                        if picked:
-                            move.new_purchase_item_id = picked[0].id
-                            move.new_batch = picked[0].batch or picked[1].batch or ""
-                        else:
-                            move.blocked_reason = "No replacement batch with enough available stock."
                     plan.moves.append(move)
                     remaining_shortage -= movable
                 if remaining_shortage > 0:
@@ -295,6 +426,11 @@ def build_plan(invoice_numbers, auto_replace=False, preserve_known_shortages=Fal
                         f"{item.name} ({item.batch}) needs {shortage}, but only {shortage - remaining_shortage} later sale qty could be identified."
                     )
         plans.append(plan)
+    if auto_replace:
+        try:
+            assign_safe_replacement_lots(plans)
+        except Exception as exc:
+            plans[0].blocked.append(f"Stock reservation check failed: {exc}")
     return plans
 
 
@@ -727,6 +863,101 @@ def later_invoice_amounts(plans):
     return result
 
 
+def simulate_repair_stock_outcome(plans):
+    """Read-only simulation of all 13 moves followed by all 4 restores.
+
+    It exactly models the stock and lot consumption order in apply_move and
+    restore_with_recorded_shortfalls, including medicine rows shared by lots.
+    An unexplained extra or missing shortfall blocks the dry-run and apply.
+    """
+    lot_balances = {}
+    med_balances = {}
+    actual = Counter()
+
+    def lot_balance(lot):
+        return lot_balances.setdefault(lot.id, to_int(lot.remaining_qty))
+
+    def med_balance(med):
+        return med_balances.setdefault(med.id, to_int(med.qty))
+
+    regular, protected = validate_production_plan(plans)
+    for move in regular:
+        item = db.session.get(InvoiceItem, move.invoice_item_id)
+        old_pi = db.session.get(VendorPurchaseItem, move.old_purchase_item_id)
+        new_pi = db.session.get(VendorPurchaseItem, move.new_purchase_item_id)
+        if not item or not old_pi or not new_pi:
+            raise RuntimeError("Simulation missing a later-sale item or purchase lot.")
+        old_med = app_module.find_medicine_for_invoice_item(item)
+        new_med = Medicine.query.filter(
+            db.or_(
+                Medicine.id == new_pi.medicine_id,
+                db.and_(Medicine.name == new_pi.medicine_name, Medicine.batch == new_pi.batch),
+            )
+        ).order_by(Medicine.id.asc()).first()
+        if not old_med or not new_med or old_med.id == new_med.id:
+            raise RuntimeError(f"Simulation medicine/batch mismatch for allocation {move.allocation_id}.")
+        if (old_pi.batch or "").strip().casefold() != (old_med.batch or "").strip().casefold():
+            raise RuntimeError(f"Original lot/medicine mismatch: {move.allocation_id}.")
+        if (new_pi.batch or "").strip().casefold() != (new_med.batch or "").strip().casefold():
+            raise RuntimeError(f"Replacement lot/medicine mismatch: {move.allocation_id}.")
+        if (new_med.name or "").strip().casefold() != (item.name or "").strip().casefold():
+            raise RuntimeError(f"Wrong replacement medicine for allocation {move.allocation_id}.")
+        if can_represent_move(item, move.qty) == "blocked":
+            raise RuntimeError(f"Later invoice item {item.id} cannot be safely split/replaced.")
+        if lot_balance(new_pi) < move.qty or med_balance(new_med) < move.qty:
+            raise RuntimeError(f"Insufficient stock during simulated move {move.allocation_id}.")
+        lot_balances[old_pi.id] = lot_balance(old_pi) + move.qty
+        lot_balances[new_pi.id] = lot_balance(new_pi) - move.qty
+        med_balances[old_med.id] = med_balance(old_med) + move.qty
+        med_balances[new_med.id] = med_balance(new_med) - move.qty
+
+    for plan in plans:
+        inv = db.session.get(Invoice, plan.invoice_id)
+        if inv is None or not bool(getattr(inv, "is_cancelled", False)):
+            raise RuntimeError(f"Original invoice {plan.invoice_no} changed before simulation.")
+        check_no_active_returns(inv)
+        for item in InvoiceItem.query.filter_by(invoice_id=inv.id).order_by(InvoiceItem.id.asc()).all():
+            med = app_module.find_medicine_for_invoice_item(item)
+            if med is None:
+                raise RuntimeError(f"Simulation missing original medicine for invoice item {item.id}.")
+            needed = to_int(item.qty)
+            for alloc in SalesAllocation.query.filter_by(invoice_item_id=item.id).order_by(SalesAllocation.id.desc()).all():
+                if needed <= 0:
+                    break
+                take = min(to_int(alloc.returned_qty), needed)
+                if take <= 0:
+                    continue
+                needed -= take
+                pi = db.session.get(VendorPurchaseItem, alloc.purchase_item_id) if alloc.purchase_item_id else None
+                if alloc.purchase_item_id and pi is None:
+                    raise RuntimeError(f"Missing lot {alloc.purchase_item_id} while simulating.")
+                available_lot = lot_balance(pi) if pi else take
+                available_med = med_balance(med)
+                if available_lot < 0 or available_med < 0:
+                    raise RuntimeError("Negative pre-existing inventory during simulation.")
+                consumed = min(take, available_lot, available_med)
+                if pi:
+                    lot_balances[pi.id] = available_lot - consumed
+                med_balances[med.id] = available_med - consumed
+                missing = take - consumed
+                if missing:
+                    actual[(inv.invoice_no, getattr(pi, "id", None))] += missing
+            if needed:
+                raise RuntimeError(f"Incomplete original allocation in invoice {inv.invoice_no}, item {item.id}.")
+
+    expected = Counter()
+    for move in protected:
+        expected[(move.invoice_no, move.old_purchase_item_id)] += move.qty
+    if actual != expected or sum(actual.values()) != EXPECTED_SHORTFALL_QTY:
+        extra = actual - expected
+        missing = expected - actual
+        raise RuntimeError(
+            f"Simulated inventory shortage differs from approved 102 units; "
+            f"EXTRA {dict(extra)}, MISSING {dict(missing)}. Do not apply."
+        )
+    return actual
+
+
 def apply_agreed_repair(plans, actor):
     """All four bills in one transaction, preserving five later sale allocations."""
     regular, protected = validate_production_plan(plans)
@@ -738,6 +969,7 @@ def apply_agreed_repair(plans, actor):
     latest_signature = [serialize_move(m) for p in latest_plans for m in p.moves]
     if original_signature != latest_signature:
         raise RuntimeError("The live invoice/stock plan changed during row locking. Nothing applied.")
+    simulate_repair_stock_outcome(latest_plans)
     target_invoices = [db.session.get(Invoice, plan.invoice_id) for plan in latest_plans]
     same_tenant(*target_invoices)
     protected_snapshot = unchanged_protected_sales(protected)
@@ -818,6 +1050,7 @@ def main():
         print_plan(plans)
         try:
             regular, protected = validate_production_plan(plans)
+            simulate_repair_stock_outcome(plans)
         except Exception as exc:
             db.session.rollback()
             print(f"\nPLAN NOT SAFE: {exc}", file=sys.stderr)
