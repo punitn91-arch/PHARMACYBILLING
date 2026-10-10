@@ -10769,6 +10769,92 @@ def cancel_invoice_record(inv, *, actor_username, reason):
     return None
 
 
+def restore_cancelled_invoice_fifo(invoice_item_id, qty):
+    remaining = to_int(qty)
+    if remaining <= 0:
+        return None
+    allocations = SalesAllocation.query.filter_by(invoice_item_id=invoice_item_id).order_by(SalesAllocation.id.desc()).all()
+    for alloc in allocations:
+        available = to_int(alloc.returned_qty)
+        if available <= 0:
+            continue
+        take = min(available, remaining)
+        if take <= 0:
+            continue
+        if alloc.purchase_item_id:
+            pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+            if not pi:
+                return "Purchase allocation is missing for one invoice item. Cannot safely restore this bill."
+            if to_int(pi.remaining_qty) < take:
+                return (
+                    "Some stock restored by this cancellation has already been consumed from purchase lots. "
+                    "Cannot safely rollback this invoice without manual stock correction."
+                )
+            pi.remaining_qty = to_int(pi.remaining_qty) - take
+        alloc.returned_qty = to_int(alloc.returned_qty) - take
+        remaining -= take
+        if remaining == 0:
+            break
+    if remaining > 0:
+        return "Sales allocation history is incomplete. Cannot safely restore this bill."
+    return None
+
+
+def restore_cancelled_invoice_record(inv, *, actor_username, reason=""):
+    """Undo an accidental invoice cancellation and reverse restored stock."""
+    if not bool(getattr(inv, "is_cancelled", False)):
+        return "Invoice is already active."
+    if Return.query.filter(
+        Return.invoice_id == inv.id,
+        falsey_or_null_column_expr(Return.is_cancelled)
+    ).first():
+        return "Cannot restore an invoice that has active return bills."
+    if Return.query.filter(
+        Return.adjusted_invoice_id == inv.id,
+        falsey_or_null_column_expr(Return.is_cancelled)
+    ).first():
+        return "Cannot restore an invoice linked to an active exchange return."
+
+    items = InvoiceItem.query.filter_by(invoice_id=inv.id).order_by(InvoiceItem.id.asc()).all()
+    for it in items:
+        restore_qty = to_int_safe(it.qty, 0)
+        if restore_qty <= 0:
+            continue
+        med = find_medicine_for_invoice_item(it)
+        if not med:
+            return f"Medicine row missing for {it.name} ({it.batch}). Cannot safely restore stock."
+        med = lock_medicine_for_update(med)
+        old_stock = to_int_safe(med.qty, 0)
+        if old_stock < restore_qty:
+            return (
+                f"Not enough current stock to rollback {it.name} ({it.batch}). "
+                f"Need {restore_qty}, available {old_stock}."
+            )
+        fifo_error = restore_cancelled_invoice_fifo(it.id, restore_qty)
+        if fifo_error:
+            return fifo_error
+        med.qty = old_stock - restore_qty
+        db.session.add(StockHistory(
+            medicine_id=med.id,
+            medicine_name=med.name,
+            batch=med.batch,
+            action="INVOICE_RESTORE",
+            stock_before=old_stock,
+            qty_change=-restore_qty,
+            stock_after=med.qty,
+            user=actor_username,
+            remark=f"Invoice {inv.invoice_no} cancellation rollback (stock sold again)",
+            ref_table="invoice",
+            ref_id=inv.id,
+        ))
+
+    inv.is_cancelled = False
+    inv.cancelled_at = None
+    inv.cancelled_by = None
+    inv.cancel_reason = None
+    return None
+
+
 @app.route("/invoice/cancel/<int:id>", methods=["POST"])
 @app.route("/delete-invoice/<int:id>", methods=["POST"])
 @login_required
@@ -10805,6 +10891,49 @@ def cancel_invoice(id):
         extra={"reason": inv.cancel_reason},
     )
     flash(f"Invoice {inv.invoice_no} cancelled. Stock restored and record kept for GST.", "info")
+    return redirect("/invoices")
+
+
+@app.route("/invoice/uncancel/<int:id>", methods=["POST"])
+@login_required
+def uncancel_invoice(id):
+    user = active_user_by_id(session.get("user_id"))
+    if not user:
+        flash("Access denied", "danger")
+        return redirect("/")
+    if user.role != "admin" and not (user.can_delete_invoice or user.can_invoice_action):
+        flash("Access denied", "danger")
+        return redirect("/invoices")
+    inv = (
+        Invoice.query.filter(Invoice.id == id)
+        .with_for_update()
+        .populate_existing()
+        .first_or_404()
+    )
+    before_snapshot = build_invoice_audit_snapshot(inv)
+    reason = (request.form.get("reason") or "").strip()
+    try:
+        error = restore_cancelled_invoice_record(inv, actor_username=session.get("username"), reason=reason)
+        if error:
+            db.session.rollback()
+            flash(error, "danger")
+            return redirect("/invoices")
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Invoice restore failed for id=%s", id)
+        flash("Invoice could not be restored. No stock was changed.", "danger")
+        return redirect("/invoices")
+    record_audit_event(
+        action="Restored cancelled invoice",
+        entity_type="INVOICE",
+        entity_id=inv.id,
+        ref_code=inv.invoice_no,
+        before=before_snapshot,
+        after=build_invoice_audit_snapshot(inv),
+        extra={"reason": reason or "Accidental cancellation rollback"},
+    )
+    flash(f"Invoice {inv.invoice_no} restored. Stock and purchase lots were rolled back.", "success")
     return redirect("/invoices")
 
 
