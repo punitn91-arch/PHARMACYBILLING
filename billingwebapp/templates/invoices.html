@@ -168,6 +168,12 @@
                                             <button type="submit" class="danger" style="background:none;border:0;padding:0;color:inherit;cursor:pointer;font:inherit;text-align:left;width:100%">Cancel Invoice</button>
                                         </form>
                                         {% endif %}
+	                                        {% elif session.get("role") == "admin" or session.get("can_delete_invoice") or session.get("can_invoice_action") %}
+	                                        <form method="post" action="/invoice/uncancel/{{ i.id }}" class="invoice-cancel-form" style="margin:0"
+	                                              onsubmit="var r = prompt('Rollback cancellation for invoice {{ i.invoice_no }}? Stock restored during cancellation will be sold out again.\nReason:'); if (r === null) return false; this.reason.value = r; return true;">
+	                                            <input type="hidden" name="reason" value="">
+	                                            <button type="submit" class="danger" style="background:none;border:0;padding:0;color:inherit;cursor:pointer;font:inherit;text-align:left;width:100%">Rollback Cancellation</button>
+	                                        </form>
                                         {% endif %}
                                     </div>
                                 </details>
