@@ -6380,7 +6380,7 @@ with app.app_context():
             ))
             db.session.execute(text(
                 'UPDATE "pending_bill_store" '
-                'SET "is_deleted" = 0 '
+                'SET "is_deleted" = FALSE '
                 'WHERE "is_deleted" IS NULL'
             ))
             db.session.commit()
