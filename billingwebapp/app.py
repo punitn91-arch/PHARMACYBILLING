@@ -3204,7 +3204,7 @@ def repair_hold_bill_schema_compat():
             ))
         if "is_deleted" in existing_columns:
             db.session.execute(text(
-                'UPDATE "hold_bill" SET "is_deleted" = FALSE WHERE "is_deleted" IS NULL'
+                'UPDATE "hold_bill" SET "is_deleted" = 0 WHERE "is_deleted" IS NULL'
             ))
         db.session.commit()
     except Exception:
