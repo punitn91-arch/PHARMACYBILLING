@@ -1525,10 +1525,10 @@ def tenant_business_identity(tenant=None):
         "licence_no": (getattr(tenant, "drug_license", "") or "").strip(),
         "logo_path": logo_path,
         "logo_width_mm": normalize_logo_dimension_mm(
-            settings.get("logo_width_mm"), 44, minimum=20, maximum=70
+            settings.get("logo_width_mm"), 44, minimum=20, maximum=160
         ),
         "logo_height_mm": normalize_logo_dimension_mm(
-            settings.get("logo_height_mm"), 21, minimum=10, maximum=40
+            settings.get("logo_height_mm"), 21, minimum=10, maximum=80
         ),
         "invoice_header": (settings.get("invoice_header") or "").strip(),
         "invoice_footer": (settings.get("invoice_footer") or "").strip(),
@@ -19455,10 +19455,10 @@ def _validate_business_setup(form, logo_file):
             r"[^A-Za-z0-9]+", "", (form.get("invoice_prefix") or "INV").upper()
         )[:8] or "INV",
         "logo_width_mm": normalize_logo_dimension_mm(
-            form.get("logo_width_mm"), 44, minimum=20, maximum=70
+            form.get("logo_width_mm"), 44, minimum=20, maximum=160
         ),
         "logo_height_mm": normalize_logo_dimension_mm(
-            form.get("logo_height_mm"), 21, minimum=10, maximum=40
+            form.get("logo_height_mm"), 21, minimum=10, maximum=80
         ),
     }
     limits = {

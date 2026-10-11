@@ -112,15 +112,15 @@
                 <div class="wide">
                     <label>Pharmacy Logo (PNG or JPEG, up to 2 MB)</label>
                     {% if business_identity.logo_path %}
-                    <div class="tenant-meta"><img id="tenantLogoPreview" src="{{ business_identity.logo_path }}" alt="Current pharmacy logo" style="width:{{ (business_identity.logo_width_mm|default(44)) * 3 }}px;height:{{ (business_identity.logo_height_mm|default(21)) * 3 }}px;max-width:260px;max-height:150px;object-fit:contain"></div>
+                    <div class="tenant-meta"><img id="tenantLogoPreview" src="{{ business_identity.logo_path }}" alt="Current pharmacy logo" style="width:{{ (business_identity.logo_width_mm|default(44)) * 3 }}px;height:{{ (business_identity.logo_height_mm|default(21)) * 3 }}px;max-width:520px;max-height:260px;object-fit:contain"></div>
                     {% endif %}
                     <input class="form-control mt-2" type="file" name="pharmacy_logo" accept="image/png,image/jpeg">
                     {% if business_identity.logo_path %}
                     <label class="tenant-help"><input type="checkbox" name="remove_logo" value="1"> Remove current logo</label>
                     {% endif %}
                 </div>
-                <div><label>Dashboard Logo Width (mm)</label><input id="logoWidthMm" class="form-control mt-2" type="number" name="logo_width_mm" min="20" max="70" step="0.5" value="{{ request.form.get('logo_width_mm', business_identity.logo_width_mm|default(44)) }}"></div>
-                <div><label>Dashboard Logo Height (mm)</label><input id="logoHeightMm" class="form-control mt-2" type="number" name="logo_height_mm" min="10" max="40" step="0.5" value="{{ request.form.get('logo_height_mm', business_identity.logo_height_mm|default(21)) }}"></div>
+                <div><label>Dashboard Logo Width (mm)</label><input id="logoWidthMm" class="form-control mt-2" type="number" name="logo_width_mm" min="20" max="160" step="0.5" value="{{ request.form.get('logo_width_mm', business_identity.logo_width_mm|default(44)) }}"></div>
+                <div><label>Dashboard Logo Height (mm)</label><input id="logoHeightMm" class="form-control mt-2" type="number" name="logo_height_mm" min="10" max="80" step="0.5" value="{{ request.form.get('logo_height_mm', business_identity.logo_height_mm|default(21)) }}"></div>
                 <div class="wide">
                     <label>Invoice Header Override</label>
                     <textarea class="form-control mt-2" name="invoice_header" maxlength="500" rows="2">{{ request.form.get('invoice_header', tenant_settings.get('invoice_header', '')) }}</textarea>
@@ -212,8 +212,8 @@
     }
 
     function updatePreview() {
-        const width = clamp(widthInput.value, 44, 20, 70);
-        const height = clamp(heightInput.value, 21, 10, 40);
+        const width = clamp(widthInput.value, 44, 20, 160);
+        const height = clamp(heightInput.value, 21, 10, 80);
         preview.style.width = `${width * 3}px`;
         preview.style.height = `${height * 3}px`;
     }
