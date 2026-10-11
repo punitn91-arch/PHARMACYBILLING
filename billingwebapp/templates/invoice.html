@@ -425,7 +425,7 @@ body {
 
 <header class="invoice-top">
     <div class="brand-panel">
-        <div class="brand-logo-wrap" style="width: {{ print_profile.logo_width_mm|default(44) }}mm; height: {{ print_profile.logo_height_mm|default(21) }}mm;">
+        <div class="brand-logo-wrap">
             <img class="brand-logo" src="{{ print_profile.logo_path or (url_for('static', filename='logo.png') if print_profile.pharmacy_name else '/static/endo-pharmacy-logo.png') }}" alt="{{ print_profile.pharmacy_name or 'Pharmacy' }} Logo">
         </div>
         <div class="brand-meta">

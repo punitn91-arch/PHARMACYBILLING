@@ -49,10 +49,10 @@
 
     <section class="dashboard-logo-stage app-surface">
         <img
-            src="{{ session.get('tenant_logo_path') or url_for('static', filename='logo.png') }}"
-            alt="{{ session.get('tenant_name') or 'Pharmacy' }} Logo"
+            src="{{ business_identity.logo_path or url_for('static', filename='logo.png') }}"
+            alt="{{ business_identity.pharmacy_name or 'Pharmacy' }} Logo"
             class="dashboard-logo-image"
-            style="max-width: min(100%, {{ (session.get('tenant_logo_width_mm') or 44) * 8 }}px); max-height: {{ (session.get('tenant_logo_height_mm') or 21) * 8 }}px;"
+            style="max-width: min(100%, {{ (business_identity.logo_width_mm|default(44)) * 8 }}px); max-height: {{ (business_identity.logo_height_mm|default(21)) * 8 }}px;"
         >
     </section>
 
