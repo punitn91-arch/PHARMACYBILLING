@@ -15732,9 +15732,18 @@ def table_runtime_columns(table_name):
     return {}
 
 
+def runtime_dialect_name():
+    try:
+        bind = db.session.get_bind()
+    except Exception:
+        bind = None
+    bind = bind or db.engine
+    return (bind.dialect.name if bind and bind.dialect else "").lower()
+
+
 def postgres_runtime_column_data_type(table_name, column_name):
     try:
-        if (db.session.bind.dialect.name if db.session.bind else "").lower() != "postgresql":
+        if runtime_dialect_name() != "postgresql":
             return ""
         row = db.session.execute(
             text(
@@ -15774,8 +15783,7 @@ def sql_text_bindable_value(value):
 
 def appointment_soft_delete_uses_legacy_integer():
     try:
-        dialect = (db.session.bind.dialect.name if db.session.bind else "").lower()
-        if dialect != "postgresql":
+        if runtime_dialect_name() != "postgresql":
             return False
         data_type = postgres_runtime_column_data_type("appointment", "is_deleted")
         if data_type:
@@ -18653,17 +18661,55 @@ def tenant_admin_permissions():
 
 
 def create_tenant_admin_user(tenant, username, email=""):
+    storage_map = user_boolean_storage_mode_map()
+    permissions = tenant_admin_permissions()
     user = User(
         tenant_id=tenant.id,
         username=(username or "").strip(),
         role="admin",
         access_profile="admin",
-        **tenant_admin_permissions(),
+        **permissions,
     )
     user.set_password(secrets.token_urlsafe(32))
-    db.session.add(user)
-    db.session.flush()
-    return user
+    if not any(mode == "integer" for mode in storage_map.values()):
+        db.session.add(user)
+        db.session.flush()
+        return user
+
+    insert_values = {
+        "tenant_id": tenant.id,
+        "username": user.username,
+        "password_hash": user.password_hash,
+        "role": user.role,
+        "access_profile": user.access_profile,
+        "session_version": 0,
+        "is_active": bind_user_boolean_value("is_active", True, storage_map),
+        "created_at": sql_text_bindable_value(datetime.utcnow()),
+    }
+    for field_name in USER_PERMISSION_FIELDS:
+        insert_values[field_name] = bind_user_boolean_value(field_name, permissions[field_name], storage_map)
+
+    runtime_columns = table_runtime_columns("user")
+    filtered_values = {
+        key: value
+        for key, value in insert_values.items()
+        if not runtime_columns or key in runtime_columns
+    }
+    insert_columns = list(filtered_values.keys())
+    columns_sql = ", ".join(f'"{column_name}"' for column_name in insert_columns)
+    placeholders_sql = ", ".join(f":{column_name}" for column_name in insert_columns)
+    result = db.session.execute(
+        text(f'INSERT INTO "user" ({columns_sql}) VALUES ({placeholders_sql}) RETURNING "id"'),
+        filtered_values,
+    )
+    row = result.fetchone()
+    user_id = row[0] if row else None
+    if not user_id:
+        raise RuntimeError("Tenant admin user was not assigned a database ID.")
+    admin_user = User.query.filter(User.id == user_id, User.tenant_id == tenant.id).first()
+    if admin_user is None:
+        raise RuntimeError("Tenant admin user could not be loaded after provisioning.")
+    return admin_user
 
 
 def build_tenant_audit_snapshot(tenant):
