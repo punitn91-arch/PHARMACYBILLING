@@ -918,7 +918,7 @@
     background: var(--pos-soft);
 }
 
-#billingForm .pay-seg[aria-checked="true"] {
+#billingForm .pay-seg[aria-pressed="true"] {
     border-color: var(--pos-brand);
     background: var(--pos-brand-soft);
     box-shadow: inset 0 0 0 1px var(--pos-brand);
@@ -941,10 +941,6 @@
     display: grid;
     gap: 4px;
     min-width: 0;
-}
-
-#billingForm .payment-mode-field {
-    margin-top: 8px;
 }
 
 /* ---------- Floating action bar ---------- */
@@ -1265,8 +1261,6 @@
 {% macro icon(name, cls="") -%}
 <svg class="pos-icon{{ ' ' ~ cls if cls else '' }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
 {%- if name == "plus" -%}<path d="M5 12h14"/><path d="M12 5v14"/>
-{%- elif name == "calendar" -%}<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>
-{%- elif name == "keyboard" -%}<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>
 {%- elif name == "chevron-down" -%}<path d="m6 9 6 6 6-6"/>
 {%- elif name == "user" -%}<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
 {%- elif name == "user-plus" -%}<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/>
@@ -1278,10 +1272,13 @@
 {%- elif name == "barcode" -%}<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 7v10"/><path d="M12 7v10"/><path d="M17 7v10"/>
 {%- elif name == "trash" -%}<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>
 {%- elif name == "exchange" -%}<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>
-{%- elif name == "receipt" -%}<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>
+{%- elif name == "receipt" -%}<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M14 8H8"/><path d="M16 12H8"/><path d="M13 16H8"/>
 {%- elif name == "credit-card" -%}<rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/>
 {%- elif name == "banknote" -%}<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>
 {%- elif name == "smartphone" -%}<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>
+{%- elif name == "globe" -%}<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>
+{%- elif name == "wallet" -%}<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>
+{%- elif name == "clock" -%}<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
 {%- elif name == "grid" -%}<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>
 {%- elif name == "file-text" -%}<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>
 {%- elif name == "save" -%}<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>
@@ -1532,12 +1529,20 @@
                     <h3 class="panel-title">{{ icon("credit-card") }}Payment Details</h3>
                 </div>
                 <div class="panel-body">
-                    <div class="pay-segments" role="radiogroup" aria-label="Payment type">
-                        <button type="button" class="pay-seg" role="radio" aria-checked="false" data-segment="CASH">{{ icon("banknote") }}Cash</button>
-                        <button type="button" class="pay-seg" role="radio" aria-checked="false" data-segment="UPI">{{ icon("smartphone") }}UPI</button>
-                        <button type="button" class="pay-seg" role="radio" aria-checked="false" data-segment="CARD">{{ icon("credit-card") }}Card</button>
-                        <button type="button" class="pay-seg" role="radio" aria-checked="false" data-segment="SPLIT">{{ icon("grid") }}Split</button>
+                    {% set restored_payment_mode = restored_hold_bill.header.payment_mode if restored_hold_bill else 'CASH' %}
+                    {# ADJUSTMENT has no button: billing sets it itself when return credit covers the bill. #}
+                    {% set pay_mode_buttons = [("CASH", "Cash", "banknote"), ("ONLINE", "Online", "globe"), ("UPI", "UPI", "smartphone"), ("CARD", "Card", "credit-card"), ("WALLET", "Wallet", "wallet"), ("CREDIT", "Credit", "clock")] %}
+                    <div class="pay-segments" role="group" aria-label="Payment mode">
+                        {% for mode, label, icon_name in pay_mode_buttons if mode in payment_modes %}
+                        <button type="button" class="pay-seg" aria-pressed="{{ 'true' if restored_payment_mode == mode else 'false' }}" data-mode="{{ mode }}">{{ icon(icon_name) }}{{ label }}</button>
+                        {% endfor %}
+                        <button type="button" class="pay-seg" aria-pressed="false" data-split title="Part cash, rest through the selected online mode">{{ icon("grid") }}Split</button>
                     </div>
+                    <select id="paymentModeSelect" name="payment_mode" required hidden>
+                        {% for mode in payment_modes %}
+                        <option value="{{ mode }}" {% if restored_payment_mode == mode %}selected{% endif %}>{{ mode }}</option>
+                        {% endfor %}
+                    </select>
                     <div class="payment">
                         <div class="payment-field">
                             <label for="splitCashAmountInput">Split Cash Amount</label>
@@ -1570,17 +1575,6 @@
                                 >
                             </div>
                         </div>
-                    </div>
-                    {% set restored_payment_mode = restored_hold_bill.header.payment_mode if restored_hold_bill else 'CASH' %}
-                    <div class="payment-field payment-mode-field">
-                        <label for="paymentModeSelect">Payment Mode</label>
-                        <select id="paymentModeSelect" name="payment_mode" required>
-                            {% for mode in payment_modes %}
-                            <option value="{{ mode }}" {% if restored_payment_mode == mode %}selected{% endif %}>
-                                {% if mode == "ONLINE" %}Online{% elif mode == "ADJUSTMENT" %}Adjustment{% else %}{{ mode }}{% endif %}
-                            </option>
-                            {% endfor %}
-                        </select>
                     </div>
                 </div>
             </section>
@@ -1744,6 +1738,9 @@ function syncPaymentBreakdown() {
     let rawSplitCash = String(splitCashInput.value || "").trim();
     let splitCash = rawSplitCash === "" ? 0 : toNum(rawSplitCash, 0);
     let paymentMode = String(paymentSelect.value || "CASH").toUpperCase();
+    // Credit and adjustment collect nothing now (same rule as the server's
+    // is_non_collection_payment_mode), so they show no online amount either.
+    let collectsNothing = paymentMode === "CREDIT" || paymentMode === "ADJUSTMENT";
     let validationMessage = "";
 
     splitCashInput.max = roundedAmount.toFixed(2);
@@ -1754,7 +1751,7 @@ function syncPaymentBreakdown() {
         validationMessage = "Cash amount cannot be negative.";
     } else if (splitCash > roundedAmount) {
         validationMessage = "Cash amount cannot exceed total bill amount.";
-    } else if (splitCash > 0 && splitCash < roundedAmount && paymentMode === "CASH") {
+    } else if (splitCash > 0 && splitCash < roundedAmount && (paymentMode === "CASH" || collectsNothing)) {
         validationMessage = "Select an online payment mode for the online portion of split payment.";
     }
 
@@ -1764,7 +1761,7 @@ function syncPaymentBreakdown() {
     let effectiveOnline = 0;
     if (rawSplitCash === "" || splitCash <= 0) {
         effectiveCash = paymentMode === "CASH" ? roundedAmount : 0;
-        effectiveOnline = paymentMode === "CASH" ? 0 : roundedAmount;
+        effectiveOnline = (paymentMode === "CASH" || collectsNothing) ? 0 : roundedAmount;
     } else {
         effectiveCash = Math.min(splitCash, roundedAmount);
         effectiveOnline = Math.max(roundedAmount - effectiveCash, 0);
@@ -2923,11 +2920,17 @@ if (restoredHoldBill && restoredHoldBill.hold_bill_id) {
     syncPaymentBreakdown();
 }
 
-// Payment type buttons. Cash / UPI / Card set #paymentModeSelect (still the
-// form field); Split keeps an online mode and moves to the split cash amount,
-// which syncPaymentBreakdown() already turns into a cash + online payment.
-let paySegments = Array.from(document.querySelectorAll(".pay-seg"));
+// Payment mode buttons set the hidden #paymentModeSelect (the form field).
+// Split is a toggle on top of an online mode: the cash part goes in the split
+// cash amount and syncPaymentBreakdown() sends the rest through that mode.
+let payModeButtons = Array.from(document.querySelectorAll(".pay-seg[data-mode]"));
+let paySplitButton = document.querySelector(".pay-seg[data-split]");
+const SPLIT_ONLINE_MODES = ["ONLINE", "UPI", "CARD", "WALLET"];
 let splitIntent = false;
+
+function currentPaymentMode() {
+    return paymentModeSelect ? String(paymentModeSelect.value || "").toUpperCase() : "";
+}
 
 function hasPaymentMode(mode) {
     return !!paymentModeSelect && Array.from(paymentModeSelect.options).some(option => option.value === mode);
@@ -2941,14 +2944,9 @@ function splitPaymentEntered() {
 }
 
 function syncPaymentSegments() {
-    let mode = paymentModeSelect ? String(paymentModeSelect.value || "").toUpperCase() : "";
-    let active = (splitIntent || splitPaymentEntered()) ? "SPLIT" : mode;
-    let anyChecked = paySegments.some(btn => btn.dataset.segment === active);
-    paySegments.forEach((btn, idx) => {
-        let checked = btn.dataset.segment === active;
-        btn.setAttribute("aria-checked", checked ? "true" : "false");
-        btn.tabIndex = checked || (!anyChecked && idx === 0) ? 0 : -1;
-    });
+    let mode = currentPaymentMode();
+    payModeButtons.forEach(btn => btn.setAttribute("aria-pressed", btn.dataset.mode === mode ? "true" : "false"));
+    if (paySplitButton) paySplitButton.setAttribute("aria-pressed", (splitIntent || splitPaymentEntered()) ? "true" : "false");
 }
 
 function setPaymentMode(mode) {
@@ -2957,43 +2955,49 @@ function setPaymentMode(mode) {
     paymentModeSelect.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function choosePaySegment(segment, focusCashAmount) {
-    if (segment === "SPLIT") {
-        splitIntent = true;
-        if (paymentModeSelect && String(paymentModeSelect.value || "").toUpperCase() === "CASH") setPaymentMode("UPI");
-        syncPaymentSegments();
-        if (focusCashAmount && splitCashAmountInput) {
-            splitCashAmountInput.focus();
-            splitCashAmountInput.select();
-        }
-        return;
+function clearSplitCash() {
+    if (!splitCashAmountInput || splitCashAmountInput.value === "") return;
+    splitCashAmountInput.value = "";
+    splitCashAmountInput.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function choosePaymentMode(mode) {
+    // Cash and credit cannot carry an online part, so picking them ends a split.
+    if (!SPLIT_ONLINE_MODES.includes(mode)) {
+        splitIntent = false;
+        clearSplitCash();
     }
-    splitIntent = false;
-    if (splitCashAmountInput && splitCashAmountInput.value !== "") {
-        splitCashAmountInput.value = "";
-        splitCashAmountInput.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    setPaymentMode(segment);
+    setPaymentMode(mode);
     syncPaymentSegments();
 }
 
-paySegments.forEach((btn, idx) => {
+function toggleSplitPayment() {
+    if (splitIntent || splitPaymentEntered()) {
+        splitIntent = false;
+        clearSplitCash();
+    } else {
+        splitIntent = true;
+        if (!SPLIT_ONLINE_MODES.includes(currentPaymentMode())) setPaymentMode("ONLINE");
+        if (splitCashAmountInput) {
+            splitCashAmountInput.focus();
+            splitCashAmountInput.select();
+        }
+    }
+    syncPaymentSegments();
+}
+
+payModeButtons.forEach(function (btn) {
     btn.addEventListener("click", function () {
-        choosePaySegment(btn.dataset.segment, true);
-    });
-    btn.addEventListener("keydown", function (e) {
-        let step = (e.key === "ArrowRight" || e.key === "ArrowDown") ? 1 : (e.key === "ArrowLeft" || e.key === "ArrowUp") ? -1 : 0;
-        if (!step) return;
-        e.preventDefault();
-        let next = paySegments[(idx + step + paySegments.length) % paySegments.length];
-        choosePaySegment(next.dataset.segment, false);
-        next.focus();
+        choosePaymentMode(btn.dataset.mode);
     });
 });
+if (paySplitButton) {
+    paySplitButton.addEventListener("click", toggleSplitPayment);
+}
 
 if (paymentModeSelect) {
     paymentModeSelect.addEventListener("change", function () {
-        if (String(this.value || "").toUpperCase() === "CASH" && !splitPaymentEntered()) splitIntent = false;
+        if (!SPLIT_ONLINE_MODES.includes(currentPaymentMode()) && !splitPaymentEntered()) splitIntent = false;
         syncPaymentSegments();
     });
 }

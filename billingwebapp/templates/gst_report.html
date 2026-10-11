@@ -43,6 +43,10 @@
     <section class="app-surface">
         <h2 style="margin:0 0 4px;">GST Summary</h2>
         <div class="app-inline-help">
+            {{ business_identity.pharmacy_name }}{% if business_identity.legal_business_name %} · {{ business_identity.legal_business_name }}{% endif %}
+            {% if business_identity.gst_no %} · GSTIN {{ business_identity.gst_no }}{% endif %}
+        </div>
+        <div class="app-inline-help">
             Sales are taken from active (not cancelled) invoices. MRP includes GST, so taxable value = amount × 100 / (100 + rate).
             This is a working summary for GSTR-1 / GSTR-3B; please verify with your CA before filing.
         </div>

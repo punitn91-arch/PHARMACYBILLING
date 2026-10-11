@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -21,6 +22,8 @@ class OmnidimGatewayTests(unittest.TestCase):
         "AI_COMPLAINTS_ENABLED",
         "OMNIDIM_GATEWAY_ENABLED",
         "OMNIDIM_GATEWAY_SECRET",
+        "OMNIDIM_GATEWAY_TENANT_ID",
+        "OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON",
         "OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE",
         "OMNIDIM_GATEWAY_CORS_ORIGIN",
     )
@@ -46,6 +49,8 @@ class OmnidimGatewayTests(unittest.TestCase):
                 "AI_COMPLAINTS_ENABLED": "1",
                 "OMNIDIM_GATEWAY_ENABLED": "1",
                 "OMNIDIM_GATEWAY_SECRET": "omnidim-gateway-test-secret-with-more-than-thirty-two-bytes",
+                "OMNIDIM_GATEWAY_TENANT_ID": "",
+                "OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON": "",
                 "OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE": "120",
                 "OMNIDIM_GATEWAY_CORS_ORIGIN": "https://omnidim.io",
             }
@@ -65,6 +70,8 @@ class OmnidimGatewayTests(unittest.TestCase):
             AI_COMPLAINTS_ENABLED=True,
             OMNIDIM_GATEWAY_ENABLED=True,
             OMNIDIM_GATEWAY_SECRET=os.environ["OMNIDIM_GATEWAY_SECRET"],
+            OMNIDIM_GATEWAY_TENANT_ID="",
+            OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON="",
             OMNIDIM_GATEWAY_CORS_ORIGIN="https://omnidim.io",
             APPLICATION_BASE_URL="https://clinic.example.test",
         )
@@ -111,6 +118,11 @@ class OmnidimGatewayTests(unittest.TestCase):
             self.db.session.remove()
             self.db.drop_all()
             self.db.create_all()
+            tenant = self.app_module.create_default_tenant()
+            self.tenant_id = tenant.id
+            tenant_context = self.app_module.tenant_context(tenant.id)
+            tenant_context.__enter__()
+            self.addCleanup(tenant_context.__exit__, None, None, None)
             self.db.session.add(
                 M["ClinicProfile"](
                     clinic_name="Test Endo Clinic",
@@ -167,6 +179,8 @@ class OmnidimGatewayTests(unittest.TestCase):
 
     def tearDown(self):
         self.app.config["OMNIDIM_GATEWAY_ENABLED"] = True
+        self.app.config["OMNIDIM_GATEWAY_TENANT_ID"] = ""
+        self.app.config["OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON"] = ""
         with self.app.app_context():
             self.db.session.remove()
 
@@ -245,6 +259,132 @@ class OmnidimGatewayTests(unittest.TestCase):
         self.assertTrue(reports.get_json()["data"]["verification_required"])
         self.assertEqual(booking.get_json()["data"]["url"], "https://clinic.example.test/book-appointment")
         self.assertEqual(reports.get_json()["data"]["url"], "https://clinic.example.test/my-lab-reports")
+        with self.app.app_context():
+            audit = self.models["AIAPIRequestAudit"].query.filter_by(
+                endpoint="/api/v1/omnidim/clinic-info"
+            ).first()
+            self.assertEqual(audit.tenant_id, self.tenant_id)
+
+    def test_gateway_fails_closed_for_multiple_tenants_without_tenant_configuration(self):
+        with self.app.app_context():
+            with self.app_module.tenant_scope_disabled():
+                second = self.app_module.Tenant(
+                    tenant_uid="voice-tenant-two",
+                    tenant_code="voice-tenant-two",
+                    pharmacy_name="Second Clinic",
+                    status="Active",
+                )
+                self.db.session.add(second)
+                self.db.session.commit()
+
+        response = self.client.get("/api/v1/omnidim/clinic-info", headers=self.headers)
+        self.assertEqual(response.status_code, 503, response.get_json())
+        self.assertEqual(response.get_json()["error"]["code"], "SERVICE_UNAVAILABLE")
+
+    def test_gateway_tenant_configuration_selects_only_the_configured_clinic(self):
+        with self.app.app_context():
+            with self.app_module.tenant_scope_disabled():
+                second = self.app_module.Tenant(
+                    tenant_uid="voice-tenant-two",
+                    tenant_code="voice-tenant-two",
+                    pharmacy_name="Second Clinic",
+                    status="Active",
+                )
+                self.db.session.add(second)
+                self.db.session.flush()
+                second_id = second.id
+            with self.app_module.tenant_context(second_id):
+                self.db.session.add(
+                    self.models["ClinicProfile"](
+                        clinic_name="Second Tenant Clinic",
+                        phone="02222222222",
+                        timezone_name="Asia/Kolkata",
+                    )
+                )
+                self.db.session.commit()
+
+        self.app.config["OMNIDIM_GATEWAY_TENANT_ID"] = str(second_id)
+        response = self.client.get("/api/v1/omnidim/clinic-info", headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["data"]["clinic"]["name"], "Second Tenant Clinic")
+
+    def test_per_tenant_gateway_credentials_route_and_isolate_idempotency(self):
+        with self.app.app_context():
+            with self.app_module.tenant_scope_disabled():
+                second = self.app_module.Tenant(
+                    tenant_uid="voice-tenant-two",
+                    tenant_code="voice-tenant-two",
+                    pharmacy_name="Second Clinic",
+                    status="Active",
+                )
+                self.db.session.add(second)
+                self.db.session.flush()
+                second_id = second.id
+            with self.app_module.tenant_context(second_id):
+                self.db.session.add(
+                    self.models["ClinicProfile"](
+                        clinic_name="Second Tenant Clinic",
+                        phone="02222222222",
+                        timezone_name="Asia/Kolkata",
+                    )
+                )
+                self.db.session.commit()
+
+        first_secret = "tenant-one-voice-gateway-secret-longer-than-32-bytes"
+        second_secret = "tenant-two-voice-gateway-secret-longer-than-32-bytes"
+        self.app.config["OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON"] = json.dumps(
+            {str(self.tenant_id): first_secret, str(second_id): second_secret}
+        )
+        first = self.client.get(
+            "/api/v1/omnidim/clinic-info?tenant_id={}".format(second_id),
+            headers={"X-Clinic-Gateway-Key": first_secret},
+        )
+        second_response = self.client.get(
+            "/api/v1/omnidim/clinic-info?tenant_id={}".format(self.tenant_id),
+            headers={"X-Clinic-Gateway-Key": second_secret},
+        )
+        self.assertEqual(first.status_code, 200, first.get_json())
+        self.assertEqual(second_response.status_code, 200, second_response.get_json())
+        self.assertEqual(first.get_json()["data"]["clinic"]["name"], "Test Endo Clinic")
+        self.assertEqual(second_response.get_json()["data"]["clinic"]["name"], "Second Tenant Clinic")
+
+        callback_payload = {
+            "request_key": "same-key-across-tenants-001",
+            "confirmed": True,
+            "mobile": "9876543210",
+            "caller_name": "Ravi Kumar",
+            "reason": "Please call about clinic timings",
+            "category": "GENERAL",
+        }
+        first_callback = self.client.post(
+            "/api/v1/omnidim/callbacks",
+            json=callback_payload,
+            headers={"X-Clinic-Gateway-Key": first_secret},
+        )
+        second_callback = self.client.post(
+            "/api/v1/omnidim/callbacks",
+            json=callback_payload,
+            headers={"X-Clinic-Gateway-Key": second_secret},
+        )
+        self.assertEqual(first_callback.status_code, 201, first_callback.get_json())
+        self.assertEqual(second_callback.status_code, 201, second_callback.get_json())
+        self.assertFalse(first_callback.get_json()["data"]["replayed"])
+        self.assertFalse(second_callback.get_json()["data"]["replayed"])
+        with self.app.app_context():
+            with self.app_module.tenant_scope_disabled():
+                self.assertEqual(
+                    self.models["OmnidimGatewayAction"].query.filter_by(
+                        operation="CALLBACK_CREATE"
+                    ).count(),
+                    2,
+                )
+                audit_tenants = {
+                    row.tenant_id
+                    for row in self.models["AIAPIRequestAudit"].query.filter(
+                        self.models["AIAPIRequestAudit"].endpoint == "/api/v1/omnidim/callbacks"
+                    ).all()
+                }
+            self.assertEqual(audit_tenants, {self.tenant_id, second_id})
 
     def test_callback_and_complaint_are_confirmed_and_idempotent(self):
         callback_payload = {

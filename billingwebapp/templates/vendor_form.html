@@ -2026,6 +2026,23 @@ function clearDraftStorage() {
     }
 }
 
+function showPurchaseSuccessFromRedirect() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("purchase_saved") !== "1") return;
+    const message = params.get("purchase_message") || "Purchase saved. Stock updated.";
+    const purchaseNo = params.get("purchase_no");
+    showPurchaseFeedback(
+        `${message}${purchaseNo ? ` Purchase No: ${purchaseNo}` : ""}`,
+        "success"
+    );
+    params.delete("purchase_saved");
+    params.delete("purchase_message");
+    params.delete("purchase_no");
+    const query = params.toString();
+    const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", cleanUrl);
+}
+
 function setTodayIfEmpty() {
     if (!purchaseDateInput.value) {
         purchaseDateInput.value = new Date().toISOString().slice(0, 10);
@@ -2090,7 +2107,13 @@ function submitPurchaseForm() {
         clearDraftStorage();
         setPurchaseDirty(false);
         renderGrid();
-        showPurchaseFeedback(`${payload.message} Purchase No: ${payload.purchase_no}`, "success");
+        const historyUrl = new URL(payload.redirect_url, window.location.origin);
+        historyUrl.searchParams.set("purchase_saved", "1");
+        historyUrl.searchParams.set("purchase_message", payload.message || "Purchase saved. Stock updated.");
+        if (payload.purchase_no) {
+            historyUrl.searchParams.set("purchase_no", payload.purchase_no);
+        }
+        window.location.assign(historyUrl.toString());
     })
     .catch(err => {
         showPurchaseFeedback(err.message || "Unable to save purchase right now.", "error");
@@ -2269,6 +2292,7 @@ syncDraftMedicineCodes();
 updatePackQtyLabel();
 updateModalMeta();
 setupVendorHistoryActionMenus();
+showPurchaseSuccessFromRedirect();
 </script>
 {% endif %}
 {% endblock %}

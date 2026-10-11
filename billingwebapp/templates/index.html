@@ -38,18 +38,21 @@
         </article>
         {% endif %}
 
+        {% if tenant_feature_enabled("appointments") %}
         <article class="app-stat-card dashboard-top-card">
             <div class="app-stat-label">Appointments Today</div>
             <div class="app-stat-value">{{ appointment_total_today }}</div>
             <div class="app-stat-sub">{{ appointment_booked_today }} booked · {{ appointment_completed_today }} completed</div>
         </article>
+        {% endif %}
     </section>
 
     <section class="dashboard-logo-stage app-surface">
         <img
-            src="{{ url_for('static', filename='logo.png') }}"
-            alt="Clinic Logo"
+            src="{{ session.get('tenant_logo_path') or url_for('static', filename='logo.png') }}"
+            alt="{{ session.get('tenant_name') or 'Pharmacy' }} Logo"
             class="dashboard-logo-image"
+            style="max-width: min(100%, {{ (session.get('tenant_logo_width_mm') or 44) * 8 }}px); max-height: {{ (session.get('tenant_logo_height_mm') or 21) * 8 }}px;"
         >
     </section>
 
@@ -101,6 +104,7 @@
             </div>
         </article>
 
+        {% if tenant_feature_enabled("appointments") %}
         <article class="dashboard-graph-card app-surface">
             <div class="dashboard-graph-head">
                 <div>
@@ -122,6 +126,7 @@
                 {% endfor %}
             </div>
         </article>
+        {% endif %}
     </section>
 
     <section class="dashboard-insights-grid">

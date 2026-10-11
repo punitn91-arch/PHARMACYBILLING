@@ -656,7 +656,13 @@ class PublicPatientPortalTests(unittest.TestCase):
             report = self.app_module.LabReport.query.one()
             report_id = report.id
             storage_key = report.storage_key
-            private_path = os.path.join(self.private_report_dir, storage_key)
+            order = self.app_module.LabOrder.query.filter_by(id=report.lab_order_id).one()
+            tenant_id = order.tenant_id
+            private_path = os.path.join(
+                self.private_report_dir,
+                f"tenant-{tenant_id}",
+                storage_key,
+            )
             self.assertEqual(report.status, "PUBLISHED")
             self.assertTrue(os.path.isfile(private_path))
             self.assertFalse(private_path.startswith(os.path.join(self.app.static_folder, "uploads")))

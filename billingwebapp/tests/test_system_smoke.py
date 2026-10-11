@@ -5,6 +5,9 @@ import tempfile
 import unittest
 from datetime import date, datetime, time
 
+from sqlalchemy.exc import IntegrityError
+from flask import g
+
 
 class SystemSmokeTests(unittest.TestCase):
     @classmethod
@@ -131,14 +134,38 @@ class SystemSmokeTests(unittest.TestCase):
         self.assertEqual(ready_response.status_code, 200)
         self.assertTrue(ready_response.json["ready"])
 
-    def test_system_center_renders_for_admin(self):
+    def test_monitoring_does_not_read_expired_user_after_integrity_error(self):
+        def trigger_integrity_error():
+            user = self.app_module.User.query.filter_by(username="admin").first()
+            g.user = user
+            patient = self.app_module.Patient.query.filter_by(mobile="9876543210").first()
+            self.db.session.add(
+                self.app_module.Patient(
+                    id=patient.id,
+                    name="Duplicate",
+                    mobile="duplicate-mobile",
+                )
+            )
+            try:
+                self.db.session.flush()
+            except IntegrityError:
+                return "integrity error captured", 200
+            self.fail("Expected the duplicate patient ID to raise IntegrityError.")
+
+        self.app.add_url_rule(
+            "/_test/monitoring-integrity-error",
+            endpoint="test_monitoring_integrity_error",
+            view_func=trigger_integrity_error,
+        )
+        response = self.client.get("/_test/monitoring-integrity-error")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(as_text=True), "integrity error captured")
+
+    def test_system_center_requires_platform_super_admin(self):
         self.login()
         response = self.client.get("/system-center")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"System Center", response.data)
-        self.assertIn(b"Database & Runtime", response.data)
-        self.assertIn(b"Backup & Restore", response.data)
-        self.assertIn(b"Security Watch", response.data)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers.get("Location", "").endswith("/"))
 
     def test_global_search_returns_seeded_records(self):
         self.login()

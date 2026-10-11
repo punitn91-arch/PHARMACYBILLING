@@ -9,10 +9,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
-    from ..models import Appointment, AppointmentBookingSettings, Medicine
+    from ..models import Appointment, AppointmentBookingSettings, Medicine, Tenant
     from .infra_safety import build_backup_snapshot
 except ImportError:  # pragma: no cover - script/local fallback
-    from models import Appointment, AppointmentBookingSettings, Medicine
+    from models import Appointment, AppointmentBookingSettings, Medicine, Tenant
     from services.infra_safety import build_backup_snapshot
 
 
@@ -24,11 +24,12 @@ class BackgroundJobCoordinator:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
-    def register(self, key, interval_seconds, callback):
+    def register(self, key, interval_seconds, callback, *, tenant_scoped=False):
         with self._lock:
             self.jobs[key] = {
                 "interval_seconds": max(60, int(interval_seconds)),
                 "callback": callback,
+                "tenant_scoped": bool(tenant_scoped),
                 "last_run_ts": None,
                 "last_run_at": None,
                 "last_status": "idle",
@@ -71,7 +72,17 @@ class BackgroundJobCoordinator:
     def _run_job(self, key, job):
         try:
             with self.app.app_context():
-                job["callback"](self.app)
+                if job.get("tenant_scoped"):
+                    tenant_scope = self.app.extensions.get("tenant_context")
+                    tenants = Tenant.query.filter(Tenant.status.in_(("Trial", "Active"))).order_by(Tenant.id.asc()).all()
+                    for tenant in tenants:
+                        if tenant_scope is None:
+                            job["callback"](self.app)
+                        else:
+                            with tenant_scope(tenant.id):
+                                job["callback"](self.app)
+                else:
+                    job["callback"](self.app)
             job["last_status"] = "ok"
             job["last_error"] = ""
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -88,18 +99,40 @@ def _ensure_dir(path):
     return path
 
 
+def _tenant_output_dir(app, category):
+    tenant_id_resolver = app.extensions.get("current_tenant_id")
+    tenant_id = tenant_id_resolver() if callable(tenant_id_resolver) else None
+    if not tenant_id:
+        raise RuntimeError("Tenant context is required for tenant-specific job output.")
+    path = os.path.join(
+        app.instance_path,
+        category,
+        f"tenant-{int(tenant_id)}",
+    )
+    Path(path).mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path, 0o700)
+    return path
+
+
 def queue_report_export_job(app, payload):
-    report_jobs_dir = _ensure_dir(os.path.join(app.instance_path, "report_jobs", "pending"))
+    report_jobs_dir = _tenant_output_dir(app, "report_jobs/pending")
     job_id = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     target_path = os.path.join(report_jobs_dir, f"{job_id}.json")
+    job_payload = dict(payload or {})
+    tenant_id_resolver = app.extensions.get("current_tenant_id")
+    tenant_id = tenant_id_resolver() if callable(tenant_id_resolver) else None
+    if not tenant_id:
+        raise RuntimeError("Tenant context is required for tenant-specific report exports.")
+    job_payload["tenant_id"] = int(tenant_id)
     with open(target_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=True, indent=2)
+        json.dump(job_payload, handle, ensure_ascii=True, indent=2)
+    os.chmod(target_path, 0o600)
     return {"job_id": job_id, "path": target_path}
 
 
 def _process_report_export_queue(app):
-    pending_dir = _ensure_dir(os.path.join(app.instance_path, "report_jobs", "pending"))
-    ready_dir = _ensure_dir(os.path.join(app.instance_path, "report_jobs", "ready"))
+    pending_dir = _tenant_output_dir(app, "report_jobs/pending")
+    ready_dir = _tenant_output_dir(app, "report_jobs/ready")
     for filename in os.listdir(pending_dir):
         if not filename.endswith(".json"):
             continue
@@ -157,7 +190,7 @@ def _write_whatsapp_reminder_outbox(app):
                 appointment.appointment_time.strftime("%H:%M") if appointment.appointment_time else ""
             )
         reminder_rows.append(reminder)
-    outbox_dir = _ensure_dir(os.path.join(app.instance_path, "outbox"))
+    outbox_dir = _tenant_output_dir(app, "outbox")
     target_path = os.path.join(outbox_dir, "whatsapp_reminders.json")
     with open(target_path, "w", encoding="utf-8") as handle:
         json.dump({"generated_at": datetime.utcnow().isoformat(), "appointments": reminder_rows}, handle, ensure_ascii=True, indent=2)
@@ -185,7 +218,7 @@ def _write_expiry_alert_snapshot(app):
             "stock": medicine.qty or 0,
             "days_left": days_left,
         })
-    alerts_dir = _ensure_dir(os.path.join(app.instance_path, "alerts"))
+    alerts_dir = _tenant_output_dir(app, "alerts")
     target_path = os.path.join(alerts_dir, "expiry_alerts.json")
     with open(target_path, "w", encoding="utf-8") as handle:
         json.dump({"generated_at": datetime.utcnow().isoformat(), "items": alert_rows}, handle, ensure_ascii=True, indent=2)
@@ -206,9 +239,9 @@ def init_background_jobs(app, *, enabled):
     if not enabled or app.config.get("TESTING"):
         return coordinator
 
-    coordinator.register("report_exports", int(os.environ.get("REPORT_EXPORT_JOB_SECONDS", "120") or 120), _process_report_export_queue)
-    coordinator.register("whatsapp_reminders", int(os.environ.get("WHATSAPP_REMINDER_JOB_SECONDS", "1800") or 1800), _write_whatsapp_reminder_outbox)
+    coordinator.register("report_exports", int(os.environ.get("REPORT_EXPORT_JOB_SECONDS", "120") or 120), _process_report_export_queue, tenant_scoped=True)
+    coordinator.register("whatsapp_reminders", int(os.environ.get("WHATSAPP_REMINDER_JOB_SECONDS", "1800") or 1800), _write_whatsapp_reminder_outbox, tenant_scoped=True)
     coordinator.register("database_backup", int(os.environ.get("BACKUP_JOB_SECONDS", "86400") or 86400), _backup_database_file)
-    coordinator.register("expiry_alerts", int(os.environ.get("EXPIRY_ALERT_JOB_SECONDS", "3600") or 3600), _write_expiry_alert_snapshot)
+    coordinator.register("expiry_alerts", int(os.environ.get("EXPIRY_ALERT_JOB_SECONDS", "3600") or 3600), _write_expiry_alert_snapshot, tenant_scoped=True)
     coordinator.start()
     return coordinator

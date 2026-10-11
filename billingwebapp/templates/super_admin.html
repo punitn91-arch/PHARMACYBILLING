@@ -1,0 +1,763 @@
+{% extends "base.html" %}
+{% block title %}Super Admin Dashboard{% endblock %}
+{% block body %}
+<style>
+body[data-user-role="super_admin"] {
+    background: #f7f7fc;
+    --layout-topbar-height: 70px;
+    --layout-sidebar-width: 188px;
+}
+body[data-user-role="super_admin"] .topbar {
+    left: var(--layout-sidebar-width);
+    width: calc(100% - var(--layout-sidebar-width));
+    background: #fff;
+    color: #272438;
+    border-bottom: 1px solid #eceaf5;
+    box-shadow: none;
+}
+body[data-user-role="super_admin"] .topbar .title {
+    font-size: 15px;
+    color: #77748a;
+    letter-spacing: 0;
+}
+body[data-user-role="super_admin"] .menu-toggle {
+    color: #64249a;
+    border-color: #e5e0f2;
+}
+body[data-user-role="super_admin"] .topbar .right a,
+body[data-user-role="super_admin"] .topbar .right .link-btn {
+    color: #64249a;
+}
+body[data-user-role="super_admin"] .sidebar {
+    top: 0;
+    height: 100vh;
+    width: var(--layout-sidebar-width) !important;
+    background: #fff;
+    border-right: 1px solid #eceaf5;
+    box-shadow: 10px 0 30px rgba(39, 36, 56, 0.04);
+    padding: 24px 14px;
+}
+body[data-user-role="super_admin"] .sidebar a {
+    color: #5f5b71;
+    border-radius: 10px;
+    padding: 11px 12px;
+    margin: 5px 0;
+    font-weight: 700;
+    font-size: 13px;
+}
+body[data-user-role="super_admin"] .sidebar a.active,
+body[data-user-role="super_admin"] .sidebar a:hover {
+    background: linear-gradient(120deg, #54218b, #c02c9a);
+    color: #fff;
+    box-shadow: 0 12px 24px rgba(192, 44, 154, 0.22);
+}
+body[data-user-role="super_admin"] .content {
+    margin-left: var(--layout-sidebar-width);
+    margin-top: var(--layout-topbar-height);
+    padding: 0;
+    background: #f7f7fc;
+}
+body[data-user-role="super_admin"] .content-inner {
+    max-width: none;
+    padding: 0;
+}
+.sa-nav-brand {
+    font-size: 20px;
+    letter-spacing: 2px;
+    color: #4c3b73;
+    font-weight: 900;
+    padding: 4px 10px 26px;
+}
+.sa-shell {
+    display: grid;
+    gap: 20px;
+    padding: 24px 28px 36px;
+    color: #272438;
+}
+.sa-topline {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+}
+.sa-breadcrumb {
+    color: #77748a;
+    font-size: 13px;
+    font-weight: 700;
+}
+.sa-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: flex-end;
+}
+.sa-bell {
+    width: 38px;
+    height: 38px;
+    border: 0;
+    border-radius: 999px;
+    background: #fff;
+    color: #64249a;
+    box-shadow: 0 8px 22px rgba(39, 36, 56, 0.08);
+}
+.sa-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: inline-grid;
+    place-items: center;
+    background: linear-gradient(120deg, #54218b, #c02c9a);
+    color: #fff;
+    font-weight: 900;
+}
+.sa-user-name { font-weight: 900; font-size: 13px; }
+.sa-user-role { color: #77748a; font-size: 12px; }
+.sa-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(160px, 1fr));
+    gap: 18px;
+}
+.sa-kpi {
+    min-height: 164px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 14px 32px rgba(39, 36, 56, 0.07);
+    padding: 26px;
+    display: grid;
+    align-content: center;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+}
+.sa-kpi.gradient {
+    background: linear-gradient(120deg, #54218b, #c02c9a);
+    color: #fff;
+    box-shadow: 0 18px 36px rgba(100, 36, 154, 0.24);
+}
+.sa-kpi-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    background: #eef5ff;
+    color: #4388fa;
+    font-size: 26px;
+}
+.sa-kpi.green .sa-kpi-icon { background: #ecfbf5; color: #27c785; }
+.sa-kpi.pink .sa-kpi-icon { background: #fff0f7; color: #e64d91; }
+.sa-kpi.gradient .sa-kpi-icon { background: rgba(255,255,255,0.14); color: #fff; }
+.sa-kpi-label {
+    color: #77748a;
+    font-size: 14px;
+    font-weight: 800;
+}
+.sa-kpi.gradient .sa-kpi-label { color: rgba(255,255,255,0.88); }
+.sa-kpi-value {
+    font-size: 38px;
+    line-height: 1;
+    font-weight: 900;
+    letter-spacing: 0;
+}
+.sa-kpi.blue .sa-kpi-value { color: #4388fa; }
+.sa-kpi.green .sa-kpi-value { color: #27c785; }
+.sa-kpi.pink .sa-kpi-value { color: #e64d91; }
+.sa-panel {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(39, 36, 56, 0.06);
+}
+.sa-toolbar {
+    padding: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+.sa-search {
+    flex: 1 1 300px;
+    display: flex;
+    align-items: center;
+    border: 1px solid #cbc5e3;
+    border-radius: 6px;
+    background: #fff;
+    min-height: 42px;
+}
+.sa-search input {
+    border: 0;
+    outline: 0;
+    flex: 1;
+    padding: 0 12px;
+    color: #272438;
+    font-weight: 700;
+}
+.sa-search button {
+    width: 42px;
+    height: 42px;
+    border: 0;
+    background: transparent;
+    color: #6f6a83;
+    cursor: pointer;
+    font-size: 18px;
+}
+.sa-filter-wrap { position: relative; }
+.sa-filter-toggle,
+.sa-add-btn,
+.sa-page-btn,
+.sa-icon-btn {
+    border: 0;
+    border-radius: 7px;
+    min-height: 38px;
+    padding: 0 14px;
+    font-weight: 900;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+}
+.sa-filter-toggle {
+    background: #eef3ff;
+    color: #272438;
+}
+.sa-add-btn {
+    margin-left: auto;
+    background: #19c77e;
+    color: #fff;
+}
+.sa-filter-pop {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + 10px);
+    left: 0;
+    width: min(620px, calc(100vw - 56px));
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 18px 40px rgba(39, 36, 56, 0.16);
+    border: 1px solid #ebe8f5;
+    padding: 20px;
+    display: none;
+}
+.sa-filter-wrap:focus-within .sa-filter-pop,
+.sa-filter-wrap:hover .sa-filter-pop {
+    display: block;
+}
+.sa-filter-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+}
+.sa-field label {
+    display: block;
+    color: #77748a;
+    font-size: 11px;
+    font-weight: 900;
+    margin-bottom: 7px;
+}
+.sa-field input,
+.sa-field select,
+.sa-card input,
+.sa-card select,
+.sa-card textarea {
+    width: 100%;
+    min-height: 38px;
+    border: 1px solid #cbc5e3;
+    border-radius: 7px;
+    padding: 8px 10px;
+    color: #272438;
+    background: #fff;
+}
+.sa-filter-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+}
+.sa-filter-actions button { background: #64249a; color: #fff; border: 0; border-radius: 7px; padding: 9px 12px; font-weight: 900; }
+.sa-filter-actions a { color: #64249a; font-weight: 900; align-self: center; text-decoration: none; }
+.sa-table-wrap { overflow-x: auto; padding: 0 16px 14px; }
+.sa-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 8px;
+    min-width: 920px;
+}
+.sa-table th {
+    color: #77748a;
+    font-size: 12px;
+    text-align: left;
+    padding: 0 12px 8px;
+}
+.sa-table td {
+    background: #fff;
+    padding: 14px 12px;
+    border-top: 1px solid #f0edf8;
+    border-bottom: 1px solid #f0edf8;
+    vertical-align: middle;
+    font-weight: 700;
+}
+.sa-table tbody tr:nth-child(even) td { background: #fbfaff; }
+.sa-table td:first-child { border-left: 1px solid #f0edf8; border-radius: 10px 0 0 10px; }
+.sa-table td:last-child { border-right: 1px solid #f0edf8; border-radius: 0 10px 10px 0; }
+.sa-table tbody tr:hover td {
+    border-color: #7db5ff;
+    box-shadow: inset 0 0 0 1px rgba(67, 136, 250, 0.18);
+}
+.sa-tenant-cell {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 220px;
+}
+.sa-tenant-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    background: linear-gradient(135deg, #4388fa, #27c785, #db3c9d);
+    font-weight: 900;
+}
+.sa-muted { color: #77748a; font-size: 12px; font-weight: 700; }
+.sa-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 12px;
+    font-weight: 900;
+}
+.sa-badge.active, .sa-badge.trial { color: #07834f; background: #e8fbf2; }
+.sa-badge.expiring { color: #9a6200; background: #fff4db; }
+.sa-badge.expired { color: #b51f3c; background: #ffe8ee; }
+.sa-badge.suspended, .sa-badge.cancelled, .sa-badge.unknown { color: #5f6473; background: #eef0f5; }
+.sa-toggle-form { display: inline-flex; }
+.sa-toggle {
+    width: 34px;
+    height: 20px;
+    border: 0;
+    border-radius: 999px;
+    background: #aaaec0;
+    position: relative;
+    cursor: pointer;
+}
+.sa-toggle::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 160ms ease;
+}
+.sa-toggle.on { background: #19c77e; }
+.sa-toggle.on::after { transform: translateX(14px); }
+.sa-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.sa-icon-btn {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    background: #eef3ff;
+    color: #4388fa;
+}
+.sa-icon-btn.green { color: #19b871; background: #ebfbf4; }
+.sa-row-menu { position: relative; display: inline-flex; }
+.sa-row-menu-panel {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    background: #fff;
+    border: 1px solid #ebe8f5;
+    box-shadow: 0 18px 34px rgba(39, 36, 56, 0.14);
+    border-radius: 8px;
+    min-width: 170px;
+    z-index: 4;
+    padding: 8px;
+}
+.sa-row-menu:hover .sa-row-menu-panel,
+.sa-row-menu:focus-within .sa-row-menu-panel {
+    display: grid;
+}
+.sa-row-menu-panel a {
+    color: #272438;
+    text-decoration: none;
+    padding: 9px;
+    border-radius: 6px;
+    font-weight: 800;
+}
+.sa-row-menu-panel a:hover { background: #f7f7fc; }
+.sa-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 16px 16px;
+    color: #77748a;
+    font-weight: 800;
+}
+.sa-page-controls { display: flex; gap: 8px; }
+.sa-page-btn {
+    background: #fff;
+    color: #64249a;
+    border: 1px solid #cbc5e3;
+}
+.sa-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(39, 36, 56, 0.06);
+    padding: 18px;
+}
+.sa-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+.sa-form-grid .wide { grid-column: 1 / -1; }
+.sa-card label {
+    display: block;
+    font-weight: 900;
+    color: #4a465d;
+    margin-bottom: 6px;
+    font-size: 12px;
+}
+.sa-form-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.sa-form-actions button,
+.sa-form-actions a {
+    border: 0;
+    border-radius: 7px;
+    background: #64249a;
+    color: #fff;
+    padding: 10px 13px;
+    text-decoration: none;
+    font-weight: 900;
+}
+.sa-form-actions a { background: #6f6a83; }
+.sa-details-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr); gap: 18px; }
+.sa-empty { padding: 36px 16px; color: #77748a; text-align: center; font-weight: 800; }
+@media (max-width: 1040px) {
+    .sa-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sa-details-grid { grid-template-columns: 1fr; }
+    .sa-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+    body[data-user-role="super_admin"] .topbar {
+        left: 0;
+        width: 100%;
+    }
+    body[data-user-role="super_admin"] .content {
+        margin-left: 0;
+    }
+    .sa-shell { padding: 16px; }
+    .sa-kpis { grid-template-columns: 1fr; }
+    .sa-add-btn { margin-left: 0; width: 100%; }
+    .sa-filter-grid, .sa-form-grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .sa-toggle::after { transition: none; }
+}
+</style>
+
+<div class="sa-shell">
+    <div class="sa-topline">
+        <div>
+            <div class="sa-breadcrumb">Dashboard / Pharmacies</div>
+            <h1 style="margin:6px 0 0;font-size:28px;">Super Admin Dashboard</h1>
+        </div>
+        <div class="sa-user">
+            <button class="sa-bell" type="button" aria-label="Notifications">◔</button>
+            <span class="sa-avatar">{{ (session.get("username") or "SA")[:2]|upper }}</span>
+            <div>
+                <div class="sa-user-name">{{ session.get("username") or "Super Admin" }}</div>
+                <div class="sa-user-role">Platform Super Admin</div>
+            </div>
+        </div>
+    </div>
+
+    <section class="sa-kpis" aria-label="Platform metrics">
+        <article class="sa-kpi blue">
+            <div class="sa-kpi-icon">♧</div>
+            <div class="sa-kpi-label">Total Pharmacies</div>
+            <div class="sa-kpi-value">{{ stats.total_tenants }}</div>
+        </article>
+        <article class="sa-kpi green">
+            <div class="sa-kpi-icon">▤</div>
+            <div class="sa-kpi-label">Active Subscriptions</div>
+            <div class="sa-kpi-value">{{ stats.active_subscriptions }}</div>
+        </article>
+        <article class="sa-kpi gradient">
+            <div class="sa-kpi-icon">♚</div>
+            <div class="sa-kpi-label">Total Users</div>
+            <div class="sa-kpi-value">{{ stats.total_users }}</div>
+        </article>
+        <article class="sa-kpi pink">
+            <div class="sa-kpi-icon">◷</div>
+            <div class="sa-kpi-label">Expiring Subscriptions</div>
+            <div class="sa-kpi-value">{{ stats.expiring_subscriptions }}</div>
+        </article>
+    </section>
+
+    <section class="sa-panel" aria-labelledby="pharmacyTableTitle">
+        <form class="sa-toolbar" method="GET" action="{{ url_for('super_admin_dashboard') }}">
+            <label class="sa-search">
+                <input name="q" value="{{ tenant_filters.q }}" placeholder="Search for pharmacy, tenant ID, owner, email..." aria-label="Search pharmacies">
+                <button type="submit" aria-label="Search">⌕</button>
+            </label>
+            <div class="sa-filter-wrap">
+                <button class="sa-filter-toggle" type="button">Filters ˄</button>
+                <div class="sa-filter-pop">
+                    <div class="sa-filter-grid">
+                        <div class="sa-field">
+                            <label for="planFilter">Plan</label>
+                            <select id="planFilter" name="plan">
+                                <option value="">All</option>
+                                {% for key, plan in plans.items() %}
+                                <option value="{{ key }}" {{ 'selected' if tenant_filters.plan == key }}>{{ plan.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="sa-field">
+                            <label for="statusFilter">Status</label>
+                            <select id="statusFilter" name="status">
+                                <option value="">All</option>
+                                {% for key, label in [('active','Active'),('trial','Trial'),('expiring','Expiring Soon'),('expired','Expired'),('suspended','Suspended'),('cancelled','Cancelled')] %}
+                                <option value="{{ key }}" {{ 'selected' if tenant_filters.status == key }}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="sa-field">
+                            <label for="accessFilter">System Access</label>
+                            <select id="accessFilter" name="access">
+                                <option value="">All</option>
+                                <option value="enabled" {{ 'selected' if tenant_filters.access == 'enabled' }}>Enabled</option>
+                                <option value="disabled" {{ 'selected' if tenant_filters.access == 'disabled' }}>Disabled</option>
+                            </select>
+                        </div>
+                        <div class="sa-field">
+                            <label for="expiryFilter">Expiry</label>
+                            <select id="expiryFilter" name="expiry">
+                                <option value="">All</option>
+                                <option value="30" {{ 'selected' if tenant_filters.expiry == '30' }}>Next 30 days</option>
+                                <option value="expired" {{ 'selected' if tenant_filters.expiry == 'expired' }}>Expired</option>
+                                <option value="none" {{ 'selected' if tenant_filters.expiry == 'none' }}>No expiry</option>
+                            </select>
+                        </div>
+                        <div class="sa-field">
+                            <label for="sortFilter">Sort</label>
+                            <select id="sortFilter" name="sort">
+                                <option value="created_desc" {{ 'selected' if tenant_filters.sort == 'created_desc' }}>Most Recent</option>
+                                <option value="created_asc" {{ 'selected' if tenant_filters.sort == 'created_asc' }}>Oldest</option>
+                                <option value="name_asc" {{ 'selected' if tenant_filters.sort == 'name_asc' }}>Name A-Z</option>
+                                <option value="name_desc" {{ 'selected' if tenant_filters.sort == 'name_desc' }}>Name Z-A</option>
+                                <option value="expiry_asc" {{ 'selected' if tenant_filters.sort == 'expiry_asc' }}>Expiry Soonest</option>
+                                <option value="expiry_desc" {{ 'selected' if tenant_filters.sort == 'expiry_desc' }}>Expiry Latest</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="sa-filter-actions">
+                        <button type="submit">Apply</button>
+                        <a href="{{ url_for('super_admin_dashboard') }}">Reset</a>
+                    </div>
+                </div>
+            </div>
+            <a class="sa-add-btn" href="#create-pharmacy">+ Add Pharmacy</a>
+        </form>
+
+        <div class="sa-table-wrap">
+            <h2 id="pharmacyTableTitle" style="position:absolute;left:-9999px;">Pharmacies</h2>
+            <table class="sa-table">
+                <thead>
+                    <tr>
+                        <th>Pharmacy</th>
+                        <th>Tenant ID</th>
+                        <th>Subscription Plan</th>
+                        <th>User Count</th>
+                        <th>Subscription End Date</th>
+                        <th>Status</th>
+                        <th>System Access</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in tenant_rows %}
+                    {% set tenant = row.tenant %}
+                    <tr>
+                        <td>
+                            <div class="sa-tenant-cell">
+                                <span class="sa-tenant-avatar">{{ row.initials }}</span>
+                                <div>
+                                    <div>{{ tenant.pharmacy_name }}</div>
+                                    <div class="sa-muted">{{ tenant.owner_name or tenant.email or tenant.tenant_code }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td><span class="sa-muted">{{ row.tenant_id }}</span></td>
+                        <td>{{ row.plan_name }}</td>
+                        <td>{{ row.user_count }}</td>
+                        <td>{{ tenant.subscription_expiry.strftime('%d %b, %Y') if tenant.subscription_expiry else '-' }}</td>
+                        <td><span class="sa-badge {{ row.subscription_status }}">{{ row.subscription_label }}</span></td>
+                        <td>
+                            <form class="sa-toggle-form" method="POST" action="{{ url_for('super_admin_tenant_access', tenant_id=tenant.id) }}"
+                                  onsubmit="return this.enabled.value === '1' || confirm('Disable system access for {{ tenant.pharmacy_name }}? Tenant data will remain unchanged.');">
+                                <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+                                <input type="hidden" name="enabled" value="{{ '0' if row.access_enabled else '1' }}">
+                                <input type="hidden" name="next" value="{{ request.full_path }}">
+                                <button class="sa-toggle {{ 'on' if row.access_enabled }}" type="submit" aria-label="{{ 'Disable' if row.access_enabled else 'Enable' }} system access for {{ tenant.pharmacy_name }}"></button>
+                            </form>
+                        </td>
+                        <td>
+                            <div class="sa-actions">
+                                <a class="sa-icon-btn" href="{{ url_for('super_admin_tenant_detail', tenant_id=tenant.id) }}" aria-label="Edit {{ tenant.pharmacy_name }}">✎</a>
+                                <a class="sa-icon-btn green" href="{{ url_for('super_admin_tenant_detail', tenant_id=tenant.id) }}#tenant-admin" aria-label="Manage users for {{ tenant.pharmacy_name }}">♙</a>
+                                <span class="sa-row-menu">
+                                    <button class="sa-icon-btn" type="button" aria-label="More actions for {{ tenant.pharmacy_name }}">⋯</button>
+                                    <span class="sa-row-menu-panel">
+                                        <a href="{{ url_for('super_admin_pharmacy_business_setup', tenant_id=tenant.id) }}">Business Setup</a>
+                                        <a href="{{ url_for('super_admin_tenant_detail', tenant_id=tenant.id) }}#subscription">Subscription</a>
+                                        <a href="{{ url_for('super_admin_tenant_audit', tenant_id=tenant.id) }}">Audit Logs</a>
+                                    </span>
+                                </span>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if not tenant_rows %}
+            <div class="sa-empty">No pharmacies match the current filters.</div>
+            {% endif %}
+        </div>
+        <div class="sa-pagination">
+            <span>Showing {{ tenant_showing_from }}-{{ tenant_showing_to }} of {{ tenant_total }}</span>
+            <div class="sa-page-controls">
+                {% if tenant_page > 1 %}
+                <a class="sa-page-btn" href="{{ tenant_prev_url }}">Previous</a>
+                {% endif %}
+                <span class="sa-page-btn">Page {{ tenant_page }} / {{ tenant_page_count }}</span>
+                {% if tenant_page < tenant_page_count %}
+                <a class="sa-page-btn" href="{{ tenant_next_url }}">Next</a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    {% if selected_tenant %}
+    <section class="sa-details-grid" id="tenant-detail">
+        <div class="sa-card">
+            <h2>{{ selected_tenant.pharmacy_name }}</h2>
+            <form method="POST" action="/super-admin/tenants/{{ selected_tenant.id }}">
+                <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+                <div class="sa-form-grid">
+                    <div><label>Pharmacy Name</label><input name="pharmacy_name" value="{{ selected_tenant.pharmacy_name }}"></div>
+                    <div><label>Status</label><select name="status">{% for status in status_options %}<option value="{{ status }}" {{ 'selected' if selected_tenant.status == status }}>{{ status }}</option>{% endfor %}</select></div>
+                    <div><label>Owner</label><input name="owner_name" value="{{ selected_tenant.owner_name or '' }}"></div>
+                    <div><label>Contact</label><input name="contact_number" value="{{ selected_tenant.contact_number or '' }}"></div>
+                    <div><label>Email</label><input name="email" value="{{ selected_tenant.email or '' }}"></div>
+                    <div><label>GSTIN</label><input name="gstin" value="{{ selected_tenant.gstin or '' }}"></div>
+                    <div><label>Drug License</label><input name="drug_license" value="{{ selected_tenant.drug_license or '' }}"></div>
+                    <div><label>Tenant ID</label><input value="{{ selected_tenant.tenant_uid }}" readonly></div>
+                    <div class="wide"><label>Address</label><textarea name="business_address" rows="2">{{ selected_tenant.business_address or '' }}</textarea></div>
+                </div>
+                <div class="sa-form-actions">
+                    <button type="submit">Save Tenant</button>
+                    <a href="/super-admin/tenants/{{ selected_tenant.id }}/pharmacy-business">Business Setup</a>
+                    <a href="/super-admin/tenants/{{ selected_tenant.id }}/audit">View Audit Logs</a>
+                </div>
+            </form>
+        </div>
+        <div class="sa-card" id="subscription">
+            <h2>Subscription</h2>
+            <form method="POST" action="/super-admin/tenants/{{ selected_tenant.id }}/subscription">
+                <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+                <div class="sa-form-grid">
+                    <div><label>Plan</label><select name="plan_ref">{% for key, plan in plans.items() %}<option value="{{ key }}" {{ 'selected' if selected_tenant.subscription_plan_ref == key }}>{{ plan.name }}</option>{% endfor %}</select></div>
+                    <div><label>Status</label><select name="status">{% for status in status_options %}<option value="{{ status }}" {{ 'selected' if selected_tenant.status == status }}>{{ status }}</option>{% endfor %}</select></div>
+                    <div><label>Start</label><input type="date" name="subscription_start" value="{{ selected_tenant.subscription_start.isoformat() if selected_tenant.subscription_start else '' }}"></div>
+                    <div><label>Expiry</label><input type="date" name="subscription_expiry" value="{{ selected_tenant.subscription_expiry.isoformat() if selected_tenant.subscription_expiry else '' }}"></div>
+                    <div><label>Amount</label><input name="amount" type="number" step="0.01"></div>
+                    <div><label>User Limit</label><input name="user_limit" type="number" value="{{ selected_settings.get('subscription', {}).get('user_limit', '') }}"></div>
+                    <div><label>Computer Limit</label><input name="device_limit" type="number" min="1" value="{{ selected_settings.get('device_access', {}).get('limit', selected_settings.get('subscription', {}).get('device_limit', '')) }}" placeholder="Unlimited"></div>
+                    {% set selected_features = selected_settings.get('subscription', {}).get('features', {}) %}
+                    <div class="wide">
+                        <label>Module Access</label>
+                        <label><input type="checkbox" name="feature_pos" value="1" {{ 'checked' if selected_features.get('pos', True) }}> POS Billing</label>
+                        <label><input type="checkbox" name="feature_inventory" value="1" {{ 'checked' if selected_features.get('inventory', True) }}> Inventory</label>
+                        <label><input type="checkbox" name="feature_reports" value="1" {{ 'checked' if selected_features.get('reports', True) }}> Reports</label>
+                        <label><input type="checkbox" name="feature_exports" value="1" {{ 'checked' if selected_features.get('exports', True) }}> Exports</label>
+                        <label><input type="checkbox" name="feature_appointments" value="1" {{ 'checked' if selected_features.get('appointments', False) }}> Appointments</label>
+                        <label><input type="checkbox" name="feature_lab" value="1" {{ 'checked' if selected_features.get('lab', False) }}> Lab</label>
+                    </div>
+                    <div><label>Payment Mode</label><input name="payment_mode" value="Manual"></div>
+                    <div><label>Payment Reference</label><input name="payment_reference"></div>
+                    <div class="wide"><label>Notes</label><textarea name="subscription_notes" rows="2"></textarea></div>
+                </div>
+                <div class="sa-form-actions"><button type="submit">Assign / Renew</button></div>
+            </form>
+            {% set device_access = selected_settings.get('device_access', {}) %}
+            {% set device_rows = device_access.get('devices', {}) %}
+            <form method="POST" action="/super-admin/tenants/{{ selected_tenant.id }}/devices/reset">
+                <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+                <div class="sa-form-actions">
+                    <button type="submit" onclick="return confirm('Reset approved computers for this tenant?')">Reset Approved Computers</button>
+                    <span class="sa-breadcrumb">{{ device_rows|length }} computer(s) registered{% if device_access.get('limit') %} / {{ device_access.get('limit') }} allowed{% endif %}</span>
+                </div>
+            </form>
+            <h3 id="tenant-admin">Tenant Administrator</h3>
+            <form method="POST" action="/super-admin/tenants/{{ selected_tenant.id }}/admin">
+                <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+                <label>Admin Username</label><input name="admin_username" value="{{ selected_admins[0].username if selected_admins else 'admin' }}">
+                <div class="sa-form-actions"><button type="submit">Create / Reset Activation</button></div>
+            </form>
+        </div>
+    </section>
+
+    <section class="sa-card">
+        <h2>Subscription History</h2>
+        <div class="sa-table-wrap" style="padding:0;">
+            <table class="sa-table">
+                <thead><tr><th>Date</th><th>Plan</th><th>Cycle</th><th>Period</th><th>Amount</th><th>By</th></tr></thead>
+                <tbody>{% for item in selected_history %}<tr><td>{{ item.created_at.strftime('%d-%m-%Y') }}</td><td>{{ item.plan_name }}</td><td>{{ item.billing_cycle }}</td><td>{{ item.start_date }} to {{ item.expiry_date }}</td><td>₹{{ item.amount }}</td><td>{{ item.created_by }}</td></tr>{% endfor %}</tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="sa-card" id="create-pharmacy">
+        <h2>Create Pharmacy</h2>
+        <form method="POST" action="/super-admin/tenants/create">
+            <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+            <div class="sa-form-grid">
+                <div><label>Pharmacy Name</label><input name="pharmacy_name" required></div>
+                <div><label>Tenant Code</label><input name="tenant_code"></div>
+                <div><label>Owner Name</label><input name="owner_name"></div>
+                <div><label>Contact Number</label><input name="contact_number"></div>
+                <div><label>Email</label><input type="email" name="email"></div>
+                <div><label>GSTIN</label><input name="gstin"></div>
+                <div><label>Drug License</label><input name="drug_license"></div>
+                <div><label>Admin Username</label><input name="admin_username" value="admin" required></div>
+                <div><label>Plan</label><select name="plan_ref">{% for key, plan in plans.items() %}<option value="{{ key }}">{{ plan.name }}</option>{% endfor %}</select></div>
+                <div><label>Amount</label><input name="amount" type="number" step="0.01"></div>
+                <div><label>User Limit</label><input name="user_limit" type="number"></div>
+                <div><label>Payment Reference</label><input name="payment_reference"></div>
+                <div class="wide">
+                    <label>Module Access</label>
+                    <label><input type="checkbox" name="feature_pos" value="1" checked> POS Billing</label>
+                    <label><input type="checkbox" name="feature_inventory" value="1" checked> Inventory</label>
+                    <label><input type="checkbox" name="feature_reports" value="1" checked> Reports</label>
+                    <label><input type="checkbox" name="feature_exports" value="1" checked> Exports</label>
+                    <label><input type="checkbox" name="feature_appointments" value="1"> Appointments</label>
+                    <label><input type="checkbox" name="feature_lab" value="1"> Lab</label>
+                </div>
+                <div class="wide"><label>Business Address</label><textarea name="business_address" rows="2"></textarea></div>
+            </div>
+            <div class="sa-form-actions"><button type="submit">Create Pharmacy</button></div>
+        </form>
+    </section>
+</div>
+{% endblock %}

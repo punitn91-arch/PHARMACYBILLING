@@ -313,13 +313,17 @@ body {
 
     <header class="invoice-top">
         <div class="brand-panel">
-            <div class="brand-logo-wrap">
-                <img class="brand-logo" src="{{ print_profile.logo_path or '/static/endo-pharmacy-logo.png' }}" alt="The Endo Pharmacy Logo">
+            <div class="brand-logo-wrap" style="width: {{ print_profile.logo_width_mm|default(44) }}mm; height: {{ print_profile.logo_height_mm|default(21) }}mm;">
+                <img class="brand-logo" src="{{ print_profile.logo_path or (url_for('static', filename='logo.png') if print_profile.pharmacy_name else '/static/endo-pharmacy-logo.png') }}" alt="{{ print_profile.pharmacy_name or 'Pharmacy' }} Logo">
             </div>
             <div class="brand-meta">
+                {% if print_profile.invoice_header %}<div>{{ print_profile.invoice_header }}</div>{% endif %}
+                {% if print_profile.pharmacy_name %}<div><strong>{{ print_profile.pharmacy_name }}</strong></div>{% endif %}
+                {% if print_profile.legal_business_name %}<div>{{ print_profile.legal_business_name }}</div>{% endif %}
                 <div>{{ print_profile.address_line_1 }}</div>
                 <div>{{ print_profile.address_line_2 }}</div>
                 <div><strong>Mobile:</strong> {{ print_profile.mobile }}</div>
+                {% if print_profile.alternate_mobile %}<div><strong>Alt. Mobile:</strong> {{ print_profile.alternate_mobile }}</div>{% endif %}
             </div>
         </div>
 
@@ -442,6 +446,13 @@ body {
             </div>
         </div>
     </section>
+
+    {% if print_profile.invoice_footer or print_profile.authorized_signatory %}
+    <div style="margin-top:8px;text-align:center;white-space:pre-line">
+        {% if print_profile.invoice_footer %}<div>{{ print_profile.invoice_footer }}</div>{% endif %}
+        {% if print_profile.authorized_signatory %}<div><strong>For {{ print_profile.pharmacy_name }}{% if print_profile.legal_business_name %} ({{ print_profile.legal_business_name }}){% endif %}</strong><br>{{ print_profile.authorized_signatory }}</div>{% endif %}
+    </div>
+    {% endif %}
 
     <div class="action-btns" style="text-align:center; margin-top:28px;">
         <button class="btn print-btn" type="button" onclick="window.print()">🖨 PRINT</button>

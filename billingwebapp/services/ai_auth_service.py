@@ -13,6 +13,7 @@ import json
 import secrets
 
 from werkzeug.security import check_password_hash, generate_password_hash
+from sqlalchemy import text
 
 try:
     from ..models import AIAPIClient, AIAccessToken
@@ -60,6 +61,7 @@ class AIPrincipal:
     api_client_id: int
     client_id: str
     client_name: str
+    tenant_id: int
     scopes: frozenset
     access_token_id: int
 
@@ -237,7 +239,12 @@ def issue_access_token(
     client_identifier = str(client_identifier or "").strip()
     client = AIAPIClient.query.filter_by(client_id=client_identifier).first()
     secret_valid = verify_client_secret(client, client_secret)
-    if client is None or not secret_valid or not bool(client.is_active):
+    if (
+        client is None
+        or client.tenant_id is None
+        or not secret_valid
+        or not bool(client.is_active)
+    ):
         raise AIAuthenticationError("UNAUTHORIZED", "Invalid service credentials", 401)
     allowed_ips = deserialize_allowed_ips(client.allowed_ips_json)
     if not is_ip_allowed(remote_addr, allowed_ips):
@@ -254,6 +261,7 @@ def issue_access_token(
     ttl = max(60, min(int(ttl_seconds or 900), 3600))
     raw_token = "ait_{}".format(secrets.token_urlsafe(48))
     token = AIAccessToken(
+        tenant_id=client.tenant_id,
         api_client_id=client.id,
         token_hash=hash_access_token(raw_token),
         scopes_json=serialize_scopes(requested),
@@ -273,12 +281,33 @@ def authenticate_bearer_token(db_session, authorization_header, *, remote_addr=N
     if separator != " " or scheme.lower() != "bearer" or not raw_token.strip():
         raise AIAuthenticationError("UNAUTHORIZED", "Bearer token is required", 401)
 
-    token = AIAccessToken.query.filter_by(token_hash=hash_access_token(raw_token.strip())).first()
+    token_hash = hash_access_token(raw_token.strip())
+    connection = db_session.connection()
+    if connection.dialect.name.lower() == "postgresql":
+        connection.execute(
+            text("SELECT set_config('app.ai_access_token_hash', :value, true)"),
+            {"value": token_hash},
+        )
+    token = AIAccessToken.query.filter_by(token_hash=token_hash).first()
     if token is None or token.revoked_at is not None or token.expires_at <= now:
         raise AIAuthenticationError("UNAUTHORIZED", "Invalid or expired access token", 401)
-    client = db_session.get(AIAPIClient, token.api_client_id)
+    if token.tenant_id is None:
+        raise AIAuthenticationError("UNAUTHORIZED", "Invalid or expired access token", 401)
+    if connection.dialect.name.lower() == "postgresql":
+        connection.execute(
+            text("SELECT set_config('app.current_tenant_id', :value, true)"),
+            {"value": str(token.tenant_id)},
+        )
+    client = (
+        AIAPIClient.query.filter(AIAPIClient.id == token.api_client_id)
+        .populate_existing()
+        .first()
+    )
     if (
         client is None
+        or token.tenant_id is None
+        or client.tenant_id is None
+        or int(token.tenant_id) != int(client.tenant_id)
         or not bool(client.is_active)
         or int(token.secret_version or 0) != int(client.secret_version or 0)
     ):
@@ -296,6 +325,7 @@ def authenticate_bearer_token(db_session, authorization_header, *, remote_addr=N
         api_client_id=client.id,
         client_id=client.client_id,
         client_name=client.name,
+        tenant_id=int(client.tenant_id),
         scopes=frozenset(token_scopes),
         access_token_id=token.id,
     )

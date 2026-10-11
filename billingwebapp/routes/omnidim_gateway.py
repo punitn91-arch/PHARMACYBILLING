@@ -27,6 +27,7 @@ try:
         ClinicLocation,
         Clinician,
         OmnidimGatewayAction,
+        Tenant,
         db,
     )
     from ..services.ai_appointment_service import AppointmentAPIError, available_slots
@@ -39,7 +40,7 @@ try:
     )
     from ..services.ai_operations_service import OperationsError, create_callback, create_complaint
 except ImportError:  # pragma: no cover - direct ``python app.py`` execution
-    from models import AIAPIRequestAudit, ClinicLocation, Clinician, OmnidimGatewayAction, db
+    from models import AIAPIRequestAudit, ClinicLocation, Clinician, OmnidimGatewayAction, Tenant, db
     from services.ai_appointment_service import AppointmentAPIError, available_slots
     from services.ai_clinic_service import (
         clinic_information,
@@ -154,10 +155,98 @@ def _audit_fingerprint(value):
 
 
 def _secret_digest(value):
-    secret = _configured_secret()
-    if not secret:  # The feature gate reports a configuration-safe message first.
+    secret = (
+        current_app.config.get("AI_AUDIT_FINGERPRINT_SECRET")
+        or current_app.secret_key
+    )
+    if not secret:
         raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
-    return hmac.new(secret.encode("utf-8"), str(value or "").encode("utf-8"), hashlib.sha256).hexdigest()
+    tenant_id_resolver = current_app.extensions.get("current_tenant_id")
+    tenant_id = tenant_id_resolver() if callable(tenant_id_resolver) else None
+    if not tenant_id:
+        raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway tenant is unavailable", 503)
+    scoped_value = "tenant:{}:{}".format(int(tenant_id), str(value or ""))
+    return hmac.new(secret.encode("utf-8"), scoped_value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _configured_tenant_credentials():
+    raw_value = current_app.config.get("OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON")
+    if not raw_value:
+        return {}
+    try:
+        configured = json.loads(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503) from exc
+    if not isinstance(configured, dict) or not configured:
+        raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+    credentials = {}
+    configured_secrets = set()
+    for tenant_id_value, secret_value in configured.items():
+        try:
+            tenant_id = int(tenant_id_value)
+        except (TypeError, ValueError):
+            raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+        secret = str(secret_value or "")
+        if (
+            tenant_id <= 0
+            or len(secret.encode("utf-8")) < 32
+            or tenant_id in credentials
+            or secret in configured_secrets
+        ):
+            raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+        credentials[tenant_id] = secret
+        configured_secrets.add(secret)
+    return credentials
+
+
+def _resolve_gateway_tenant_id(supplied_secret):
+    credentials = _configured_tenant_credentials()
+    configured_tenant_id = current_app.config.get("OMNIDIM_GATEWAY_TENANT_ID")
+    if credentials:
+        matched_tenant_id = None
+        for tenant_id, expected_secret in credentials.items():
+            if hmac.compare_digest(supplied_secret, expected_secret):
+                matched_tenant_id = tenant_id
+        if matched_tenant_id is None:
+            raise OmnidimGatewayError("UNAUTHORIZED", "Authentication failed", 401)
+    else:
+        secret = _configured_secret()
+        if not secret:
+            raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+        if not supplied_secret or not hmac.compare_digest(supplied_secret, secret):
+            raise OmnidimGatewayError("UNAUTHORIZED", "Authentication failed", 401)
+        matched_tenant_id = None
+        if configured_tenant_id:
+            try:
+                matched_tenant_id = int(configured_tenant_id)
+            except (TypeError, ValueError):
+                matched_tenant_id = 0
+            if matched_tenant_id <= 0:
+                raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+
+    tenant_scope_disabled = current_app.extensions.get("tenant_scope_disabled")
+    tenant_context_factory = current_app.extensions.get("tenant_context")
+    if not callable(tenant_scope_disabled) or not callable(tenant_context_factory):
+        raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+    if matched_tenant_id is None:
+        with tenant_scope_disabled():
+            tenants = Tenant.query.order_by(Tenant.id.asc()).limit(2).all()
+        if len(tenants) != 1:
+            raise OmnidimGatewayError(
+                "SERVICE_UNAVAILABLE",
+                "Voice gateway must be configured for exactly one tenant",
+                503,
+            )
+        matched_tenant_id = int(tenants[0].id)
+    with tenant_context_factory(matched_tenant_id):
+        tenant = Tenant.query.filter(Tenant.id == matched_tenant_id).first()
+        if not tenant or (tenant.status or "").strip().lower() not in {"trial", "active"}:
+            raise OmnidimGatewayError(
+                "SERVICE_UNAVAILABLE",
+                "Voice gateway tenant is unavailable",
+                503,
+            )
+    return matched_tenant_id
 
 
 def _safe_text(value, field_name, maximum, *, required=False):
@@ -400,7 +489,12 @@ def _enforce_rate_limit():
     except (TypeError, ValueError):
         limit = 60
     limit = max(5, min(limit, 300))
+    tenant_id_resolver = current_app.extensions.get("current_tenant_id")
+    tenant_id = tenant_id_resolver() if callable(tenant_id_resolver) else None
+    if not tenant_id:
+        raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway tenant is unavailable", 503)
     recent_count = AIAPIRequestAudit.query.filter(
+        AIAPIRequestAudit.tenant_id == int(tenant_id),
         AIAPIRequestAudit.endpoint == request.path,
         AIAPIRequestAudit.created_at >= datetime.utcnow() - timedelta(minutes=1),
     ).count()
@@ -431,13 +525,26 @@ def prepare_gateway_request():
         return "", 204
     if not bool(current_app.config.get("OMNIDIM_GATEWAY_ENABLED", False)):
         raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
-    secret = _configured_secret()
     supplied = str(request.headers.get("X-Clinic-Gateway-Key") or "")
-    if not secret:
+    tenant_id = _resolve_gateway_tenant_id(supplied)
+    tenant_context_factory = current_app.extensions.get("tenant_context")
+    if not callable(tenant_context_factory):
         raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
-    if not supplied or not hmac.compare_digest(supplied, secret):
-        raise OmnidimGatewayError("UNAUTHORIZED", "Authentication failed", 401)
+    tenant_context_manager = tenant_context_factory(tenant_id)
+    try:
+        tenant_context_manager.__enter__()
+    except Exception:
+        current_app.logger.exception("OmniDimension tenant context could not be established")
+        raise OmnidimGatewayError("SERVICE_UNAVAILABLE", "Voice gateway is unavailable", 503)
+    g.omnidim_tenant_context_manager = tenant_context_manager
     _enforce_rate_limit()
+
+
+@omnidim_gateway_bp.teardown_request
+def clear_gateway_tenant_context(exc):
+    manager = getattr(g, "omnidim_tenant_context_manager", None)
+    if manager is not None:
+        manager.__exit__(type(exc) if exc else None, exc, getattr(exc, "__traceback__", None))
 
 
 @omnidim_gateway_bp.after_request
@@ -453,6 +560,7 @@ def finalize_gateway_request(response):
     try:
         elapsed = max(0, int((time.perf_counter() - g.omnidim_started_at) * 1000))
         audit = AIAPIRequestAudit(
+            tenant_id=current_app.extensions["current_tenant_id"](),
             api_client_id=None,
             request_id=g.omnidim_request_id,
             call_id=getattr(g, "omnidim_call_id", None),

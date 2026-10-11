@@ -262,6 +262,15 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertNotIn('<option value="dr typo">', html)
         self.assertNotIn('<option value="d">', html)
 
+    def test_billing_page_payment_modes_are_buttons_not_a_dropdown(self):
+        self.login()
+        html = self.client.get("/billing").get_data(as_text=True)
+        self.assertIn('<select id="paymentModeSelect" name="payment_mode" required hidden>', html)
+        for mode in ("CASH", "ONLINE", "UPI", "CARD", "WALLET", "CREDIT"):
+            self.assertIn(f'data-mode="{mode}"', html)
+        self.assertNotIn('data-mode="ADJUSTMENT"', html)
+        self.assertIn("data-split", html)
+
     def test_doctor_name_suggestions_pick_most_used_spelling(self):
         from services.reports import doctor_name_suggestions
 
@@ -492,7 +501,7 @@ class EngineeringFlowTests(unittest.TestCase):
             )
             self.assertEqual(current_invoice.print_gst_no, "08ABAFT0637R1ZP")
 
-    def test_invoice_view_prefers_stored_print_snapshot_over_date_fallback(self):
+    def test_invoice_view_uses_latest_print_profile_for_existing_invoice(self):
         with self.app.app_context():
             _patient, invoice = self._seed_invoice(
                 customer="Snapshot Patient",
@@ -507,9 +516,32 @@ class EngineeringFlowTests(unittest.TestCase):
         response = self.client.get(f"/invoice/{invoice_id}")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("08BPWPP5023C1ZP", html)
-        self.assertNotIn("08ABAFT0637R1ZP", html)
-        self.assertNotIn("DRUG/2026-27/154505", html)
+        self.assertNotIn("08BPWPP5023C1ZP", html)
+        self.assertNotIn("legacy_pre_2026_07", html)
+
+    def test_business_identity_sync_refreshes_existing_invoice_print_snapshot(self):
+        with self.app.app_context():
+            _patient, invoice = self._seed_invoice(
+                customer="Refresh Patient",
+                mobile="9000000005",
+                created_at=datetime(2026, 7, 2, 12, 0, 0),
+            )
+            invoice.print_profile_code = "stale-profile"
+            invoice.print_address_line_1 = "OLD ADDRESS"
+            invoice.print_gst_no = "OLD-GST"
+            self.db.session.commit()
+
+            updated = self.app_module.sync_invoice_print_profiles_to_current_business_identity()
+            self.db.session.commit()
+            self.db.session.refresh(invoice)
+
+            self.assertEqual(updated, 1)
+            self.assertEqual(invoice.print_profile_code, "endo_pharmacy_2026_07")
+            self.assertEqual(
+                invoice.print_address_line_1,
+                "SHOP NO. FF12, 2ND FLOOR, MANGLAM AANANDA PLAZA, SANGANER",
+            )
+            self.assertEqual(invoice.print_gst_no, "08ABAFT0637R1ZP")
 
     def test_invoice_view_shows_local_bill_time_next_to_date(self):
         with self.app.app_context():
@@ -1046,8 +1078,8 @@ class EngineeringFlowTests(unittest.TestCase):
                 .all()
             ]
             self.assertIn("PB-000001", purchase_nos)
-            self.assertIn("PB-00001", purchase_nos)
             self.assertIn("PB-00002", purchase_nos)
+            self.assertIn("PB-00003", purchase_nos)
 
     def test_vendor_form_renders_auto_code_purchase_builder_for_manual_medicine_entry(self):
         with self.app.app_context():
@@ -1634,6 +1666,88 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(med.qty, 2)
             self.assertEqual(purchase_item.medicine_code, med.medicine_code)
 
+    def test_vendor_debit_note_post_cancel_is_idempotent_for_stock_and_balance(self):
+        self.login()
+        with self.app.app_context():
+            vendor, purchase, medicine = self._seed_vendor_purchase_stack(
+                medicine_name="NOTE MEDICINE",
+                batch="NOTE-BATCH",
+                total_qty=10,
+            )
+            vendor.outstanding_balance = 100
+            vendor.payment_status = "Unpaid"
+            self.db.session.commit()
+            vendor_id, purchase_id, medicine_id = vendor.id, purchase.id, medicine.id
+
+        created = self.client.post(
+            "/api/vendor-notes",
+            json={
+                "note_type": "DEBIT",
+                "vendor_id": vendor_id,
+                "reference_purchase_id": purchase_id,
+                "note_date": date.today().isoformat(),
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+        note_id = created.get_json()["id"]
+
+        updated = self.client.put(
+            f"/api/vendor-notes/{note_id}/items",
+            json={
+                "items": [{
+                    "medicine_id": medicine_id,
+                    "batch_no": "NOTE-BATCH",
+                    "qty": 2,
+                    "free_qty": 0,
+                    "purchase_rate": 10,
+                    "gst_percent": 0,
+                    "disc_percent": 0,
+                }],
+            },
+        )
+        self.assertEqual(updated.status_code, 200, updated.get_json())
+        posted = self.client.post(f"/api/vendor-notes/{note_id}/post", json={})
+        self.assertEqual(posted.status_code, 200, posted.get_json())
+        repeated_post = self.client.post(f"/api/vendor-notes/{note_id}/post", json={})
+        self.assertEqual(repeated_post.status_code, 400)
+
+        with self.app.app_context():
+            medicine = self.app_module.Medicine.query.get(medicine_id)
+            purchase_item = self.app_module.VendorPurchaseItem.query.filter_by(
+                purchase_id=purchase_id
+            ).one()
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            self.assertEqual(medicine.qty, 8)
+            self.assertEqual(purchase_item.remaining_qty, 8)
+            self.assertEqual(float(vendor.outstanding_balance), 80)
+
+        cancelled = self.client.post(
+            f"/api/vendor-notes/{note_id}/cancel",
+            json={"cancel_reason": "test reversal"},
+        )
+        self.assertEqual(cancelled.status_code, 200, cancelled.get_json())
+        repeated_cancel = self.client.post(
+            f"/api/vendor-notes/{note_id}/cancel",
+            json={"cancel_reason": "duplicate"},
+        )
+        self.assertEqual(repeated_cancel.status_code, 400)
+
+        with self.app.app_context():
+            medicine = self.app_module.Medicine.query.get(medicine_id)
+            purchase_item = self.app_module.VendorPurchaseItem.query.filter_by(
+                purchase_id=purchase_id
+            ).one()
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            history = self.app_module.StockHistory.query.filter_by(
+                ref_table="vendor_notes",
+                ref_id=note_id,
+            ).all()
+            self.assertEqual(medicine.qty, 10)
+            self.assertEqual(purchase_item.remaining_qty, 10)
+            self.assertEqual(float(vendor.outstanding_balance), 100)
+            self.assertEqual([row.action for row in history].count("V_DEBIT_NOTE"), 1)
+            self.assertEqual([row.action for row in history].count("V_NOTE_REV"), 1)
+
     def test_sync_medicine_codes_to_current_names_replaces_manual_codes_across_batches(self):
         with self.app.app_context():
             med_one = self.app_module.Medicine(
@@ -1813,6 +1927,64 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(purchase_item.remaining_qty, 2)
             self.assertEqual(allocation.returned_qty, 2)
 
+    def test_cancelling_return_bill_reverses_stock_only_once(self):
+        self.login()
+        with self.client.session_transaction() as user_session:
+            tenant_id = user_session["tenant_id"]
+
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            medicine = self.app_module.Medicine(
+                tenant_id=tenant_id,
+                name="RETURN TEST MED",
+                batch="RT-1",
+                expiry="2027-12-31",
+                mrp=10,
+                qty=5,
+                is_active=True,
+            )
+            self.db.session.add(medicine)
+            self.db.session.flush()
+            return_bill = self.app_module.Return(
+                tenant_id=tenant_id,
+                invoice_id=0,
+                return_no="RET-CANCEL-1",
+                total_refund=20,
+                created_by="admin",
+            )
+            self.db.session.add(return_bill)
+            self.db.session.flush()
+            self.db.session.add(
+                self.app_module.ReturnItem(
+                    tenant_id=tenant_id,
+                    return_id=return_bill.id,
+                    invoice_item_id=0,
+                    medicine_id=medicine.id,
+                    medicine_name=medicine.name,
+                    batch=medicine.batch,
+                    qty=2,
+                    disposition="RESTOCK",
+                )
+            )
+            self.db.session.commit()
+            return_id = return_bill.id
+            medicine_id = medicine.id
+
+        first_response = self.client.post(f"/return-bill/delete/{return_id}")
+        self.assertEqual(first_response.status_code, 302)
+        second_response = self.client.post(f"/return-bill/delete/{return_id}")
+        self.assertEqual(second_response.status_code, 302)
+
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            medicine = self.app_module.Medicine.query.filter_by(id=medicine_id).one()
+            return_bill = self.app_module.Return.query.filter_by(id=return_id).one()
+            cancel_history = self.app_module.StockHistory.query.filter_by(
+                medicine_id=medicine_id,
+                action="RETURN_CANCEL",
+            ).all()
+            self.assertEqual(medicine.qty, 3)
+            self.assertTrue(return_bill.is_cancelled)
+            self.assertEqual(len(cancel_history), 1)
+
     def test_return_invoice_labels_gst_as_snapshot_and_keeps_refund_total(self):
         with self.app.app_context():
             patient = self._seed_patient()
@@ -1863,6 +2035,22 @@ class EngineeringFlowTests(unittest.TestCase):
             return_id = ret.id
 
         self.login()
+        with self.client.session_transaction() as user_session:
+            tenant_id = user_session["tenant_id"]
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            tenant = self.app_module.Tenant.query.filter_by(id=tenant_id).one()
+            tenant.business_address = (
+                "SHOP NO. FF12, 2ND FLOOR, MANGLAM AANANDA PLAZA, SANGANER\n"
+                "JAIPUR, RAJASTHAN"
+            )
+            tenant.contact_number = "9024648186"
+            tenant.gstin = "08ABAFT0637R1ZP"
+            tenant.drug_license = "DRUG/2026-27/154505"
+            self.app_module.update_tenant_settings(
+                tenant,
+                {"logo_path": "/static/endo-pharmacy-logo.png"},
+            )
+            self.db.session.commit()
         response = self.client.get(f"/return-invoice/{return_id}")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
@@ -1968,8 +2156,11 @@ class EngineeringFlowTests(unittest.TestCase):
             self.assertEqual(context["doctor"], "Dr. Abhishek Prakash")
             self.assertEqual(context["gender"], "FEMALE")
             self.assertEqual(context["customer_gst_no"], "08ABCDE1234F1Z5")
-            self.assertEqual(context["print_profile"]["address_line_1"], "SAVED PHARMACY ADDRESS")
-            self.assertEqual(context["print_profile"]["licence_no"], "DRUG/RETURN/001")
+            self.assertEqual(
+                context["print_profile"]["address_line_1"],
+                "SHOP NO. FF12, 2ND FLOOR, MANGLAM AANANDA PLAZA, SANGANER",
+            )
+            self.assertEqual(context["print_profile"]["licence_no"], "DRUG/2026-27/154505")
 
         self.login()
         response = self.client.get(f"/return-invoice/{return_id}")
@@ -1979,8 +2170,6 @@ class EngineeringFlowTests(unittest.TestCase):
             "RETURN INVOICE",
             "RB-PREMIUM-1",
             "INV-RETURN-PREMIUM",
-            "SAVED PHARMACY ADDRESS",
-            "DRUG/RETURN/001",
             "Corrected Return Name",
             "Dr. Abhishek Prakash",
             "Wrong batch supplied",
@@ -2819,6 +3008,9 @@ class EngineeringFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         workbook = load_workbook(BytesIO(response.data))
+        meta_rows = list(workbook["Meta"].iter_rows(values_only=True))
+        self.assertIn(("Report Date", datetime.now().strftime("%d-%m-%Y")), meta_rows)
+
         sheet = workbook["Medicines"]
         headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
         self.assertIn("Purchase Rate", headers)

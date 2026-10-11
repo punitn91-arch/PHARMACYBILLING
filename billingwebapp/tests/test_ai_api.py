@@ -69,23 +69,28 @@ class AIIntegrationAPITests(unittest.TestCase):
             self.db.session.remove()
             self.db.drop_all()
             self.db.create_all()
-            admin = self.app_module.User(
-                username="admin",
-                role="admin",
-                is_active=True,
-                access_profile="admin",
-                can_manage_users=True,
-            )
-            admin.set_password("Admin@123")
-            self.db.session.add(admin)
-            self.api_client, self.raw_secret = self.create_api_client(
-                self.db.session,
-                name="Test Call Assistant",
-                scopes={"clinic:read", "doctor:read"},
-                created_by="admin",
-            )
-            self.client_id = self.api_client.client_id
-            self.api_client_pk = self.api_client.id
+            tenant = self.app_module.create_default_tenant()
+            self.tenant_id = tenant.id
+            with self.app_module.tenant_context(tenant.id):
+                admin = self.app_module.User(
+                    tenant_id=tenant.id,
+                    username="admin",
+                    role="admin",
+                    is_active=True,
+                    access_profile="admin",
+                    can_manage_users=True,
+                )
+                admin.set_password("Admin@123")
+                self.db.session.add(admin)
+                self.api_client, self.raw_secret = self.create_api_client(
+                    self.db.session,
+                    name="Test Call Assistant",
+                    scopes={"clinic:read", "doctor:read"},
+                    created_by="admin",
+                )
+                self.db.session.flush()
+                self.client_id = self.api_client.client_id
+                self.api_client_pk = self.api_client.id
             self.db.session.commit()
         self.client = self.app.test_client()
 
@@ -170,6 +175,79 @@ class AIIntegrationAPITests(unittest.TestCase):
             self.assertEqual(audit.session_id, "session-001")
             self.assertEqual(audit.api_client_id, self.api_client_pk)
             self.assertEqual(len(audit.client_ip_fingerprint), 64)
+
+    def test_bearer_token_establishes_and_resets_its_tenant_context(self):
+        from services.ai_auth_service import create_api_client
+        from models import ClinicProfile
+
+        with self.app.app_context():
+            with self.app_module.tenant_context(self.tenant_id):
+                alpha_profile = ClinicProfile(
+                    tenant_id=self.tenant_id,
+                    clinic_name="Alpha Clinic",
+                )
+                self.db.session.add(alpha_profile)
+                self.db.session.commit()
+
+            beta_settings = self.app_module.TenantSettings(settings_json="{}")
+            beta = self.app_module.Tenant(
+                tenant_uid=self.app_module.generate_tenant_uid(),
+                tenant_code="beta",
+                pharmacy_name="Beta Pharmacy",
+                subscription_plan_ref="test",
+                status="Active",
+                settings=beta_settings,
+            )
+            self.db.session.add_all([beta_settings, beta])
+            self.db.session.commit()
+            beta_id = beta.id
+            with self.app_module.tenant_context(beta_id):
+                self.db.session.add(
+                    ClinicProfile(
+                        tenant_id=beta_id,
+                        clinic_name="Beta Clinic",
+                    )
+                )
+                beta_client, beta_secret = create_api_client(
+                    self.db.session,
+                    name="Beta Call Assistant",
+                    scopes={"clinic:read"},
+                )
+                self.db.session.commit()
+                beta_client_id = beta_client.client_id
+
+        alpha_token = self._token()
+        alpha_response = self.client.get(
+            "/api/v1/ai/clinic",
+            headers={"Authorization": "Bearer {}".format(alpha_token)},
+        )
+        self.assertEqual(alpha_response.status_code, 200)
+        self.assertEqual(
+            alpha_response.get_json()["data"]["clinic"]["name"],
+            "Alpha Clinic",
+        )
+
+        beta_token_response = self.client.post(
+            "/api/v1/ai/auth/token",
+            json={
+                "client_id": beta_client_id,
+                "client_secret": beta_secret,
+                "scope": "clinic:read",
+            },
+        )
+        self.assertEqual(beta_token_response.status_code, 200)
+        beta_response = self.client.get(
+            "/api/v1/ai/clinic",
+            headers={
+                "Authorization": "Bearer {}".format(
+                    beta_token_response.get_json()["data"]["access_token"]
+                )
+            },
+        )
+        self.assertEqual(beta_response.status_code, 200)
+        self.assertEqual(beta_response.get_json()["data"]["clinic"]["name"], "Beta Clinic")
+        with self.app.app_context():
+            self.assertIsNone(self.app_module.current_tenant_id())
 
     def test_requesting_ungranted_scope_is_forbidden(self):
         response = self.client.post(

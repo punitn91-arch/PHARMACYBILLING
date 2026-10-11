@@ -136,25 +136,6 @@
 
         .brand { text-align: center; }
 
-        .logo-tile {
-            width: 156px;
-            height: 156px;
-            margin: 0 auto 10px;
-            display: grid;
-            place-items: center;
-            border-radius: 28px;
-            background: #FFFFFF;
-            /* Always light: the logo has a white background in both themes. */
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
-        }
-
-        .logo-tile img {
-            width: 142px;
-            height: 142px;
-            display: block;
-        }
-
         .tagline {
             margin: 0;
             display: inline-flex;
@@ -425,8 +406,6 @@
         @media (max-width: 479px) {
             body { padding: 16px; font-size: 14px; }
             .card { padding: 20px 24px 24px; border-radius: 14px; }
-            .logo-tile { width: 132px; height: 132px; border-radius: 24px; }
-            .logo-tile img { width: 120px; height: 120px; }
             .divider { margin: 16px 0; }
             h1 { font-size: 24px; }
             .submit { height: 44px; }
@@ -442,9 +421,6 @@
     <main class="auth">
         <section class="card" aria-labelledby="loginHeading">
             <header class="brand">
-                <div class="logo-tile">
-                    <img src="{{ url_for('static', filename='endo-pharmacy-logo-240.png') }}" alt="The Endo Pharmacy" width="92" height="92">
-                </div>
                 <p class="tagline">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
                     Secure Staff Portal
@@ -466,6 +442,14 @@
             {% endwith %}
 
             <form id="loginForm" method="POST" action="{{ url_for('login') }}" novalidate>
+                <div class="field">
+                    <label for="tenant">Pharmacy Code</label>
+                    <div class="control">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18"></path><path d="M5 21V7l8-4v18"></path><path d="M19 21V11l-6-4"></path><path d="M9 9h.01"></path><path d="M9 13h.01"></path><path d="M9 17h.01"></path></svg>
+                        <input id="tenant" class="input" type="text" name="tenant" value="{{ request.form.get('tenant', '') }}" placeholder="Optional for legacy account" autocomplete="organization" autocapitalize="none" spellcheck="false">
+                    </div>
+                </div>
+
                 <div class="field">
                     <label for="username">Username</label>
                     <div class="control">

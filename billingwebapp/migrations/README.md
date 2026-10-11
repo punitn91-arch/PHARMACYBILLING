@@ -31,6 +31,25 @@ The reviewed chain is intentionally additive:
   times. It also backfills existing clinic-wide (no-clinician) schedule rows
   to ARRIVAL_WINDOW, matching that table's own documented contract; every
   per-doctor row keeps today's FIXED_SLOT behaviour.
+- `20261009_13_tenant_foundation` through `20261009_16_super_admin_subscriptions`
+  add tenant ownership, tenant-scoped identifiers, and manual subscription
+  history.
+- `20261009_17_platform_super_admin_rls` and
+  `20261009_18_rls_tenant_settings_subscriptions` restrict global platform
+  administrator records, tenant settings, and subscription history under
+  PostgreSQL row-level security.
+- `20261009_19_tenant_ownership_foreign_keys` adds any missing
+  `tenant_id`-to-`tenant.id` foreign keys across tenant-owned tables.
+- `20261010_20_invoice_business_identity_snapshot` preserves tenant business
+  identity on issued invoice records.
+- `20261010_21_vendor_purchase_tenant_number_unique` scopes internal purchase
+  number uniqueness to the owning tenant.
+- `20261010_22_tenant_scoped_identity_uniqueness` removes selected global
+  identity uniqueness and installs tenant-scoped indexes.
+- `20261010_23_ai_tenant_identity_lookup` adds narrow PostgreSQL RLS policies
+  for resolving AI clients and access tokens before tenant context exists.
+- `20261010_24_tenant_scoped_vendor_note_numbers` scopes vendor-note number
+  uniqueness to the owning tenant while preserving note and allocation rows.
 
 They are guarded bridge revisions because this legacy application still uses
 `db.create_all()` and runtime `ensure_column(...)` guards during start-up.
@@ -45,7 +64,7 @@ flask db upgrade
 flask db current
 ```
 
-`flask db current` must report `20260905_07 (head)` after the upgrade.
+`flask db current` must report `20261010_24 (head)` after the upgrade.
 
 The bridge revision safely marks an existing database as upgraded if the two
 voice-call tables were already created by the legacy start-up path. It never

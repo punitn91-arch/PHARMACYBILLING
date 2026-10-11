@@ -933,10 +933,10 @@
     <div class="topbar">
         <div class="topbar-left">
             <button id="sidebarToggle" class="menu-toggle" type="button" aria-label="Toggle menu" aria-expanded="true">&#9776;</button>
-            <div class="title">THE ENDO PHARMACY</div>
+            <div class="title">{% if session.get("role") == "super_admin" %}PHARMACY SAAS{% else %}{{ session.get("tenant_name") or "THE ENDO PHARMACY" }}{% endif %}</div>
         </div>
 
-        {% if session.get("user_id") %}
+        {% if session.get("user_id") and session.get("role") != "super_admin" %}
         <div class="topbar-search" id="globalSearchShell">
             <input
                 id="globalSearchInput"
@@ -953,7 +953,7 @@
         {% endif %}
 
         <div class="right">
-            <span class="welcome-text">Welcome <b>{{ session.get("username") }}</b></span>
+            <span class="welcome-text">Welcome <b>{{ session.get("username") }}</b>{% if session.get("tenant_name") %} · {{ session.get("tenant_name") }}{% endif %}</span>
             <span class="divider">|</span>
             <a href="/change-password">Change Password</a>
             {% if session.get("role") == "admin" %}
@@ -970,14 +970,27 @@
     <!-- SIDEBAR -->
     <div class="sidebar">
 
+        {% if session.get("role") == "super_admin" %}
+        <div class="sa-nav-brand">SAAS</div>
+        <a href="/super-admin" class="{% if request.path == '/super-admin' %}active{% endif %}">⌂ Dashboard</a>
+        <a href="/super-admin" class="{% if request.path.startswith('/super-admin') %}active{% endif %}">▦ Pharmacies</a>
+        <a href="/super-admin?status=active" class="{% if request.args.get('status') == 'active' %}active{% endif %}">◉ Subscriptions</a>
+        <a href="/super-admin?sort=name_asc" class="{% if request.args.get('sort') == 'name_asc' %}active{% endif %}">◇ Plans</a>
+        <a href="/super-admin?access=enabled" class="{% if request.args.get('access') == 'enabled' %}active{% endif %}">♙ Users</a>
+        <a href="/super-admin?expiry=30" class="{% if request.args.get('expiry') == '30' %}active{% endif %}">◷ Reports</a>
+        <a href="/system-center" class="{% if request.path.startswith('/system-center') %}active{% endif %}">⚙ System Center</a>
+        <a href="/super-admin" class="">⚙ Settings</a>
+        {% else %}
         <a href="/" class="{% if request.path == '/' %}active{% endif %}">🏠 Dashboard</a>
 
+        {% if tenant_feature_enabled("appointments") %}
         <h4>Appointments</h4>
         <a href="/appointments" class="{% if request.path.startswith('/appointments') %}active{% endif %}">&#128197; Appointments</a>
         {% if session.get("role") == "admin" %}
         <a href="/appointment-booking/qr" class="{% if request.path.startswith('/appointment-booking/qr') %}active{% endif %}">▣ Appointment QR</a>
         <a href="/appointment-booking/priority-requests" class="{% if request.path.startswith('/appointment-booking/priority-requests') %}active{% endif %}">₹ Priority Requests</a>
         <a href="/appointment-booking/settings" class="{% if request.path.startswith('/appointment-booking/settings') %}active{% endif %}">⚙ Appointment Settings</a>
+        {% endif %}
         {% endif %}
         {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
         <h4>Invoice</h4>
@@ -1015,7 +1028,7 @@
         {% endif %}
         <a href="/customer" class="{% if request.path == '/customer' or request.path.startswith('/patients') %}active{% endif %}">👤 Customer Master</a>
 
-        {% if session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice") %}
+        {% if tenant_feature_enabled("lab") and (session.get("role") == "admin" or session.get("can_invoice_action") or session.get("can_edit_invoice") or session.get("can_delete_invoice")) %}
         <h4>Lab</h4>
         <a href="/lab-billing" class="{% if request.path.startswith('/lab-billing') %}active{% endif %}">🧪 Lab Billing</a>
         <a href="/lab-orders" class="{% if request.path.startswith('/lab-orders') or request.path.startswith('/lab-order/') %}active{% endif %}">🧾 Lab Orders</a>
@@ -1033,11 +1046,14 @@
 {% if session.get("role") == "admin" %}
 <a href="/data-health" class="{% if request.path.startswith('/data-health') %}active{% endif %}">🩺 Data Health</a>
 {% endif %}
-{% if session.get("role") == "admin" or session.get("can_manage_users") or session.get("can_view_audit_logs") %}
+{% if session.get("role") == "admin" or session.get("role") == "super_admin" or session.get("can_manage_users") or session.get("can_view_audit_logs") %}
 <h4>System</h4>
 {% if session.get("role") == "admin" or session.get("can_manage_users") %}
-<a href="/system-center" class="{% if request.path.startswith('/system-center') %}active{% endif %}">System Center</a>
+<a href="/tenant-master" class="{% if request.path.startswith('/tenant-master') %}active{% endif %}">Tenant Master</a>
 <a href="/users" class="{% if request.path.startswith('/users') %}active{% endif %}">Users</a>
+{% endif %}
+{% if session.get("role") == "super_admin" %}
+<a href="/super-admin" class="{% if request.path.startswith('/super-admin') %}active{% endif %}">SaaS Owner</a>
 {% endif %}
 {% if session.get("role") == "admin" %}
 <a href="/admin/ai-integration" class="{% if request.path.startswith('/admin/ai-integration') %}active{% endif %}">AI Integration</a>
@@ -1046,6 +1062,7 @@
 <a href="/audit-logs" class="{% if request.path.startswith('/audit-logs') %}active{% endif %}">Audit Logs</a>
 {% endif %}
 {% endif %}
+        {% endif %}
     </div>
     <script>
     // Keep the sidebar exactly as wide as its longest menu item (menus differ
@@ -1083,7 +1100,7 @@
     </div>
 <!-- FOOTER BRANDING -->
 <div class="app-footer">
-    © GAYATRI VENTURES SOFTWARE LTD. 2025
+    © GAYATRI VENTURES SOFTWARE.
 </div>
 <script>
 (function () {

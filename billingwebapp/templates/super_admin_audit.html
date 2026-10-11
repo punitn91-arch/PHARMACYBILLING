@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Tenant Audit Logs{% endblock %}
+{% block body %}
+<style>
+.audit-shell { max-width: 1180px; display: grid; gap: 16px; }
+.audit-card { background: #fff; border: 1px solid #dbe4f0; border-radius: 8px; padding: 18px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06); }
+.audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.audit-table th, .audit-table td { padding: 10px; border-bottom: 1px solid #edf2f8; text-align: left; vertical-align: top; }
+.audit-table th { color: #607089; font-size: 11px; text-transform: uppercase; }
+.back-link { display: inline-flex; padding: 8px 12px; border-radius: 6px; background: #475569; color: #fff; text-decoration: none; font-weight: 700; }
+</style>
+<div class="audit-shell">
+    <div class="audit-card">
+        <a class="back-link" href="/super-admin/tenants/{{ tenant.id }}">Back</a>
+        <h2>{{ tenant.pharmacy_name }} Audit Logs</h2>
+        <table class="audit-table">
+            <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Reference</th><th>Details</th></tr></thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.created_at.strftime('%d-%m-%Y %I:%M %p') if log.created_at else '-' }}</td>
+                    <td>{{ log.user or '-' }}</td>
+                    <td>{{ log.action }}</td>
+                    <td>{{ log.entity_type or '-' }} #{{ log.entity_id or '-' }}</td>
+                    <td>{{ log.ref_code or '-' }}</td>
+                    <td>{{ log.extra_json or '' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

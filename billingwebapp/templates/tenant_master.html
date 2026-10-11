@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}{{ "Pharmacy Business Setup" if business_setup_only else "Tenant Master" }}{% endblock %}
+
+{% block body %}
+<style>
+.tenant-shell {
+    max-width: 980px;
+    display: grid;
+    gap: 18px;
+}
+.tenant-card {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+    padding: 24px;
+}
+.tenant-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+.tenant-grid .wide {
+    grid-column: 1 / -1;
+}
+.tenant-help {
+    color: #64748b;
+    font-size: 13px;
+    margin-top: 4px;
+}
+.tenant-meta {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 8px 0 18px;
+}
+.tenant-chip {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    border: 1px solid #d7e3f7;
+    border-radius: 999px;
+    background: #f8fbff;
+    padding: 6px 10px;
+    color: #1f3657;
+    font-size: 13px;
+}
+.tenant-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+}
+</style>
+
+<div class="tenant-shell">
+    <div class="tenant-card">
+        <h2 style="margin-bottom: 6px;">{{ "Pharmacy Business Setup" if business_setup_only else "Tenant Master" }}</h2>
+        {% if business_setup_only %}
+        <p class="tenant-help">Manage your pharmacy’s business identity. Changes apply to new invoices; issued invoices keep their saved identity.</p>
+        {% endif %}
+        <div class="tenant-meta">
+            <span class="tenant-chip">Tenant ID: <strong>{{ tenant.tenant_uid }}</strong></span>
+            <span class="tenant-chip">Code: <strong>{{ tenant.tenant_code }}</strong></span>
+            <span class="tenant-chip">Created: <strong>{{ tenant.created_at.strftime('%d-%m-%Y') if tenant.created_at else '-' }}</strong></span>
+            <span class="tenant-chip">Activated: <strong>{{ tenant.activated_at.strftime('%d-%m-%Y') if tenant.activated_at else '-' }}</strong></span>
+        </div>
+
+        <form method="POST" enctype="multipart/form-data">
+            <div class="tenant-grid">
+                <div>
+                    <label>Pharmacy Name</label>
+                    <input class="form-control mt-2" name="pharmacy_name" maxlength="160" value="{{ request.form.get('pharmacy_name', business_identity.pharmacy_name) }}" required>
+                </div>
+                {% if business_setup_only %}
+                <div>
+                    <label>Legal Business Name</label>
+                    <input class="form-control mt-2" name="legal_business_name" maxlength="160" value="{{ request.form.get('legal_business_name', business_identity.legal_business_name) }}">
+                </div>
+                {% endif %}
+                <div>
+                    <label>Owner Name</label>
+                    <input class="form-control mt-2" name="owner_name" maxlength="120" value="{{ request.form.get('owner_name', business_identity.owner_name) }}">
+                </div>
+                <div>
+                    <label>Primary Mobile</label>
+                    <input class="form-control mt-2" name="contact_number" maxlength="30" value="{{ request.form.get('contact_number', business_identity.mobile) }}">
+                </div>
+                <div>
+                    <label>Email</label>
+                    <input class="form-control mt-2" type="email" name="email" maxlength="160" value="{{ request.form.get('email', business_identity.email) }}">
+                </div>
+                <div class="wide">
+                    <label>Business Address</label>
+                    <textarea class="form-control mt-2" name="business_address" maxlength="2000" rows="3">{{ request.form.get('business_address', tenant.business_address or '') }}</textarea>
+                </div>
+                {% if business_setup_only %}
+                <div><label>Alternate Mobile</label><input class="form-control mt-2" name="alternate_mobile" maxlength="30" value="{{ request.form.get('alternate_mobile', business_identity.alternate_mobile) }}"></div>
+                <div><label>City</label><input class="form-control mt-2" name="city" maxlength="100" value="{{ request.form.get('city', tenant_settings.get('city', '')) }}"></div>
+                <div><label>State</label><input class="form-control mt-2" name="state" maxlength="100" value="{{ request.form.get('state', tenant_settings.get('state', '')) }}"></div>
+                <div><label>PIN Code</label><input class="form-control mt-2" name="pin_code" maxlength="20" value="{{ request.form.get('pin_code', tenant_settings.get('pin_code', '')) }}"></div>
+                <div><label>Business Type</label><input class="form-control mt-2" name="business_type" maxlength="80" value="{{ request.form.get('business_type', tenant_settings.get('business_type', '')) }}"></div>
+                {% endif %}
+                <div>
+                    <label>GSTIN</label>
+                    <input class="form-control mt-2" name="gstin" maxlength="30" autocapitalize="characters" value="{{ request.form.get('gstin', tenant.gstin or '') }}">
+                </div>
+                <div>
+                    <label>Drug License</label>
+                    <input class="form-control mt-2" name="drug_license" maxlength="80" value="{{ request.form.get('drug_license', tenant.drug_license or '') }}">
+                </div>
+                {% if business_setup_only %}
+                <div class="wide">
+                    <label>Pharmacy Logo (PNG or JPEG, up to 2 MB)</label>
+                    {% if business_identity.logo_path %}
+                    <div class="tenant-meta"><img src="{{ business_identity.logo_path }}" alt="Current pharmacy logo" style="width:{{ (business_identity.logo_width_mm|default(44)) * 3 }}px;height:{{ (business_identity.logo_height_mm|default(21)) * 3 }}px;max-width:260px;max-height:150px;object-fit:contain"></div>
+                    {% endif %}
+                    <input class="form-control mt-2" type="file" name="pharmacy_logo" accept="image/png,image/jpeg">
+                    {% if business_identity.logo_path %}
+                    <label class="tenant-help"><input type="checkbox" name="remove_logo" value="1"> Remove current logo</label>
+                    {% endif %}
+                </div>
+                <div><label>Logo Width (mm)</label><input class="form-control mt-2" type="number" name="logo_width_mm" min="20" max="70" step="0.5" value="{{ request.form.get('logo_width_mm', business_identity.logo_width_mm|default(44)) }}"></div>
+                <div><label>Logo Height (mm)</label><input class="form-control mt-2" type="number" name="logo_height_mm" min="10" max="40" step="0.5" value="{{ request.form.get('logo_height_mm', business_identity.logo_height_mm|default(21)) }}"></div>
+                <div class="wide">
+                    <label>Invoice Header Override</label>
+                    <textarea class="form-control mt-2" name="invoice_header" maxlength="500" rows="2">{{ request.form.get('invoice_header', tenant_settings.get('invoice_header', '')) }}</textarea>
+                </div>
+                <div class="wide">
+                    <label>Invoice Footer Message</label>
+                    <textarea class="form-control mt-2" name="invoice_footer" maxlength="500" rows="2">{{ request.form.get('invoice_footer', tenant_settings.get('invoice_footer', '')) }}</textarea>
+                </div>
+                <div class="wide">
+                    <label>Invoice Terms</label>
+                    <textarea class="form-control mt-2" name="invoice_terms" maxlength="2000" rows="3">{{ request.form.get('invoice_terms', tenant_settings.get('invoice_terms', '')) }}</textarea>
+                </div>
+                <div>
+                    <label>Authorized Signatory</label>
+                    <input class="form-control mt-2" name="authorized_signatory" maxlength="120" value="{{ request.form.get('authorized_signatory', tenant_settings.get('authorized_signatory', '')) }}">
+                </div>
+                <div>
+                    <label>Invoice Prefix</label>
+                    <input class="form-control mt-2" name="invoice_prefix" maxlength="8" value="{{ request.form.get('invoice_prefix', tenant_settings.get('invoice_prefix', 'INV')) }}">
+                </div>
+                {% else %}
+                <div>
+                    <label>Invoice Prefix</label>
+                    <input class="form-control mt-2" name="invoice_prefix" value="{{ request.form.get('invoice_prefix') or tenant_settings.get('invoice_prefix', 'INV') }}">
+                </div>
+                <div>
+                    <label>Purchase Prefix</label>
+                    <input class="form-control mt-2" name="purchase_prefix" value="{{ request.form.get('purchase_prefix') or tenant_settings.get('purchase_prefix', 'PB') }}">
+                </div>
+                <div>
+                    <label>Return Prefix</label>
+                    <input class="form-control mt-2" name="return_prefix" value="{{ request.form.get('return_prefix') or tenant_settings.get('return_prefix', 'RB') }}">
+                </div>
+                <div>
+                    <label>Invoice Format</label>
+                    <select class="form-control mt-2" name="invoice_format">
+                        {% set selected_invoice_format = request.form.get('invoice_format') or tenant_settings.get('invoice_format', 'standard') %}
+                        <option value="standard" {{ 'selected' if selected_invoice_format == 'standard' }}>Standard</option>
+                        <option value="compact" {{ 'selected' if selected_invoice_format == 'compact' }}>Compact</option>
+                        <option value="gst" {{ 'selected' if selected_invoice_format == 'gst' }}>GST</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Tax Preference</label>
+                    <select class="form-control mt-2" name="tax_preference">
+                        {% set selected_tax_preference = request.form.get('tax_preference') or tenant_settings.get('tax_preference', 'inclusive') %}
+                        <option value="inclusive" {{ 'selected' if selected_tax_preference == 'inclusive' }}>Inclusive</option>
+                        <option value="exclusive" {{ 'selected' if selected_tax_preference == 'exclusive' }}>Exclusive</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Stock Preference</label>
+                    <select class="form-control mt-2" name="stock_preference">
+                        {% set selected_stock_preference = request.form.get('stock_preference') or tenant_settings.get('stock_preference', 'fifo') %}
+                        <option value="fifo" {{ 'selected' if selected_stock_preference == 'fifo' }}>FIFO</option>
+                        <option value="batch" {{ 'selected' if selected_stock_preference == 'batch' }}>Batch</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Billing Preference</label>
+                    <input class="form-control mt-2" name="billing_preference" value="{{ request.form.get('billing_preference') or tenant_settings.get('billing_preference', 'standard') }}">
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="tenant-actions">
+                <button class="btn btn-primary">{{ "Save Business Setup" if business_setup_only else "Save Tenant" }}</button>
+                {% if business_setup_only %}
+                <a href="{{ back_url or '/' }}" class="btn btn-secondary">{{ back_label or 'Back to Dashboard' }}</a>
+                {% else %}
+                <a href="/system-center" class="btn btn-secondary">Back</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

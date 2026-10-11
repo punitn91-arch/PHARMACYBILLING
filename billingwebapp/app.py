@@ -1,7 +1,9 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, send_file, g, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, send_file, g, abort, has_app_context
 from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
+from contextlib import contextmanager
+import contextvars
 import json
 import math
 import re
@@ -16,9 +18,10 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
-from sqlalchemy import text, or_, and_, inspect, cast, String
+from sqlalchemy import text, or_, and_, inspect, cast, String, event
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from itsdangerous import BadSignature, URLSafeSerializer
+from sqlalchemy.orm import Session as SASession, with_loader_criteria
+from itsdangerous import BadSignature, SignatureExpired, URLSafeSerializer, URLSafeTimedSerializer
 
 try:
     from .local_launch import prepare_local_server, schedule_browser_open
@@ -33,6 +36,9 @@ except Exception:  # pragma: no cover
 try:
     from .models import (
         db,
+        Tenant,
+        TenantSettings,
+        SubscriptionHistory,
         User,
         Medicine,
         StockHistory,
@@ -44,6 +50,8 @@ try:
         PendingBillStore,
         Patient,
         Appointment,
+        ClinicLocation,
+        Clinician,
         LabTest,
         LabOrder,
         LabOrderItem,
@@ -106,6 +114,9 @@ try:
 except ImportError:  # pragma: no cover - script/local fallback
     from models import (
         db,
+        Tenant,
+        TenantSettings,
+        SubscriptionHistory,
         User,
         Medicine,
         StockHistory,
@@ -117,6 +128,8 @@ except ImportError:  # pragma: no cover - script/local fallback
         PendingBillStore,
         Patient,
         Appointment,
+        ClinicLocation,
+        Clinician,
         LabTest,
         LabOrder,
         LabOrderItem,
@@ -284,21 +297,59 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=session_absolute_hour
 app.config["APP_ENV"] = APP_ENV
 
 INVOICE_SHARE_SALT = "invoice-share-link"
+try:
+    INVOICE_SHARE_MAX_AGE_SECONDS = max(
+        3600,
+        int(os.environ.get("INVOICE_SHARE_MAX_AGE_SECONDS", str(30 * 24 * 60 * 60)) or (30 * 24 * 60 * 60)),
+    )
+except (TypeError, ValueError):
+    INVOICE_SHARE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 def invoice_share_serializer():
+    return URLSafeTimedSerializer(app.secret_key, salt=INVOICE_SHARE_SALT)
+
+
+def legacy_invoice_share_serializer():
     return URLSafeSerializer(app.secret_key, salt=INVOICE_SHARE_SALT)
 
 
-def build_invoice_share_token(invoice_id):
-    return invoice_share_serializer().dumps({"invoice_id": int(invoice_id)})
+def build_invoice_share_token(invoice_or_id):
+    invoice_id = int(getattr(invoice_or_id, "id", invoice_or_id))
+    tenant_id = getattr(invoice_or_id, "tenant_id", None)
+    if tenant_id in (None, "", 0):
+        try:
+            invoice = Invoice.query.filter(Invoice.id == invoice_id).first()
+            tenant_id = getattr(invoice, "tenant_id", None)
+        except Exception:
+            tenant_id = None
+    if tenant_id in (None, "", 0):
+        try:
+            tenant_id = current_tenant_id()
+        except NameError:
+            tenant_id = None
+    payload = {"v": 2, "invoice_id": invoice_id, "tenant_id": int(tenant_id) if tenant_id else None}
+    return invoice_share_serializer().dumps(payload)
+
+
+def read_invoice_share_payload(token):
+    try:
+        payload = invoice_share_serializer().loads(
+            token or "",
+            max_age=INVOICE_SHARE_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired:
+        return {}
+    except BadSignature:
+        try:
+            payload = legacy_invoice_share_serializer().loads(token or "")
+        except BadSignature:
+            return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def read_invoice_share_token(token):
-    try:
-        payload = invoice_share_serializer().loads(token or "")
-    except BadSignature:
-        return 0
+    payload = read_invoice_share_payload(token)
     return to_int_safe(payload.get("invoice_id"), 0) if isinstance(payload, dict) else 0
 
 ASYNC_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
@@ -362,6 +413,12 @@ app.config["AI_NOTIFICATIONS_ENABLED"] = env_flag("AI_NOTIFICATIONS_ENABLED", Fa
 # so enabling the voice gateway does not expose the general integration API.
 app.config["OMNIDIM_GATEWAY_ENABLED"] = env_flag("OMNIDIM_GATEWAY_ENABLED", False)
 app.config["OMNIDIM_GATEWAY_SECRET"] = (os.environ.get("OMNIDIM_GATEWAY_SECRET") or "").strip()
+app.config["OMNIDIM_GATEWAY_TENANT_ID"] = (
+    os.environ.get("OMNIDIM_GATEWAY_TENANT_ID") or ""
+).strip()
+app.config["OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON"] = (
+    os.environ.get("OMNIDIM_GATEWAY_TENANT_CREDENTIALS_JSON") or ""
+).strip()
 app.config["OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE"] = env_int(
     "OMNIDIM_GATEWAY_RATE_LIMIT_PER_MINUTE", 60, minimum=5, maximum=300
 )
@@ -447,6 +504,42 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _tenant_storage_dir(upload_dir, tenant_id=None):
+    resolved_tenant_id = tenant_id
+    if resolved_tenant_id in (None, "", 0):
+        try:
+            resolved_tenant_id = current_tenant_id()
+        except NameError:
+            resolved_tenant_id = None
+    if resolved_tenant_id in (None, "", 0):
+        return upload_dir
+    tenant_dir = os.path.join(upload_dir, f"tenant-{int(resolved_tenant_id)}")
+    os.makedirs(tenant_dir, mode=0o700, exist_ok=True)
+    os.chmod(tenant_dir, 0o700)
+    return tenant_dir
+
+
+def _safe_stored_filename(filename):
+    raw_name = (filename or "").strip()
+    cleaned_name = secure_filename(raw_name)
+    if not cleaned_name or cleaned_name != raw_name:
+        return ""
+    return cleaned_name
+
+
+def _tenant_file_candidates(upload_dir, filename, tenant_id=None):
+    cleaned_name = _safe_stored_filename(filename)
+    if not cleaned_name:
+        return "", []
+    candidates = []
+    tenant_dir = _tenant_storage_dir(upload_dir, tenant_id)
+    candidates.append((tenant_dir, os.path.join(tenant_dir, cleaned_name)))
+    legacy_path = os.path.join(upload_dir, cleaned_name)
+    if os.path.abspath(tenant_dir) != os.path.abspath(upload_dir):
+        candidates.append((upload_dir, legacy_path))
+    return cleaned_name, candidates
+
+
 def save_uploaded_file(file_storage, upload_dir, prefix):
     if not file_storage or not (file_storage.filename or "").strip():
         return ""
@@ -458,20 +551,31 @@ def save_uploaded_file(file_storage, upload_dir, prefix):
     stamp = clinic_now().strftime("%Y%m%d%H%M%S")
     token = secrets.token_hex(4)
     saved_name = f"{prefix}_{stamp}_{token}_{safe_root}{ext.lower()}"
-    file_storage.save(os.path.join(upload_dir, saved_name))
+    file_storage.save(os.path.join(_tenant_storage_dir(upload_dir), saved_name))
     return saved_name
 
 
 def delete_uploaded_file(upload_dir, filename):
-    cleaned_name = (filename or "").strip()
+    cleaned_name, candidates = _tenant_file_candidates(upload_dir, filename)
     if not cleaned_name:
         return
-    file_path = os.path.join(upload_dir, cleaned_name)
-    try:
+    for _base_dir, file_path in candidates:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return
+        except OSError:
+            pass
+
+
+def resolve_tenant_upload_file(upload_dir, filename, tenant_id=None):
+    cleaned_name, candidates = _tenant_file_candidates(upload_dir, filename, tenant_id)
+    if not cleaned_name:
+        return "", "", ""
+    for base_dir, file_path in candidates:
         if os.path.exists(file_path):
-            os.remove(file_path)
-    except OSError:
-        pass
+            return cleaned_name, base_dir, file_path
+    return cleaned_name, candidates[0][0], candidates[0][1]
 
 
 def save_private_lab_report_file(file_storage, order_id):
@@ -495,7 +599,7 @@ def save_private_lab_report_file(file_storage, order_id):
         f"labreport_{int(order_id)}_{clinic_now().strftime('%Y%m%d%H%M%S')}_"
         f"{secrets.token_hex(8)}_{safe_root}.pdf"
     )
-    target_path = os.path.join(LAB_REPORT_UPLOAD_FOLDER, stored_name)
+    target_path = os.path.join(_tenant_storage_dir(LAB_REPORT_UPLOAD_FOLDER), stored_name)
     file_storage.save(target_path)
     digest = hashlib.sha256()
     file_size = 0
@@ -520,13 +624,16 @@ def save_private_lab_report_file(file_storage, order_id):
 
 
 def delete_private_lab_report_file(storage_key):
-    cleaned_name = secure_filename(storage_key or "")
+    cleaned_name, candidates = _tenant_file_candidates(LAB_REPORT_UPLOAD_FOLDER, storage_key)
     if not cleaned_name:
         return
-    try:
-        os.remove(os.path.join(LAB_REPORT_UPLOAD_FOLDER, cleaned_name))
-    except OSError:
-        pass
+    for _base_dir, file_path in candidates:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return
+        except OSError:
+            pass
 
 def is_async_request():
     return request.headers.get("X-Requested-With") == "XMLHttpRequest"
@@ -602,6 +709,18 @@ def enforce_csrf_protection():
         app.logger.warning("CSRF check failed for %s %s", request.method, request.path)
         return csrf_failure_response()
     return None
+
+
+@app.before_request
+def prevent_direct_private_upload_access():
+    static_prefix = (app.static_url_path or "/static").rstrip("/")
+    private_upload_prefixes = (
+        f"{static_prefix}/uploads/vendors/",
+        f"{static_prefix}/uploads/vendor_bills/",
+    )
+    if any(request.path.startswith(prefix) for prefix in private_upload_prefixes):
+        abort(404)
+
 
 @app.after_request
 def adapt_redirect_for_async(response):
@@ -963,6 +1082,11 @@ def persist_medicine_code_sync():
         }
 
 
+def persist_medicine_code_sync_for_startup_tenant():
+    sync_result = persist_medicine_code_sync()
+    return int(sync_result.get("medicine_updates") or 0) + int(sync_result.get("purchase_item_updates") or 0)
+
+
 def persist_medicine_code_sync_for_names(names):
     try:
         sync_result = build_scoped_medicine_code_sync(names)
@@ -1262,12 +1386,32 @@ def normalize_public_report_mobile(value):
     return digits if len(digits) == 10 else ""
 
 
+def resolve_public_portal_tenant_id():
+    raw_identifier = (
+        request.args.get("tenant")
+        or request.form.get("tenant")
+        or session.get("lab_report_portal_tenant")
+        or ""
+    ).strip()
+    tenant = tenant_from_identifier(raw_identifier) if raw_identifier else None
+    if not tenant:
+        with tenant_scope_disabled():
+            tenant = Tenant.query.order_by(Tenant.id.asc()).first() if Tenant.query.count() == 1 else None
+    if tenant and tenant_login_allowed(tenant):
+        session["lab_report_portal_tenant"] = tenant.tenant_code
+        session["lab_report_portal_tenant_id"] = tenant.id
+        session.modified = True
+        return tenant.id
+    session.pop("lab_report_portal_tenant", None)
+    session.pop("lab_report_portal_tenant_id", None)
+    session.modified = True
+    return None
+
+
 def private_lab_report_path(storage_key):
     """Resolve a report key only when it is a safe filename inside private storage."""
-    cleaned_key = secure_filename(storage_key or "")
-    if not cleaned_key or cleaned_key != (storage_key or ""):
-        return "", ""
-    return cleaned_key, os.path.join(LAB_REPORT_UPLOAD_FOLDER, cleaned_key)
+    cleaned_key, _base_dir, file_path = resolve_tenant_upload_file(LAB_REPORT_UPLOAD_FOLDER, storage_key)
+    return cleaned_key, file_path
 
 
 def lab_report_download_name(report):
@@ -1308,6 +1452,149 @@ CURRENT_INVOICE_PRINT_PROFILE = {
 }
 
 
+def tenant_settings_dict(tenant=None):
+    if tenant is None:
+        tenant_id = None
+        try:
+            tenant_id = current_tenant_id()
+        except NameError:
+            tenant_id = None
+        if tenant_id:
+            tenant = Tenant.query.filter(Tenant.id == tenant_id).first()
+    raw_settings = getattr(getattr(tenant, "settings", None), "settings_json", "") or "{}"
+    try:
+        parsed = json.loads(raw_settings)
+    except (TypeError, ValueError):
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def normalize_logo_dimension_mm(value, default, *, minimum, maximum):
+    try:
+        numeric_value = float(str(value if value not in (None, "") else default).strip())
+    except (TypeError, ValueError):
+        numeric_value = float(default)
+    numeric_value = max(float(minimum), min(float(maximum), numeric_value))
+    if numeric_value.is_integer():
+        return int(numeric_value)
+    return round(numeric_value, 1)
+
+
+def tenant_business_identity(tenant=None):
+    if tenant is None:
+        tenant_id = current_tenant_id()
+        if tenant_id:
+            tenant = Tenant.query.filter(Tenant.id == tenant_id).first()
+    settings = tenant_settings_dict(tenant)
+    address_lines = [
+        line.strip()
+        for line in re.split(r"[\r\n]+", getattr(tenant, "business_address", "") or "")
+        if line.strip()
+    ]
+    locality = ", ".join(
+        value for value in (
+            str(settings.get("city") or "").strip(),
+            str(settings.get("state") or "").strip(),
+            str(settings.get("pin_code") or "").strip(),
+        ) if value
+    )
+    if locality:
+        address_lines.append(locality)
+    logo_path = str(settings.get("logo_path") or "").strip()
+    if logo_path.startswith("/tenant-business-logo/"):
+        filename = logo_path.rsplit("/", 1)[-1]
+        if not _safe_stored_filename(filename) or "/" in filename:
+            logo_path = ""
+    elif (
+        not logo_path.startswith("/static/")
+        or ".." in logo_path.split("/")
+        or any(character in logo_path for character in "?#\\")
+    ):
+        logo_path = ""
+    return {
+        "pharmacy_name": (getattr(tenant, "pharmacy_name", "") or "").strip(),
+        "legal_business_name": (settings.get("legal_business_name") or "").strip(),
+        "owner_name": (getattr(tenant, "owner_name", "") or "").strip(),
+        "business_type": (settings.get("business_type") or "").strip(),
+        "mobile": (getattr(tenant, "contact_number", "") or "").strip(),
+        "alternate_mobile": (settings.get("alternate_mobile") or "").strip(),
+        "email": (getattr(tenant, "email", "") or "").strip(),
+        "address_line_1": address_lines[0] if address_lines else "",
+        "address_line_2": ", ".join(address_lines[1:]) if len(address_lines) > 1 else "",
+        "gst_no": (getattr(tenant, "gstin", "") or "").strip(),
+        "licence_no": (getattr(tenant, "drug_license", "") or "").strip(),
+        "logo_path": logo_path,
+        "logo_width_mm": normalize_logo_dimension_mm(
+            settings.get("logo_width_mm"), 44, minimum=20, maximum=70
+        ),
+        "logo_height_mm": normalize_logo_dimension_mm(
+            settings.get("logo_height_mm"), 21, minimum=10, maximum=40
+        ),
+        "invoice_header": (settings.get("invoice_header") or "").strip(),
+        "invoice_footer": (settings.get("invoice_footer") or "").strip(),
+        "invoice_terms": (settings.get("invoice_terms") or "").strip(),
+        "authorized_signatory": (settings.get("authorized_signatory") or "").strip(),
+        "invoice_prefix": (settings.get("invoice_prefix") or "INV").strip(),
+    }
+
+
+def update_tenant_settings(tenant, updates):
+    if not tenant:
+        return {}
+    settings = tenant.settings
+    if not settings:
+        settings = TenantSettings(settings_json="{}")
+        db.session.add(settings)
+        tenant.settings = settings
+    current = tenant_settings_dict(tenant)
+    for key, value in (updates or {}).items():
+        current[key] = value
+    settings.settings_json = json.dumps(current, sort_keys=True)
+    return current
+
+
+def tenant_business_prefix(kind, tenant=None):
+    settings = tenant_settings_dict(tenant)
+    default_prefix = {"invoice": "INV", "purchase": "PB", "return": "RB"}.get(kind, "INV")
+    raw_prefix = settings.get(f"{kind}_prefix") or default_prefix
+    prefix = re.sub(r"[^A-Za-z0-9]+", "", str(raw_prefix).upper())[:8]
+    return prefix or default_prefix
+
+
+def tenant_invoice_print_profile(base_profile, tenant=None):
+    if tenant is None:
+        tenant_id = None
+        try:
+            tenant_id = current_tenant_id()
+        except NameError:
+            tenant_id = None
+        if tenant_id:
+            tenant = Tenant.query.filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        return base_profile
+    identity = tenant_business_identity(tenant)
+    base_profile.update({
+        "profile_code": f"tenant_{tenant.id}",
+        "pharmacy_name": identity["pharmacy_name"],
+        "legal_business_name": identity["legal_business_name"],
+        "address_line_1": identity["address_line_1"],
+        "address_line_2": identity["address_line_2"],
+        "mobile": identity["mobile"],
+        "alternate_mobile": identity["alternate_mobile"],
+        "gst_no": identity["gst_no"],
+        "licence_no": identity["licence_no"],
+        "logo_path": identity["logo_path"],
+        "logo_width_mm": identity["logo_width_mm"],
+        "logo_height_mm": identity["logo_height_mm"],
+        "invoice_header": identity["invoice_header"],
+        "invoice_footer": identity["invoice_footer"],
+        "invoice_terms": identity["invoice_terms"],
+        "authorized_signatory": identity["authorized_signatory"],
+        "invoice_terms": identity["invoice_terms"],
+    })
+    return base_profile
+
+
 def normalize_payment_mode(value, default="CASH"):
     mode = (value or default).strip().upper() or default
     if mode not in POS_PAYMENT_MODES:
@@ -1322,12 +1609,21 @@ def round_currency(value):
 def _clone_invoice_print_profile(profile):
     return {
         "profile_code": profile.get("profile_code", ""),
+        "pharmacy_name": profile.get("pharmacy_name", ""),
+        "legal_business_name": profile.get("legal_business_name", ""),
         "address_line_1": profile.get("address_line_1", ""),
         "address_line_2": profile.get("address_line_2", ""),
         "mobile": profile.get("mobile", ""),
+        "alternate_mobile": profile.get("alternate_mobile", ""),
         "gst_no": profile.get("gst_no", ""),
         "licence_no": profile.get("licence_no", ""),
         "logo_path": profile.get("logo_path", ""),
+        "logo_width_mm": profile.get("logo_width_mm", 44),
+        "logo_height_mm": profile.get("logo_height_mm", 21),
+        "invoice_header": profile.get("invoice_header", ""),
+        "invoice_footer": profile.get("invoice_footer", ""),
+        "invoice_terms": profile.get("invoice_terms", ""),
+        "authorized_signatory": profile.get("authorized_signatory", ""),
     }
 
 
@@ -1367,14 +1663,30 @@ def _extract_fresh_start_public_sequence(value, prefix):
     return to_int_safe(match.group(1), 0) or None
 
 
-def _next_fresh_start_public_sequence(model, field_name, prefix, effective_date, date_field_name):
+def _extract_prefixed_public_sequence(value, prefix):
+    raw_value = str(value or "").strip().upper()
+    normalized_prefix = str(prefix or "").strip().upper()
+    if not raw_value or not normalized_prefix:
+        return None
+    match = re.fullmatch(rf"{re.escape(normalized_prefix)}-?0*(\d+)", raw_value)
+    if not match:
+        return None
+    return to_int_safe(match.group(1), 0) or None
+
+
+def _next_fresh_start_public_sequence(model, field_name, prefix, effective_date, date_field_name, tenant_id=None):
     if not is_post_operations_fresh_start(effective_date):
         return None
     fresh_start_date = get_operations_fresh_start_date()
     start_bound, _unused_end = local_date_range_to_storage_bounds(fresh_start_date, fresh_start_date)
     field = getattr(model, field_name)
     date_field = getattr(model, date_field_name)
-    values = db.session.query(field).filter(date_field >= start_bound).all()
+    query = db.session.query(field).filter(date_field >= start_bound)
+    if hasattr(model, "tenant_id"):
+        scoped_tenant_id = tenant_id if tenant_id not in (None, "", 0) else current_tenant_id()
+        if scoped_tenant_id not in (None, "", 0):
+            query = query.filter(model.tenant_id == int(scoped_tenant_id))
+    values = query.all()
     max_sequence = 0
     for (raw_value,) in values:
         parsed_sequence = _extract_fresh_start_public_sequence(raw_value, prefix)
@@ -1383,101 +1695,154 @@ def _next_fresh_start_public_sequence(model, field_name, prefix, effective_date,
     return max_sequence + 1
 
 
-def build_fresh_start_invoice_no(effective_date=None):
+def _next_tenant_prefixed_sequence(model, field_name, prefix, tenant_id=None):
+    field = getattr(model, field_name)
+    query = db.session.query(field)
+    if hasattr(model, "tenant_id"):
+        scoped_tenant_id = tenant_id if tenant_id not in (None, "", 0) else current_tenant_id()
+        if scoped_tenant_id not in (None, "", 0):
+            query = query.filter(model.tenant_id == int(scoped_tenant_id))
+    max_sequence = 0
+    for (raw_value,) in query.all():
+        parsed_sequence = _extract_prefixed_public_sequence(raw_value, prefix)
+        if parsed_sequence and parsed_sequence > max_sequence:
+            max_sequence = parsed_sequence
+    return max_sequence + 1
+
+
+def build_fresh_start_invoice_no(effective_date=None, tenant=None):
+    prefix = tenant_business_prefix("invoice", tenant)
     sequence = _next_fresh_start_public_sequence(
         Invoice,
         "invoice_no",
-        "INV",
+        prefix,
         effective_date,
         "created_at",
+        getattr(tenant, "id", None),
     )
     if not sequence:
         return None
-    return f"INV-{sequence:0{FRESH_START_PUBLIC_NUMBER_WIDTH}d}"
+    return f"{prefix}-{sequence:0{FRESH_START_PUBLIC_NUMBER_WIDTH}d}"
 
 
-def build_fresh_start_purchase_no(effective_date=None):
-    sequence = _next_fresh_start_public_sequence(
+def build_fresh_start_purchase_no(effective_date=None, tenant=None):
+    prefix = tenant_business_prefix("purchase", tenant)
+    sequence = _next_tenant_prefixed_sequence(
         VendorPurchase,
         "purchase_no",
-        "PB",
-        effective_date,
-        "purchase_date",
+        prefix,
+        getattr(tenant, "id", None),
     )
     if not sequence:
         return None
-    return f"PB-{sequence:0{FRESH_START_PUBLIC_NUMBER_WIDTH}d}"
+    return f"{prefix}-{sequence:0{FRESH_START_PUBLIC_NUMBER_WIDTH}d}"
+
+
+def assign_return_number(return_bill, effective_date=None):
+    tenant = None
+    tenant_id = getattr(return_bill, "tenant_id", None) or current_tenant_id()
+    if tenant_id:
+        tenant = Tenant.query.filter(Tenant.id == int(tenant_id)).first()
+    prefix = tenant_business_prefix("return", tenant)
+    return_bill.return_no = f"{prefix}-{return_bill.id:06d}"
+    return return_bill.return_no
 
 
 def assign_invoice_number(invoice, effective_date=None):
     local_date = _invoice_profile_local_date(effective_date or getattr(invoice, "created_at", None))
+    tenant = None
+    tenant_id = getattr(invoice, "tenant_id", None) or current_tenant_id()
+    if tenant_id:
+        tenant = Tenant.query.filter(Tenant.id == int(tenant_id)).first()
     if is_post_operations_fresh_start(local_date):
-        invoice.invoice_no = build_fresh_start_invoice_no(local_date)
+        if tenant_id and db.engine.dialect.name.lower() == "postgresql":
+            db.session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_scope, :tenant_id)"),
+                {"lock_scope": 74100, "tenant_id": int(tenant_id)},
+            )
+        invoice.invoice_no = build_fresh_start_invoice_no(local_date, tenant)
     else:
-        invoice.invoice_no = f"INV-{local_date.year}-{1000 + invoice.id}"
+        invoice.invoice_no = f"{tenant_business_prefix('invoice', tenant)}-{local_date.year}-{1000 + invoice.id}"
     return invoice.invoice_no
 
 
 def assign_purchase_number(purchase, effective_date=None):
     purchase_date = effective_date or getattr(purchase, "purchase_date", None) or getattr(purchase, "created_at", None)
     local_date = _invoice_profile_local_date(purchase_date)
+    tenant = None
+    tenant_id = getattr(purchase, "tenant_id", None) or current_tenant_id()
+    if tenant_id:
+        tenant = Tenant.query.filter(Tenant.id == int(tenant_id)).first()
     if is_post_operations_fresh_start(local_date):
-        purchase.purchase_no = build_fresh_start_purchase_no(local_date)
+        if tenant_id and db.engine.dialect.name.lower() == "postgresql":
+            db.session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_scope, :tenant_id)"),
+                {"lock_scope": 74101, "tenant_id": int(tenant_id)},
+            )
+        purchase.purchase_no = build_fresh_start_purchase_no(local_date, tenant)
     else:
-        purchase.purchase_no = f"PB-{purchase.id:06d}"
+        purchase.purchase_no = f"{tenant_business_prefix('purchase', tenant)}-{purchase.id:06d}"
     return purchase.purchase_no
 
 
 def get_invoice_print_profile_for_date(value=None):
     effective_date = _invoice_profile_local_date(value)
     if effective_date < INVOICE_PRINT_PROFILE_CUTOVER:
-        return _clone_invoice_print_profile(LEGACY_INVOICE_PRINT_PROFILE)
-    return _clone_invoice_print_profile(CURRENT_INVOICE_PRINT_PROFILE)
+        profile = _clone_invoice_print_profile(LEGACY_INVOICE_PRINT_PROFILE)
+    else:
+        profile = _clone_invoice_print_profile(CURRENT_INVOICE_PRINT_PROFILE)
+    return tenant_invoice_print_profile(profile)
 
 
 def build_invoice_print_profile_snapshot(value=None):
     profile = get_invoice_print_profile_for_date(value)
     return {
         "print_profile_code": profile["profile_code"],
+        "print_pharmacy_name": profile.get("pharmacy_name", ""),
+        "print_legal_business_name": profile.get("legal_business_name", ""),
         "print_address_line_1": profile["address_line_1"],
         "print_address_line_2": profile["address_line_2"],
         "print_mobile": profile["mobile"],
+        "print_alternate_mobile": profile.get("alternate_mobile", ""),
         "print_gst_no": profile["gst_no"],
         "print_licence_no": profile["licence_no"],
         "print_logo_path": profile["logo_path"],
+        "print_invoice_header": profile.get("invoice_header", ""),
+        "print_invoice_footer": profile.get("invoice_footer", ""),
+        "print_invoice_terms": profile.get("invoice_terms", ""),
+        "print_authorized_signatory": profile.get("authorized_signatory", ""),
     }
 
 
-def apply_invoice_print_profile(invoice, value=None):
+def apply_invoice_print_profile(invoice, value=None, *, include_business_identity=True):
     snapshot = build_invoice_print_profile_snapshot(value or getattr(invoice, "created_at", None))
+    if not include_business_identity:
+        for field in (
+            "print_pharmacy_name",
+            "print_legal_business_name",
+            "print_alternate_mobile",
+            "print_invoice_header",
+            "print_invoice_footer",
+            "print_invoice_terms",
+            "print_authorized_signatory",
+        ):
+            snapshot.pop(field, None)
     for field, field_value in snapshot.items():
         setattr(invoice, field, field_value)
     return snapshot
 
 
 def resolve_invoice_print_profile(invoice):
-    profile = get_invoice_print_profile_for_date(getattr(invoice, "created_at", None))
-    field_mapping = {
-        "profile_code": "print_profile_code",
-        "address_line_1": "print_address_line_1",
-        "address_line_2": "print_address_line_2",
-        "mobile": "print_mobile",
-        "gst_no": "print_gst_no",
-        "licence_no": "print_licence_no",
-        "logo_path": "print_logo_path",
-    }
-
-    for profile_key, invoice_field in field_mapping.items():
-        raw_value = getattr(invoice, invoice_field, None)
-        if raw_value is None:
-            continue
-        if isinstance(raw_value, str):
-            if not raw_value.strip() and profile_key != "licence_no":
-                continue
-            profile[profile_key] = raw_value.strip()
-            continue
-        profile[profile_key] = raw_value
-    return profile
+    tenant = None
+    tenant_id = getattr(invoice, "tenant_id", None) or current_tenant_id()
+    if tenant_id:
+        tenant = Tenant.query.filter(Tenant.id == int(tenant_id)).first()
+    base_profile = _clone_invoice_print_profile(
+        LEGACY_INVOICE_PRINT_PROFILE
+        if _invoice_profile_local_date(getattr(invoice, "created_at", None)) < INVOICE_PRINT_PROFILE_CUTOVER
+        else CURRENT_INVOICE_PRINT_PROFILE
+    )
+    return tenant_invoice_print_profile(base_profile, tenant)
 
 
 def backfill_invoice_print_profiles():
@@ -1494,14 +1859,65 @@ def backfill_invoice_print_profiles():
     ).all()
     updated = 0
     for invoice in invoices:
-        apply_invoice_print_profile(invoice, getattr(invoice, "created_at", None))
+        apply_invoice_print_profile(
+            invoice,
+            getattr(invoice, "created_at", None),
+            include_business_identity=False,
+        )
         updated += 1
     if updated:
         db.session.commit()
     return updated
 
 
+def run_tenant_scoped_startup_backfill(backfill):
+    tenant_ids = [
+        row[0]
+        for row in db.session.execute(
+            text('SELECT id FROM "tenant" ORDER BY id')
+        ).all()
+    ]
+    updated = 0
+    for tenant_id in tenant_ids:
+        try:
+            with tenant_context(tenant_id):
+                updated += backfill()
+        except Exception as exc:
+            db.session.rollback()
+            raise RuntimeError(
+                f"Tenant-scoped startup backfill failed for tenant {tenant_id}."
+            ) from exc
+    return updated
+
+
 def sync_invoice_print_profiles_to_cutover():
+    invoices = Invoice.query.all()
+    updated = 0
+    for invoice in invoices:
+        expected_snapshot = build_invoice_print_profile_snapshot(getattr(invoice, "created_at", None))
+        for field in (
+            "print_pharmacy_name",
+            "print_legal_business_name",
+            "print_alternate_mobile",
+            "print_invoice_header",
+            "print_invoice_footer",
+            "print_invoice_terms",
+            "print_authorized_signatory",
+        ):
+            expected_snapshot.pop(field, None)
+        changed = False
+        for field, expected_value in expected_snapshot.items():
+            if getattr(invoice, field, None) != expected_value:
+                setattr(invoice, field, expected_value)
+                changed = True
+        if changed:
+            updated += 1
+    if updated:
+        db.session.commit()
+    return updated
+
+
+def sync_invoice_print_profiles_to_current_business_identity():
     invoices = Invoice.query.all()
     updated = 0
     for invoice in invoices:
@@ -1513,8 +1929,6 @@ def sync_invoice_print_profiles_to_cutover():
                 changed = True
         if changed:
             updated += 1
-    if updated:
-        db.session.commit()
     return updated
 
 
@@ -3601,6 +4015,10 @@ def sync_pending_bill_store():
     return True
 
 
+def sync_pending_bill_store_for_startup_tenant():
+    return 1 if sync_pending_bill_store() else 0
+
+
 def find_pending_bill_record(pending_bill_id, *, include_deleted=False, sync_if_missing=False):
     pending_bill_id = to_int_safe(pending_bill_id, 0)
     if pending_bill_id <= 0:
@@ -3718,6 +4136,697 @@ def current_user_agent():
     return (request.headers.get("User-Agent") or "").strip()[:255]
 
 
+TENANT_LOGIN_ALLOWED_STATUSES = {"trial", "active", "expired"}
+TENANT_TERMINAL_STATUSES = {"expired", "suspended", "cancelled"}
+TENANT_STATUS_OPTIONS = ("Trial", "Active", "Expired", "Suspended", "Cancelled")
+PLATFORM_SUPER_ADMIN_ROLE = "super_admin"
+SUBSCRIPTION_PLAN_DEFINITIONS = {
+    "trial": {
+        "name": "Free Trial",
+        "cycle": "trial",
+        "days": 14,
+        "amount": 0,
+        "user_limit": 3,
+        "features": {"pos": True, "inventory": True, "reports": True, "exports": True},
+    },
+    "monthly": {
+        "name": "Monthly Plan",
+        "cycle": "monthly",
+        "days": 30,
+        "amount": 1999,
+        "user_limit": 6,
+        "features": {"pos": True, "inventory": True, "reports": True, "exports": True},
+    },
+    "quarterly": {
+        "name": "Quarterly Plan",
+        "cycle": "quarterly",
+        "days": 90,
+        "amount": 5499,
+        "user_limit": 10,
+        "features": {"pos": True, "inventory": True, "reports": True, "exports": True},
+    },
+    "yearly": {
+        "name": "Yearly Plan",
+        "cycle": "yearly",
+        "days": 365,
+        "amount": 19999,
+        "user_limit": 20,
+        "features": {"pos": True, "inventory": True, "reports": True, "exports": True},
+    },
+    "custom": {
+        "name": "Custom Plan",
+        "cycle": "custom",
+        "days": 30,
+        "amount": 0,
+        "user_limit": None,
+        "features": {"pos": True, "inventory": True, "reports": True, "exports": True},
+    },
+}
+SUBSCRIPTION_READONLY_ALLOWED_ENDPOINT_PREFIXES = (
+    "export_",
+    "print_",
+    "shared_",
+)
+SUBSCRIPTION_MUTATION_ALLOWLIST = {
+    "logout",
+    "logout_everywhere",
+    "change_password",
+}
+
+
+def normalize_tenant_code(value):
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return normalized[:80] or "default"
+
+
+def generate_tenant_uid():
+    return "TEN-" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24].upper()
+
+
+def tenant_login_allowed(tenant):
+    return bool(tenant and (tenant.status or "").strip().lower() in TENANT_LOGIN_ALLOWED_STATUSES)
+
+
+def is_super_admin_user(user=None):
+    role = getattr(user, "role", None) if user is not None else session.get("role")
+    return (role or "").strip().lower() == PLATFORM_SUPER_ADMIN_ROLE
+
+
+def subscription_serializer():
+    return URLSafeSerializer(app.secret_key, salt="tenant-admin-activation-v1")
+
+
+def build_admin_activation_token(user):
+    expires_at = datetime.utcnow() + timedelta(days=7)
+    return subscription_serializer().dumps({
+        "user_id": int(user.id),
+        "tenant_id": int(user.tenant_id),
+        "session_version": int(user.session_version or 0),
+        "expires_at": expires_at.isoformat(),
+    })
+
+
+def read_admin_activation_token(token):
+    try:
+        payload = subscription_serializer().loads(token or "")
+    except BadSignature:
+        return None
+    try:
+        expires_at = datetime.fromisoformat(payload.get("expires_at") or "")
+    except (TypeError, ValueError):
+        return None
+    if datetime.utcnow() > expires_at:
+        return None
+    return payload
+
+
+def normalize_plan_ref(value):
+    cleaned = re.sub(r"[^a-z0-9_-]+", "-", str(value or "").strip().lower()).strip("-")
+    return cleaned or "trial"
+
+
+def parse_subscription_amount(value, default=0):
+    try:
+        return round(float(str(value if value not in (None, "") else default).strip() or 0), 2)
+    except (TypeError, ValueError):
+        return round(float(default or 0), 2)
+
+
+def plan_definition(plan_ref):
+    key = normalize_plan_ref(plan_ref)
+    return SUBSCRIPTION_PLAN_DEFINITIONS.get(key, SUBSCRIPTION_PLAN_DEFINITIONS["custom"])
+
+
+def tenant_subscription_settings(tenant):
+    settings = tenant_settings_dict(tenant)
+    subscription = settings.get("subscription") if isinstance(settings.get("subscription"), dict) else {}
+    return subscription
+
+
+def tenant_subscription_is_expired(tenant, today_value=None):
+    expiry = getattr(tenant, "subscription_expiry", None)
+    if not expiry:
+        return False
+    today_value = today_value or clinic_now().date()
+    return expiry < today_value
+
+
+def refresh_tenant_subscription_status(tenant, *, commit=False):
+    if not tenant:
+        return tenant
+    status = (tenant.status or "").strip().title()
+    if status in {"Active", "Trial"} and tenant_subscription_is_expired(tenant):
+        tenant.status = "Expired"
+        if commit:
+            db.session.commit()
+    return tenant
+
+
+def apply_subscription_to_tenant(
+    tenant,
+    *,
+    plan_ref="trial",
+    start_date=None,
+    expiry_date=None,
+    amount=None,
+    payment_mode="Manual",
+    payment_reference="",
+    user_limit=None,
+    device_limit=None,
+    features=None,
+    notes="",
+    status="Active",
+    created_by=None,
+):
+    plan_ref = normalize_plan_ref(plan_ref)
+    plan = plan_definition(plan_ref)
+    start_date = start_date or clinic_now().date()
+    if not expiry_date:
+        expiry_date = start_date + timedelta(days=int(plan.get("days") or 30))
+    if amount is None:
+        amount = plan.get("amount", 0)
+    if user_limit in (None, "", " "):
+        user_limit = plan.get("user_limit")
+    try:
+        normalized_user_limit = int(user_limit) if user_limit not in (None, "", " ") else None
+    except (TypeError, ValueError):
+        normalized_user_limit = plan.get("user_limit")
+    if device_limit in (None, "", " "):
+        device_limit = plan.get("device_limit")
+    try:
+        normalized_device_limit = int(device_limit) if device_limit not in (None, "", " ") else None
+    except (TypeError, ValueError):
+        normalized_device_limit = plan.get("device_limit")
+    if normalized_device_limit is not None and normalized_device_limit <= 0:
+        normalized_device_limit = None
+    entitlements = features if isinstance(features, dict) else dict(plan.get("features") or {})
+    tenant.subscription_plan_ref = plan_ref
+    tenant.subscription_start = start_date
+    tenant.subscription_expiry = expiry_date
+    tenant.status = status if status in TENANT_STATUS_OPTIONS else "Active"
+    if tenant.status in {"Active", "Trial"} and not tenant.activated_at:
+        tenant.activated_at = datetime.utcnow()
+    settings = tenant_settings_dict(tenant)
+    settings["subscription"] = {
+        "plan_ref": plan_ref,
+        "plan_name": plan.get("name", plan_ref.title()),
+        "billing_cycle": plan.get("cycle", plan_ref),
+        "user_limit": normalized_user_limit,
+        "device_limit": normalized_device_limit,
+        "features": entitlements,
+        "readonly_after_expiry": True,
+        "last_payment_amount": parse_subscription_amount(amount),
+        "last_payment_mode": (payment_mode or "Manual").strip(),
+        "last_payment_reference": (payment_reference or "").strip(),
+    }
+    device_access = settings.get("device_access") if isinstance(settings.get("device_access"), dict) else {}
+    device_access["limit"] = normalized_device_limit
+    settings["device_access"] = device_access
+    update_tenant_settings(tenant, settings)
+    history = SubscriptionHistory(
+        tenant_id=tenant.id,
+        plan_ref=plan_ref,
+        plan_name=plan.get("name", plan_ref.title()),
+        billing_cycle=plan.get("cycle", plan_ref),
+        start_date=start_date,
+        expiry_date=expiry_date,
+        status=tenant.status,
+        user_limit=normalized_user_limit,
+        feature_entitlements_json=json.dumps(entitlements, sort_keys=True),
+        amount=parse_subscription_amount(amount),
+        payment_mode=(payment_mode or "Manual").strip()[:40],
+        payment_reference=(payment_reference or "").strip()[:120],
+        notes=(notes or "").strip(),
+        created_by=(created_by or session.get("username") or "system")[:50],
+    )
+    db.session.add(history)
+    return history
+
+
+def tenant_feature_enabled(feature_name, tenant=None):
+    if tenant is None:
+        tenant = current_tenant()
+    if not tenant:
+        return False
+    refresh_tenant_subscription_status(tenant)
+    if (tenant.status or "").strip().lower() in {"suspended", "cancelled"}:
+        return False
+    subscription = tenant_subscription_settings(tenant)
+    features = subscription.get("features") if isinstance(subscription.get("features"), dict) else {}
+    default_enabled = feature_name not in {"appointments", "lab"}
+    return bool(features.get(feature_name, default_enabled))
+
+
+@app.context_processor
+def inject_tenant_features():
+    return {"tenant_feature_enabled": tenant_feature_enabled}
+
+
+def tenant_user_limit_reached(tenant):
+    subscription = tenant_subscription_settings(tenant)
+    user_limit = subscription.get("user_limit")
+    if user_limit in (None, "", 0):
+        return False
+    try:
+        user_limit = int(user_limit)
+    except (TypeError, ValueError):
+        return False
+    if user_limit <= 0:
+        return False
+    with tenant_context(tenant.id):
+        active_count = active_user_query().filter(User.tenant_id == tenant.id).count()
+    return active_count >= user_limit
+
+
+TENANT_DEVICE_COOKIE = "tenant_device_id"
+TENANT_DEVICE_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+
+
+def tenant_device_serializer():
+    return URLSafeSerializer(app.secret_key, salt="tenant-device-v1")
+
+
+def read_tenant_device_cookie():
+    raw_value = (request.cookies.get(TENANT_DEVICE_COOKIE) or "").strip()
+    if not raw_value:
+        return ""
+    try:
+        payload = tenant_device_serializer().loads(raw_value)
+    except BadSignature:
+        return ""
+    device_id = str(payload.get("device_id") or "").strip() if isinstance(payload, dict) else ""
+    return device_id if re.fullmatch(r"[A-Za-z0-9_-]{16,96}", device_id) else ""
+
+
+def set_tenant_device_cookie(response, device_id):
+    if not device_id:
+        return response
+    response.set_cookie(
+        TENANT_DEVICE_COOKIE,
+        tenant_device_serializer().dumps({"device_id": device_id}),
+        max_age=TENANT_DEVICE_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=app.config.get("SESSION_COOKIE_SECURE", False),
+        samesite="Lax",
+    )
+    return response
+
+
+def tenant_device_access_settings(tenant):
+    settings = tenant_settings_dict(tenant)
+    access = settings.get("device_access") if isinstance(settings.get("device_access"), dict) else {}
+    devices = access.get("devices") if isinstance(access.get("devices"), dict) else {}
+    try:
+        limit = int(access.get("limit")) if access.get("limit") not in (None, "", " ") else None
+    except (TypeError, ValueError):
+        limit = None
+    if limit is not None and limit <= 0:
+        limit = None
+    return {"limit": limit, "devices": devices}
+
+
+def tenant_device_limit(tenant):
+    access = tenant_device_access_settings(tenant)
+    limit = access.get("limit")
+    if limit in (None, "", 0):
+        subscription = tenant_subscription_settings(tenant)
+        try:
+            limit = int(subscription.get("device_limit")) if subscription.get("device_limit") not in (None, "", " ") else None
+        except (TypeError, ValueError):
+            limit = None
+    return limit if isinstance(limit, int) and limit > 0 else None
+
+
+def tenant_registered_devices(tenant):
+    return tenant_device_access_settings(tenant).get("devices", {})
+
+
+def active_tenant_device_count(tenant):
+    return sum(1 for row in tenant_registered_devices(tenant).values() if row.get("active", True))
+
+
+def update_tenant_device_registry(tenant, *, limit=None, devices=None):
+    settings = tenant_settings_dict(tenant)
+    access = settings.get("device_access") if isinstance(settings.get("device_access"), dict) else {}
+    if limit is not None:
+        access["limit"] = int(limit) if int(limit) > 0 else None
+    if devices is not None:
+        access["devices"] = devices
+    settings["device_access"] = access
+    update_tenant_settings(tenant, settings)
+    return access
+
+
+def authorize_tenant_device_for_login(tenant, username):
+    limit = tenant_device_limit(tenant)
+    if not limit:
+        return read_tenant_device_cookie() or secrets.token_urlsafe(24), ""
+    device_id = read_tenant_device_cookie()
+    devices = tenant_registered_devices(tenant)
+    now_iso = datetime.utcnow().isoformat()
+    if device_id and device_id in devices and devices[device_id].get("active", True):
+        devices[device_id]["last_seen_at"] = now_iso
+        devices[device_id]["last_username"] = (username or "")[:50]
+        devices[device_id]["last_ip"] = current_client_ip()
+        devices[device_id]["last_user_agent"] = current_user_agent()
+        update_tenant_device_registry(tenant, limit=limit, devices=devices)
+        return device_id, ""
+    active_count = sum(1 for row in devices.values() if row.get("active", True))
+    if active_count >= limit:
+        return "", (
+            f"This pharmacy is allowed on {limit} computer(s). "
+            "Please contact the platform admin to approve or reset a device."
+        )
+    device_id = secrets.token_urlsafe(24)
+    devices[device_id] = {
+        "active": True,
+        "first_seen_at": now_iso,
+        "last_seen_at": now_iso,
+        "last_username": (username or "")[:50],
+        "last_ip": current_client_ip(),
+        "last_user_agent": current_user_agent(),
+    }
+    update_tenant_device_registry(tenant, limit=limit, devices=devices)
+    return device_id, ""
+
+
+def validate_tenant_session_device(tenant):
+    limit = tenant_device_limit(tenant)
+    if not limit:
+        return ""
+    device_id = read_tenant_device_cookie()
+    devices = tenant_registered_devices(tenant)
+    if device_id and devices.get(device_id, {}).get("active", True):
+        return ""
+    return "This computer is not approved for this pharmacy account. Please login from an approved computer."
+
+
+def tenant_from_identifier(identifier):
+    cleaned = (identifier or "").strip()
+    if not cleaned:
+        return None
+    return Tenant.query.filter(
+        or_(
+            db.func.lower(Tenant.tenant_code) == cleaned.lower(),
+            db.func.lower(Tenant.tenant_uid) == cleaned.lower(),
+            db.func.lower(Tenant.email) == cleaned.lower(),
+        )
+    ).first()
+
+
+def create_default_tenant(*, commit=True):
+    settings = TenantSettings(settings_json="{}")
+    tenant = Tenant(
+        tenant_uid=generate_tenant_uid(),
+        tenant_code=normalize_tenant_code(os.environ.get("DEFAULT_TENANT_CODE") or "default"),
+        pharmacy_name=(os.environ.get("DEFAULT_PHARMACY_NAME") or "The Endo Pharmacy").strip(),
+        owner_name=(os.environ.get("DEFAULT_TENANT_OWNER") or "").strip(),
+        contact_number=(os.environ.get("DEFAULT_TENANT_CONTACT") or "").strip(),
+        email=(os.environ.get("DEFAULT_TENANT_EMAIL") or "").strip(),
+        business_address=(os.environ.get("DEFAULT_TENANT_ADDRESS") or "").strip(),
+        gstin=(os.environ.get("DEFAULT_TENANT_GSTIN") or "").strip(),
+        drug_license=(os.environ.get("DEFAULT_TENANT_DRUG_LICENSE") or "").strip(),
+        subscription_plan_ref=(os.environ.get("DEFAULT_SUBSCRIPTION_PLAN") or "legacy").strip(),
+        subscription_start=date.today(),
+        status="Active",
+        activated_at=datetime.utcnow(),
+        settings=settings,
+    )
+    db.session.add(settings)
+    db.session.add(tenant)
+    if commit:
+        db.session.commit()
+    return tenant
+
+
+def ensure_default_tenant_for_legacy_users():
+    """Create/link one default tenant only for a legacy single-tenant install."""
+    tenant_count = Tenant.query.count()
+    if tenant_count == 0:
+        tenant = create_default_tenant(commit=False)
+        db.session.flush()
+        backfill_unassigned_rows_to_tenant(tenant.id)
+        db.session.commit()
+        return tenant
+    if tenant_count == 1:
+        tenant = Tenant.query.order_by(Tenant.id.asc()).first()
+        if tenant:
+            backfill_unassigned_rows_to_tenant(tenant.id)
+            db.session.commit()
+        return tenant
+    return None
+
+
+def backfill_unassigned_rows_to_tenant(tenant_id):
+    try:
+        inspector = inspect(db.engine)
+        table_names = set(inspector.get_table_names())
+    except Exception:
+        table_names = set(TENANT_OWNED_TABLE_NAMES)
+        inspector = None
+    for table_name in TENANT_OWNED_TABLE_NAMES:
+        if table_name not in table_names:
+            continue
+        try:
+            columns = {col["name"] for col in inspector.get_columns(table_name)} if inspector else {"tenant_id"}
+        except Exception:
+            columns = {"tenant_id"}
+        if "tenant_id" not in columns:
+            continue
+        extra_where = ' AND COALESCE("role", \'\') != :super_admin_role' if table_name == "user" else ""
+        params = {"tenant_id": int(tenant_id)}
+        if table_name == "user":
+            params["super_admin_role"] = PLATFORM_SUPER_ADMIN_ROLE
+        db.session.execute(
+            text(f'UPDATE "{table_name}" SET "tenant_id" = :tenant_id WHERE "tenant_id" IS NULL{extra_where}'),
+            params,
+        )
+
+
+def current_tenant():
+    tenant_id = session.get("tenant_id")
+    if tenant_id:
+        return Tenant.query.filter(Tenant.id == tenant_id).first()
+    return None
+
+
+_tenant_context = contextvars.ContextVar("tenant_context", default=None)
+_tenant_scope_disabled = contextvars.ContextVar("tenant_scope_disabled", default=False)
+
+
+def current_tenant_id():
+    value = _tenant_context.get()
+    if value not in (None, "", 0):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    try:
+        value = session.get("tenant_id")
+    except RuntimeError:
+        value = None
+    try:
+        return int(value) if value not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def set_tenant_context(tenant_id):
+    normalized = None
+    if tenant_id not in (None, "", 0):
+        normalized = int(tenant_id)
+    return _tenant_context.set(normalized)
+
+
+def reset_tenant_context(token):
+    _tenant_context.reset(token)
+
+
+@contextmanager
+def tenant_context(tenant_id):
+    token = set_tenant_context(tenant_id)
+    try:
+        if has_app_context() and db.session().in_transaction():
+            set_postgres_tenant_context(db.session().connection(), current_tenant_id())
+        yield
+    finally:
+        reset_tenant_context(token)
+        if has_app_context() and db.session().in_transaction():
+            set_postgres_tenant_context(db.session().connection(), current_tenant_id())
+
+
+@contextmanager
+def tenant_scope_disabled():
+    token = _tenant_scope_disabled.set(True)
+    try:
+        yield
+    finally:
+        _tenant_scope_disabled.reset(token)
+
+
+TENANT_OWNED_MODELS = (
+    User,
+    Medicine,
+    Invoice,
+    InvoiceItem,
+    Return,
+    ReturnItem,
+    ReturnLotAllocation,
+    QuarantineStock,
+    HoldBill,
+    PendingBillStore,
+    Patient,
+    Appointment,
+    LabTest,
+    LabOrder,
+    LabOrderItem,
+    LabReport,
+    PortalOtpChallenge,
+    AppointmentBookingSettings,
+    PublicAppointmentBooking,
+    PublicAppointmentDayLock,
+    Vendor,
+    VendorPurchase,
+    VendorPurchaseItem,
+    SalesAllocation,
+    VendorNote,
+    VendorNoteItem,
+    VendorNoteAllocation,
+    VendorLedgerEntry,
+    AuditLog,
+    LoginSecurityEvent,
+)
+
+
+TENANT_REFERENCE_CHECKS = (
+    (Invoice, "patient_id", Patient),
+    (InvoiceItem, "invoice_id", Invoice),
+    (StockHistory, "medicine_id", Medicine),
+    (Return, "invoice_id", Invoice),
+    (ReturnItem, "return_id", Return),
+    (ReturnItem, "invoice_item_id", InvoiceItem),
+    (ReturnLotAllocation, "return_item_id", ReturnItem),
+    (ReturnLotAllocation, "purchase_item_id", VendorPurchaseItem),
+    (QuarantineStock, "return_id", Return),
+    (QuarantineStock, "return_item_id", ReturnItem),
+    (QuarantineStock, "invoice_item_id", InvoiceItem),
+    (PendingBillStore, "legacy_hold_bill_id", HoldBill),
+    (Appointment, "patient_id", Patient),
+    (Appointment, "clinician_id", Clinician),
+    (Appointment, "location_id", ClinicLocation),
+    (LabOrder, "patient_id", Patient),
+    (LabOrderItem, "lab_order_id", LabOrder),
+    (LabOrderItem, "lab_test_id", LabTest),
+    (LabReport, "lab_order_id", LabOrder),
+    (LabReport, "lab_order_item_id", LabOrderItem),
+    (LabReport, "patient_id", Patient),
+    (PublicAppointmentBooking, "appointment_id", Appointment),
+    (PublicAppointmentBooking, "patient_id", Patient),
+    (ClinicLocation, "id", ClinicLocation) if "ClinicLocation" in globals() else None,
+    (VendorPurchase, "vendor_id", Vendor),
+    (VendorPurchaseItem, "purchase_id", VendorPurchase),
+    (VendorPurchaseItem, "vendor_id", Vendor),
+    (VendorPurchaseItem, "medicine_id", Medicine),
+    (VendorNote, "vendor_id", Vendor),
+    (VendorNote, "reference_purchase_id", VendorPurchase),
+    (VendorNoteItem, "note_id", VendorNote),
+    (VendorNoteItem, "medicine_id", Medicine),
+    (VendorNoteAllocation, "note_id", VendorNote),
+    (VendorNoteAllocation, "note_item_id", VendorNoteItem),
+    (VendorNoteAllocation, "purchase_item_id", VendorPurchaseItem),
+    (VendorLedgerEntry, "vendor_id", Vendor),
+    (SalesAllocation, "invoice_item_id", InvoiceItem),
+    (SalesAllocation, "purchase_item_id", VendorPurchaseItem),
+)
+TENANT_REFERENCE_CHECKS = tuple(item for item in TENANT_REFERENCE_CHECKS if item is not None)
+
+
+TENANT_OWNED_TABLE_NAMES = (
+    "user", "medicine", "invoice", "invoice_item", "return_bill", "return_item",
+    "return_lot_allocation", "quarantine_stock", "hold_bill", "pending_bill_store",
+    "patient", "appointment", "lab_test", "lab_order", "lab_order_item", "lab_report",
+    "portal_otp_challenge", "appointment_booking_settings", "public_appointment_booking",
+    "public_appointment_day_lock", "clinic_location", "clinician", "clinic_schedule_rule",
+    "clinic_schedule_exception", "stock_history", "vendor", "vendor_purchase",
+    "vendor_purchase_item", "vendor_notes", "vendor_note_items", "vendor_note_allocations",
+    "vendor_ledger", "sales_allocation", "audit_log", "login_security_event", "voice_call",
+    "voice_call_event", "ai_api_client", "ai_access_token", "ai_api_request_audit",
+    "ai_idempotency_record", "omnidim_gateway_action", "clinic_profile",
+    "appointment_slot_lock", "appointment_slot_block", "appointment_waitlist",
+    "patient_verification_session", "patient_verification_intent", "secure_document_token",
+    "clinic_knowledge_entry", "reception_schedule", "reception_schedule_override",
+    "callback_request", "complaint", "notification_template", "notification_delivery",
+)
+
+
+def is_tenant_model(model_or_instance):
+    model = model_or_instance if isinstance(model_or_instance, type) else model_or_instance.__class__
+    return hasattr(model, "tenant_id")
+
+
+def tenant_owned_models():
+    models = []
+    try:
+        mappers = list(db.Model.registry.mappers)
+    except Exception:
+        return list(TENANT_OWNED_MODELS)
+    for mapper in mappers:
+        model = mapper.class_
+        if hasattr(model, "tenant_id"):
+            models.append(model)
+    return models
+
+
+def authorize_tenant_object(obj, *, tenant_id=None, action="access"):
+    if obj is None or not is_tenant_model(obj):
+        return obj
+    expected_tenant_id = tenant_id or current_tenant_id()
+    object_tenant_id = getattr(obj, "tenant_id", None)
+    if expected_tenant_id is None:
+        raise PermissionError(f"Tenant context is required to {action} {obj.__class__.__name__}.")
+    if object_tenant_id is None:
+        setattr(obj, "tenant_id", expected_tenant_id)
+        return obj
+    if int(object_tenant_id) != int(expected_tenant_id):
+        raise PermissionError(f"Cross-tenant {action} blocked for {obj.__class__.__name__}.")
+    return obj
+
+
+def tenant_filter(query, model, tenant_id=None):
+    expected_tenant_id = tenant_id or current_tenant_id()
+    if expected_tenant_id is None or not is_tenant_model(model):
+        return query
+    return query.filter(model.tenant_id == expected_tenant_id)
+
+
+def tenant_get(model, object_id, *, tenant_id=None):
+    query = tenant_filter(model.query, model, tenant_id=tenant_id)
+    return query.filter(model.id == object_id).first()
+
+
+def set_postgres_tenant_context(connection, tenant_id):
+    if (connection.dialect.name or "").lower() != "postgresql":
+        return
+    if tenant_id is None:
+        connection.exec_driver_sql("SELECT set_config('app.current_tenant_id', '', true)")
+    else:
+        connection.exec_driver_sql(
+            "SELECT set_config('app.current_tenant_id', %s, true)",
+            (str(int(tenant_id)),),
+        )
+    try:
+        is_platform_admin = (
+            tenant_id is None
+            and (session.get("role") or "").strip().lower() == PLATFORM_SUPER_ADMIN_ROLE
+        )
+    except RuntimeError:
+        is_platform_admin = False
+    connection.exec_driver_sql(
+        "SELECT set_config('app.is_platform_admin', %s, true)",
+        ("true" if is_platform_admin else "",),
+    )
+
+
 def _normalized_boolish_column(column):
     return db.func.lower(db.func.trim(cast(column, String)))
 
@@ -3772,18 +4881,22 @@ def active_user_by_id(user_id):
 
 def log_login_security_event(*, username="", user=None, outcome="", reason="", is_suspicious=False):
     try:
-        db.session.add(
-            LoginSecurityEvent(
-                username=(username or (user.username if user else "") or "").strip()[:50],
-                user_id=(user.id if user else None),
-                ip_address=current_client_ip(),
-                user_agent=current_user_agent(),
-                outcome=(outcome or "").strip().upper()[:30],
-                reason=(reason or "").strip()[:255],
-                is_suspicious=bool(is_suspicious),
+        event_tenant_id = getattr(user, "tenant_id", None) if user else session.get("tenant_id")
+        scope = tenant_scope_disabled() if not event_tenant_id else tenant_context(event_tenant_id)
+        with scope:
+            db.session.add(
+                LoginSecurityEvent(
+                    tenant_id=event_tenant_id,
+                    username=(username or (user.username if user else "") or "").strip()[:50],
+                    user_id=(user.id if user else None),
+                    ip_address=current_client_ip(),
+                    user_agent=current_user_agent(),
+                    outcome=(outcome or "").strip().upper()[:30],
+                    reason=(reason or "").strip()[:255],
+                    is_suspicious=bool(is_suspicious),
+                )
             )
-        )
-        db.session.commit()
+            db.session.commit()
     except Exception:
         db.session.rollback()
         app.logger.exception("Failed to log login security event")
@@ -4781,22 +5894,44 @@ def upsert_patient_from_invoice(customer_name, mobile, gender=""):
     patient_name = (customer_name or "").strip()
     mobile_digits = normalize_patient_mobile(mobile)
     gender = (gender or "").strip().upper()
+    tenant_id = current_tenant_id()
+
+    if tenant_id is None:
+        raise PermissionError("Tenant context is required to save a patient.")
 
     if not patient_name and not mobile_digits:
         return None, mobile_digits
 
     patient = None
     if mobile_digits:
-        patient = Patient.query.filter_by(mobile=mobile_digits).first()
+        patient = Patient.query.filter_by(
+            tenant_id=tenant_id,
+            mobile=mobile_digits,
+        ).first()
         if not patient:
-            patient = Patient(name=patient_name or mobile_digits, mobile=mobile_digits)
-            db.session.add(patient)
+            patient = Patient(
+                tenant_id=tenant_id,
+                name=patient_name or mobile_digits,
+                mobile=mobile_digits,
+            )
+            try:
+                with db.session.begin_nested():
+                    db.session.add(patient)
+                    db.session.flush()
+            except IntegrityError:
+                patient = Patient.query.filter_by(
+                    tenant_id=tenant_id,
+                    mobile=mobile_digits,
+                ).first()
+                if not patient:
+                    raise
     elif patient_name:
         patient = Patient.query.filter(
+            Patient.tenant_id == tenant_id,
             db.func.lower(Patient.name) == patient_name.lower()
         ).order_by(Patient.id.desc()).first()
         if not patient:
-            patient = Patient(name=patient_name, mobile=None)
+            patient = Patient(tenant_id=tenant_id, name=patient_name, mobile=None)
             db.session.add(patient)
 
     if patient_name:
@@ -4808,13 +5943,17 @@ def upsert_patient_from_invoice(customer_name, mobile, gender=""):
     return patient, mobile_digits
 
 def find_medicine_for_hold(name, batch=""):
+    name = normalize_medicine_name(name)
+    batch = (batch or "").strip()
     if not name:
         return None
     if batch:
-        med = Medicine.query.filter_by(name=name, batch=batch).first()
+        med = find_medicine_by_name_batch(name, batch)
         if med:
             return med
-    return Medicine.query.filter_by(name=name).first()
+    return Medicine.query.filter(
+        build_exact_medicine_name_match_expr(Medicine.name, name)
+    ).order_by(Medicine.id.asc()).first()
 
 def build_hold_rows_from_form(form, include_partial=False):
     rows = []
@@ -5396,6 +6535,12 @@ def build_medicine_master_groups(show_archived=False):
 
 def generate_vendor_note_no(note_type):
     prefix = "VN-DN-" if note_type == "DEBIT" else "VN-CN-"
+    tenant_id = current_tenant_id()
+    if tenant_id and db.engine.dialect.name.lower() == "postgresql":
+        db.session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_scope, :tenant_id)"),
+            {"lock_scope": 74102, "tenant_id": int(tenant_id)},
+        )
     last = VendorNote.query.filter_by(note_type=note_type).order_by(VendorNote.id.desc()).first()
     next_num = 1
     if last and last.note_no and last.note_no.startswith(prefix):
@@ -5490,7 +6635,7 @@ def vendor_note_to_dict(note, include_items=False, include_ledger=False):
         ]
     return data
 
-def get_purchase_items_for_return(med, batch_no=None, reference_purchase_id=None):
+def get_purchase_items_for_return(med, batch_no=None, reference_purchase_id=None, for_update=False):
     query = VendorPurchaseItem.query
     if reference_purchase_id:
         query = query.filter(VendorPurchaseItem.purchase_id == reference_purchase_id)
@@ -5504,10 +6649,29 @@ def get_purchase_items_for_return(med, batch_no=None, reference_purchase_id=None
     )
     if batch_no:
         query = query.filter(VendorPurchaseItem.batch == batch_no)
-    return query.order_by(VendorPurchaseItem.created_at.asc(), VendorPurchaseItem.id.asc()).all()
+    query = query.order_by(VendorPurchaseItem.created_at.asc(), VendorPurchaseItem.id.asc())
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.all()
+
+
+def lock_vendor_purchase_item_for_update(purchase_item_id):
+    return (
+        VendorPurchaseItem.query.filter(VendorPurchaseItem.id == purchase_item_id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
 
 def adjust_vendor_outstanding(vendor_id, delta, return_applied=False):
-    vendor = Vendor.query.get(vendor_id) if vendor_id else None
+    vendor = (
+        Vendor.query.filter(Vendor.id == vendor_id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+        if vendor_id
+        else None
+    )
     if not vendor:
         return Decimal("0")
     before = to_decimal(vendor.outstanding_balance or 0)
@@ -5752,8 +6916,9 @@ def parse_expiry_date(val):
 
 def get_batch_candidates(name):
     today = date.today()
+    normalized_name = normalize_medicine_name(name)
     meds = Medicine.query.filter(
-        Medicine.name == name,
+        build_exact_medicine_name_match_expr(Medicine.name, normalized_name),
         Medicine.qty > 0
     ).all()
     candidates = []
@@ -5821,16 +6986,12 @@ def lock_medicine_for_update(med):
     """
     if med is None or not getattr(med, "id", None):
         return med
-    try:
-        return (
-            Medicine.query.filter(Medicine.id == med.id)
-            .with_for_update()
-            .populate_existing()
-            .first()
-        )
-    except SQLAlchemyError:
-        app.logger.exception("Could not lock medicine row id=%s; using current row", med.id)
-        return med
+    return (
+        Medicine.query.filter(Medicine.id == med.id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
 
 
 def fifo_return(invoice_item_id, qty, fallback_rate):
@@ -6048,7 +7209,7 @@ instance_dir = ensure_writable_dir(
     app.instance_path,
     os.path.join(TMP_BASE_DIR, "instance")
 )
-default_db = "sqlite:///" + os.path.join(instance_dir, "pharmacy.db")
+default_db = "sqlite:///" + os.path.join(APP_BASE_DIR, "instance", "pharmacy.db")
 db_url = resolve_database_url(default_db)
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -6058,6 +7219,162 @@ AUTO_DATA_BACKFILL_ON_BOOT = env_flag("AUTO_DATA_BACKFILL_ON_BOOT", not IS_SERVE
 app.register_blueprint(ai_api_bp)
 app.register_blueprint(ai_admin_bp)
 app.register_blueprint(omnidim_gateway_bp)
+
+
+@event.listens_for(SASession, "do_orm_execute")
+def enforce_tenant_select_criteria(execute_state):
+    if _tenant_scope_disabled.get():
+        return
+    if not execute_state.is_select:
+        return
+    tenant_id = current_tenant_id()
+    if tenant_id is None:
+        return
+    options = [
+        with_loader_criteria(
+            model,
+            lambda cls: cls.tenant_id == tenant_id,
+            include_aliases=True,
+        )
+        for model in tenant_owned_models()
+    ]
+    execute_state.statement = execute_state.statement.options(*options)
+
+
+@event.listens_for(SASession, "before_flush")
+def enforce_tenant_writes(session_obj, _flush_context, _instances):
+    if _tenant_scope_disabled.get():
+        return
+    tenant_id = current_tenant_id()
+    tenant_objects = [
+        obj for obj in set(session_obj.new).union(session_obj.dirty).union(session_obj.deleted)
+        if is_tenant_model(obj)
+    ]
+    tenant_objects = [
+        obj for obj in tenant_objects
+        if not (
+            isinstance(obj, User)
+            and obj.tenant_id is None
+            and (obj.role or "").strip().lower() == PLATFORM_SUPER_ADMIN_ROLE
+        )
+    ]
+    if not tenant_objects:
+        return
+    if tenant_id is None:
+        with tenant_scope_disabled():
+            only_tenant = Tenant.query.order_by(Tenant.id.asc()).first() if Tenant.query.count() == 1 else None
+        if only_tenant:
+            tenant_id = only_tenant.id
+        elif app.config.get("TESTING") and Tenant.query.count() == 0:
+            return
+        else:
+            raise PermissionError("Tenant context is required for tenant-owned writes.")
+
+    for obj in tenant_objects:
+        authorize_tenant_object(obj, tenant_id=tenant_id, action="write")
+
+    for obj in session_obj.new.union(session_obj.dirty):
+        obj_type = obj.__class__
+        for source_model, fk_field, target_model in TENANT_REFERENCE_CHECKS:
+            if obj_type is not source_model:
+                continue
+            ref_id = getattr(obj, fk_field, None)
+            if not ref_id:
+                continue
+            bypass_token = _tenant_scope_disabled.set(True)
+            try:
+                target = session_obj.get(target_model, ref_id)
+            finally:
+                _tenant_scope_disabled.reset(bypass_token)
+            if target is None:
+                target = next(
+                    (
+                        candidate
+                        for candidate in session_obj.new.union(session_obj.dirty)
+                        if isinstance(candidate, target_model)
+                        and getattr(candidate, "id", None) == ref_id
+                    ),
+                    None,
+                )
+            if target is None:
+                raise PermissionError(
+                    f"Invalid or inaccessible tenant reference: "
+                    f"{source_model.__name__}.{fk_field}."
+                )
+            target_tenant_id = getattr(target, "tenant_id", None)
+            if target_tenant_id is None or int(target_tenant_id) != int(tenant_id):
+                raise PermissionError(
+                    f"Cross-tenant or unowned reference blocked: "
+                    f"{source_model.__name__}.{fk_field}."
+                )
+
+
+@event.listens_for(SASession, "after_begin")
+def set_transaction_tenant_context(session_obj, _transaction, connection):
+    set_postgres_tenant_context(connection, current_tenant_id())
+
+
+@app.before_request
+def bind_request_tenant_context():
+    g._tenant_context_token = None
+    tenant_id = session.get("tenant_id")
+    if tenant_id:
+        try:
+            g._tenant_context_token = set_tenant_context(tenant_id)
+        except (TypeError, ValueError):
+            session.clear()
+            return redirect("/login")
+    return None
+
+
+@app.before_request
+def enforce_subscription_access():
+    if request.endpoint in SUBSCRIPTION_MUTATION_ALLOWLIST:
+        return None
+    if not session.get("user_id") or is_super_admin_user():
+        return None
+    tenant_id = session.get("tenant_id")
+    if not tenant_id:
+        return None
+    tenant = Tenant.query.filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        return None
+    refresh_tenant_subscription_status(tenant, commit=True)
+    path = request.path or ""
+    feature_checks = (
+        ("/billing", "pos"),
+        ("/stock-sale", "inventory"),
+        ("/vendor", "inventory"),
+        ("/medicines", "inventory"),
+        ("/reports", "reports"),
+        ("/lab", "lab"),
+        ("/appointment", "appointments"),
+        ("/appointments", "appointments"),
+    )
+    for path_prefix, feature_name in feature_checks:
+        if path.startswith(path_prefix) and not tenant_feature_enabled(feature_name, tenant):
+            flash("This feature is not enabled for the current subscription.", "danger")
+            return redirect(request.referrer or "/")
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    status = (tenant.status or "").strip().lower()
+    if status in {"suspended", "cancelled"}:
+        flash("This pharmacy account is suspended. Data is preserved; changes are blocked.", "danger")
+        return redirect(request.referrer or "/")
+    if status == "expired":
+        endpoint = request.endpoint or ""
+        if any(endpoint.startswith(prefix) for prefix in SUBSCRIPTION_READONLY_ALLOWED_ENDPOINT_PREFIXES):
+            return None
+        flash("Subscription expired. Read-only access is available; renew to make changes.", "warning")
+        return redirect(request.referrer or "/")
+    return None
+
+
+@app.teardown_request
+def clear_request_tenant_context(_exc):
+    token = getattr(g, "_tenant_context_token", None)
+    if token is not None:
+        reset_tenant_context(token)
 
 # ---------------- INIT ----------------
 with app.app_context():
@@ -6077,6 +7394,7 @@ with app.app_context():
     # Safe schema upgrades for return system (no data loss)
     try:
         # User permissions
+        ensure_column("user", "tenant_id", "INTEGER")
         ensure_column("user", "can_view_medicine", "BOOLEAN DEFAULT FALSE")
         ensure_column("user", "can_add_medicine", "BOOLEAN DEFAULT FALSE")
         ensure_column("user", "can_edit_medicine", "BOOLEAN DEFAULT FALSE")
@@ -6105,10 +7423,32 @@ with app.app_context():
         ))
         db.session.execute(text(
             'UPDATE "user" '
-            'SET "is_active" = 1 '
+            'SET "is_active" = :active '
             'WHERE "is_active" IS NULL'
-        ))
+        ), {"active": True})
         db.session.commit()
+
+        # Medicine extra fields
+        tenant_owned_tables = (
+            "medicine", "invoice", "invoice_item", "return_bill", "return_item",
+            "return_lot_allocation", "quarantine_stock", "hold_bill", "pending_bill_store",
+            "patient", "appointment", "lab_test", "lab_order", "lab_order_item",
+            "lab_report", "portal_otp_challenge", "appointment_booking_settings",
+            "public_appointment_booking", "public_appointment_day_lock",
+            "clinic_location", "clinician", "clinic_schedule_rule",
+            "clinic_schedule_exception", "stock_history", "vendor", "vendor_purchase",
+            "vendor_purchase_item", "vendor_notes", "vendor_note_items",
+            "vendor_note_allocations", "vendor_ledger", "sales_allocation", "audit_log",
+            "login_security_event", "voice_call", "voice_call_event", "ai_api_client",
+            "ai_access_token", "ai_api_request_audit", "ai_idempotency_record",
+            "omnidim_gateway_action", "clinic_profile", "appointment_slot_lock",
+            "appointment_slot_block", "appointment_waitlist", "patient_verification_session",
+            "patient_verification_intent", "secure_document_token", "clinic_knowledge_entry",
+            "reception_schedule", "reception_schedule_override", "callback_request",
+            "complaint", "notification_template", "notification_delivery",
+        )
+        for tenant_table in tenant_owned_tables:
+            ensure_column(tenant_table, "tenant_id", "INTEGER")
 
         # Medicine extra fields
         ensure_column("medicine", "medicine_code", "TEXT")
@@ -6192,6 +7532,13 @@ with app.app_context():
         ensure_column("invoice", "print_gst_no", "TEXT")
         ensure_column("invoice", "print_licence_no", "TEXT")
         ensure_column("invoice", "print_logo_path", "TEXT")
+        ensure_column("invoice", "print_pharmacy_name", "TEXT")
+        ensure_column("invoice", "print_legal_business_name", "TEXT")
+        ensure_column("invoice", "print_alternate_mobile", "TEXT")
+        ensure_column("invoice", "print_invoice_header", "TEXT")
+        ensure_column("invoice", "print_invoice_footer", "TEXT")
+        ensure_column("invoice", "print_invoice_terms", "TEXT")
+        ensure_column("invoice", "print_authorized_signatory", "TEXT")
         ensure_column("invoice", "customer_gst_no", "TEXT")
         ensure_column("invoice", "is_cancelled", "BOOLEAN DEFAULT FALSE")
         ensure_column("invoice", "cancelled_at", "TIMESTAMP")
@@ -6281,8 +7628,8 @@ with app.app_context():
             'WHERE "is_split_payment" IS NULL'
         ))
         db.session.commit()
-        backfill_invoice_print_profiles()
-        sync_invoice_print_profiles_to_cutover()
+        run_tenant_scoped_startup_backfill(backfill_invoice_print_profiles)
+        run_tenant_scoped_startup_backfill(sync_invoice_print_profiles_to_cutover)
         if (db.session.bind.dialect.name if db.session.bind else "").lower() == "postgresql":
             legacy_boolean_columns = {
                 "user": {
@@ -6365,24 +7712,24 @@ with app.app_context():
             ))
             db.session.execute(text(
                 'UPDATE "medicine" '
-                'SET "is_active" = 1 '
+                'SET "is_active" = :active '
                 'WHERE "is_active" IS NULL'
-            ))
+            ), {"active": True})
             db.session.execute(text(
                 'UPDATE "appointment" '
-                'SET "is_deleted" = 0 '
+                'SET "is_deleted" = :deleted '
                 'WHERE "is_deleted" IS NULL'
-            ))
+            ), {"deleted": False})
             db.session.execute(text(
                 'UPDATE "hold_bill" '
-                'SET "is_deleted" = 0 '
+                'SET "is_deleted" = :deleted '
                 'WHERE "is_deleted" IS NULL'
-            ))
+            ), {"deleted": False})
             db.session.execute(text(
                 'UPDATE "pending_bill_store" '
-                'SET "is_deleted" = 0 '
+                'SET "is_deleted" = :deleted '
                 'WHERE "is_deleted" IS NULL'
-            ))
+            ), {"deleted": False})
             db.session.commit()
 
             appointments_without_token = Appointment.query.filter(
@@ -6461,70 +7808,112 @@ with app.app_context():
             ))
             db.session.commit()
         ensure_runtime_indexes()
-        persist_medicine_code_sync()
+        run_tenant_scoped_startup_backfill(persist_medicine_code_sync_for_startup_tenant)
         repair_hold_bill_schema_compat()
         repair_pending_bill_store_compat()
-        sync_pending_bill_store()
+        run_tenant_scoped_startup_backfill(sync_pending_bill_store_for_startup_tenant)
     except Exception:
         # If schema upgrade fails, app should still run, but the failure must be
         # visible in logs: a missing column breaks billing later in confusing ways.
         db.session.rollback()
         app.logger.exception("Boot-time schema upgrade failed; run 'flask db upgrade' to add missing columns")
     try:
-        backfill_medicine_gst_from_purchases()
+        run_tenant_scoped_startup_backfill(backfill_medicine_gst_from_purchases)
     except Exception:
         db.session.rollback()
         app.logger.exception("Medicine GST backfill failed; medicines without a rate use DEFAULT_GST_PERCENT")
-    if not active_user_query().filter_by(username="admin").first():
-        bootstrap_admin_password = (
-            (os.environ.get("DEFAULT_ADMIN_PASSWORD") or "").strip()
-            or (os.environ.get("ADMIN_PASSWORD") or "").strip()
-        )
-        if not bootstrap_admin_password and not IS_PROD:
-            bootstrap_admin_password = secrets.token_urlsafe(12)
+    try:
+        ensure_default_tenant_for_legacy_users()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Default tenant bootstrap failed")
+    with tenant_scope_disabled():
+        bootstrap_tenant = Tenant.query.filter_by(tenant_code="default").first()
+    if bootstrap_tenant:
+        with tenant_context(bootstrap_tenant.id):
+            if not active_user_query().filter_by(username="admin").first():
+                bootstrap_admin_password = (
+                    (os.environ.get("DEFAULT_ADMIN_PASSWORD") or "").strip()
+                    or (os.environ.get("ADMIN_PASSWORD") or "").strip()
+                )
+                if bootstrap_admin_password:
+                    admin = User(
+                        tenant_id=bootstrap_tenant.id,
+                        username="admin",
+                        role="admin",
+                        access_profile="admin",
+                        can_view_medicine=True,
+                        can_add_medicine=True,
+                        can_edit_medicine=True,
+                        can_delete_medicine=True,
+                        can_edit_invoice=True,
+                        can_delete_invoice=True,
+                        can_invoice_action=True,
+                        can_view_stock_history=True,
+                        can_view_reports=True,
+                        can_manage_users=True,
+                        can_manage_purchases=True,
+                        can_view_audit_logs=True,
+                        can_view_profit_dashboard=True
+                    )
+                    admin.set_password(bootstrap_admin_password)
+                    db.session.add(admin)
+                    db.session.commit()
+                else:
+                    app.logger.warning(
+                        "Admin bootstrap skipped because DEFAULT_ADMIN_PASSWORD/ADMIN_PASSWORD is not set."
+                    )
+    else:
+        if (os.environ.get("DEFAULT_ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD")):
             app.logger.warning(
-                "Generated a local bootstrap admin password because DEFAULT_ADMIN_PASSWORD is missing: %s",
-                bootstrap_admin_password
+                "Admin bootstrap skipped because the default pharmacy tenant is not available."
             )
-        if bootstrap_admin_password:
-            admin = User(
-                username="admin",
-                role="admin",
-                access_profile="admin",
-                can_view_medicine=True,
-                can_add_medicine=True,
-                can_edit_medicine=True,
-                can_delete_medicine=True,
-                can_edit_invoice=True,
-                can_delete_invoice=True,
-                can_invoice_action=True,
-                can_view_stock_history=True,
-                can_view_reports=True,
-                can_manage_users=True,
-                can_manage_purchases=True,
-                can_view_audit_logs=True,
-                can_view_profit_dashboard=True
-            )
-            admin.set_password(bootstrap_admin_password)
-            db.session.add(admin)
-            db.session.commit()
-        else:
-            app.logger.warning(
-                "Admin bootstrap skipped because DEFAULT_ADMIN_PASSWORD/ADMIN_PASSWORD is not set."
-            )
+    super_admin_username = (os.environ.get("SUPER_ADMIN_USERNAME") or "").strip()
+    super_admin_password = (os.environ.get("SUPER_ADMIN_PASSWORD") or "").strip()
+    if super_admin_username and super_admin_password:
+        with tenant_context(None):
+            existing_super_admin = active_user_query().filter(
+                User.tenant_id.is_(None),
+                db.func.lower(User.username) == super_admin_username.lower(),
+            ).first()
+            if not existing_super_admin:
+                platform_owner = User(
+                    tenant_id=None,
+                    username=super_admin_username,
+                    role=PLATFORM_SUPER_ADMIN_ROLE,
+                    access_profile="platform_owner",
+                    can_manage_users=True,
+                    can_view_reports=True,
+                    can_view_audit_logs=True,
+                )
+                platform_owner.set_password(super_admin_password)
+                db.session.add(platform_owner)
+                db.session.commit()
 
 configure_monitoring(app, db, env_flag=env_flag)
+app.extensions["tenant_context"] = tenant_context
+app.extensions["tenant_scope_disabled"] = tenant_scope_disabled
+app.extensions["current_tenant_id"] = current_tenant_id
 background_jobs = init_background_jobs(
     app,
     enabled=env_flag("ENABLE_BACKGROUND_JOBS", IS_PROD and not IS_SERVERLESS)
 )
 
 # ---------------- AUTH DECORATOR ----------------
-def set_login_session(user):
+def set_login_session(user, tenant=None):
     session.clear()
     session.permanent = True
     now_iso = datetime.utcnow().isoformat()
+    resolved_tenant = tenant or getattr(user, "tenant", None)
     session["user_id"] = user.id
+    session["tenant_id"] = None if is_super_admin_user(user) else (getattr(resolved_tenant, "id", None) or getattr(user, "tenant_id", None))
+    session["tenant_uid"] = getattr(resolved_tenant, "tenant_uid", "") or ""
+    session["tenant_code"] = getattr(resolved_tenant, "tenant_code", "") or ""
+    session["tenant_name"] = getattr(resolved_tenant, "pharmacy_name", "") or ""
+    business_identity = tenant_business_identity(resolved_tenant)
+    session["tenant_logo_path"] = business_identity.get("logo_path", "")
+    session["tenant_logo_width_mm"] = business_identity.get("logo_width_mm", 44)
+    session["tenant_logo_height_mm"] = business_identity.get("logo_height_mm", 21)
     session["session_version"] = int(user.session_version or 0)
     session["username"] = user.username
     session["role"] = user.role
@@ -6555,6 +7944,55 @@ def login_required(f):
         user = active_user_by_id(user_id)
         if not user:
             session.clear()
+            return redirect("/login")
+        if is_super_admin_user(user):
+            now_utc = datetime.utcnow()
+            last_seen_raw = (session.get("last_seen_at") or "").strip()
+            if last_seen_raw:
+                try:
+                    last_seen_at = datetime.fromisoformat(last_seen_raw)
+                except ValueError:
+                    last_seen_at = None
+                if last_seen_at and (now_utc - last_seen_at) > timedelta(minutes=session_idle_minutes):
+                    session.clear()
+                    flash("Your session expired due to inactivity. Please login again.", "warning")
+                    return redirect("/login")
+            if int(session.get("session_version", 0)) != int(user.session_version or 0):
+                session.clear()
+                flash("You have been logged out from all devices. Please login again.", "warning")
+                return redirect("/login")
+            g.user = user
+            g.tenant = None
+            session["last_seen_at"] = now_utc.isoformat()
+            return f(*args, **kwargs)
+        tenant = Tenant.query.filter(Tenant.id == user.tenant_id).first() if getattr(user, "tenant_id", None) else None
+        if not tenant:
+            tenant = ensure_default_tenant_for_legacy_users()
+            if tenant and not getattr(user, "tenant_id", None):
+                user.tenant_id = tenant.id
+                db.session.commit()
+        if not tenant or session.get("tenant_id") != tenant.id:
+            log_login_security_event(
+                username=user.username,
+                user=user,
+                outcome="SESSION_REVOKED",
+                reason="Tenant membership changed",
+                is_suspicious=True,
+            )
+            session.clear()
+            flash("Your tenant access changed. Please login again.", "warning")
+            return redirect("/login")
+        refresh_tenant_subscription_status(tenant, commit=True)
+        if not tenant_login_allowed(tenant):
+            log_login_security_event(
+                username=user.username,
+                user=user,
+                outcome="SESSION_REVOKED",
+                reason=f"Tenant status is {tenant.status}",
+                is_suspicious=False,
+            )
+            session.clear()
+            flash("This pharmacy account is not active. Please contact support.", "danger")
             return redirect("/login")
         now_utc = datetime.utcnow()
         last_seen_raw = (session.get("last_seen_at") or "").strip()
@@ -6603,7 +8041,20 @@ def login_required(f):
             session.clear()
             flash("You have been logged out from all devices. Please login again.", "warning")
             return redirect("/login")
+        device_error = validate_tenant_session_device(tenant)
+        if device_error:
+            log_login_security_event(
+                username=user.username,
+                user=user,
+                outcome="SESSION_REVOKED",
+                reason="Unapproved tenant computer",
+                is_suspicious=True,
+            )
+            session.clear()
+            flash(device_error, "danger")
+            return redirect("/login")
         g.user = user
+        g.tenant = tenant
         session["last_seen_at"] = now_utc.isoformat()
         return f(*args, **kwargs)
     return w
@@ -6659,12 +8110,102 @@ def login():
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
+        tenant_identifier = (request.form.get("tenant") or request.form.get("tenant_code") or "").strip()
         if not username or not password:
             flash("Username and password are required", "danger")
             return render_template("login.html")
         normalized_username = username.lower()
-        user = active_user_query().filter(db.func.lower(User.username) == normalized_username).first()
+        platform_user = None
+        if not tenant_identifier:
+            with tenant_scope_disabled():
+                platform_user = active_user_query().filter(
+                    User.tenant_id.is_(None),
+                    db.func.lower(User.username) == normalized_username,
+                    db.func.lower(User.role) == PLATFORM_SUPER_ADMIN_ROLE,
+                ).first()
+            if platform_user and platform_user.check_password(password):
+                platform_user.last_login_at = datetime.utcnow()
+                platform_user.last_login_ip = current_client_ip()
+                platform_user.last_login_user_agent = current_user_agent()
+                db.session.commit()
+                set_login_session(platform_user, None)
+                log_login_security_event(
+                    username=platform_user.username,
+                    user=platform_user,
+                    outcome="SUCCESS",
+                    reason="Platform owner login successful",
+                    is_suspicious=False,
+                )
+                return redirect("/super-admin")
+        try:
+            ensure_default_tenant_for_legacy_users()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to prepare tenant context during login")
+        login_tenant = tenant_from_identifier(tenant_identifier) if tenant_identifier else None
+        if tenant_identifier and not login_tenant:
+            log_login_security_event(
+                username=username,
+                outcome="FAILED",
+                reason="Unknown tenant identifier",
+                is_suspicious=True,
+            )
+            flash("Invalid credentials", "danger")
+            return render_template("login.html")
+        if not login_tenant:
+            tenant_count = Tenant.query.count()
+            if tenant_count > 1:
+                log_login_security_event(
+                    username=username,
+                    outcome="FAILED",
+                    reason="Tenant identifier required",
+                    is_suspicious=True,
+                )
+                flash("Please enter your pharmacy tenant code.", "danger")
+                return render_template("login.html")
+            if tenant_count == 1:
+                login_tenant = Tenant.query.order_by(Tenant.id.asc()).first()
+        if login_tenant:
+            with tenant_context(login_tenant.id):
+                user = active_user_query().filter(db.func.lower(User.username) == normalized_username).first()
+        else:
+            user = active_user_query().filter(db.func.lower(User.username) == normalized_username).first()
         if user and user.check_password(password):
+            tenant = Tenant.query.filter(Tenant.id == user.tenant_id).first() if getattr(user, "tenant_id", None) else None
+            if login_tenant:
+                if not tenant or login_tenant.id != tenant.id:
+                    log_login_security_event(
+                        username=user.username,
+                        user=user,
+                        outcome="FAILED",
+                        reason="Tenant membership verification failed",
+                        is_suspicious=True,
+                    )
+                    flash("Invalid credentials", "danger")
+                    return render_template("login.html")
+            elif not tenant:
+                tenant = ensure_default_tenant_for_legacy_users()
+                user = active_user_query().filter(User.id == user.id).first()
+            if not tenant:
+                log_login_security_event(
+                    username=user.username,
+                    user=user,
+                    outcome="FAILED",
+                    reason="User is not linked to a tenant",
+                    is_suspicious=True,
+                )
+                flash("Your user is not linked to a pharmacy account. Please contact an administrator.", "danger")
+                return render_template("login.html")
+            if not tenant_login_allowed(tenant):
+                log_login_security_event(
+                    username=user.username,
+                    user=user,
+                    outcome="FAILED",
+                    reason=f"Tenant status is {tenant.status}",
+                    is_suspicious=False,
+                )
+                flash("This pharmacy account is not active. Please contact support.", "danger")
+                return render_template("login.html")
             suspicious_reason = "Login successful"
             suspicious = False
             request_ip = current_client_ip()
@@ -6675,22 +8216,41 @@ def login():
             elif user.last_login_user_agent and user.last_login_user_agent != request_agent:
                 suspicious = True
                 suspicious_reason = "Successful login from a new device signature"
-            user.last_login_at = datetime.utcnow()
-            user.last_login_ip = request_ip
-            user.last_login_user_agent = request_agent
-            db.session.commit()
-            set_login_session(user)
-            log_login_security_event(
-                username=user.username,
-                user=user,
-                outcome="SUCCESS",
-                reason=suspicious_reason,
-                is_suspicious=suspicious,
-            )
-            return redirect("/")
+            with tenant_context(tenant.id):
+                device_id, device_error = authorize_tenant_device_for_login(tenant, user.username)
+                if device_error:
+                    db.session.rollback()
+                    log_login_security_event(
+                        username=user.username,
+                        user=user,
+                        outcome="FAILED",
+                        reason="Tenant computer limit reached",
+                        is_suspicious=True,
+                    )
+                    flash(device_error, "danger")
+                    return render_template("login.html")
+                user.last_login_at = datetime.utcnow()
+                user.last_login_ip = request_ip
+                user.last_login_user_agent = request_agent
+                db.session.commit()
+                set_login_session(user, tenant)
+                log_login_security_event(
+                    username=user.username,
+                    user=user,
+                    outcome="SUCCESS",
+                    reason=suspicious_reason,
+                    is_suspicious=suspicious,
+                )
+            response = redirect("/")
+            set_tenant_device_cookie(response, device_id)
+            return response
         suspicious_threshold = max(3, int(str(os.environ.get("SUSPICIOUS_LOGIN_THRESHOLD", "5")).strip() or 5))
         failed_attempts = failed_login_attempts_recent(username, current_client_ip())
-        known_user = User.query.filter(db.func.lower(User.username) == normalized_username).first()
+        if login_tenant:
+            with tenant_context(login_tenant.id):
+                known_user = User.query.filter(db.func.lower(User.username) == normalized_username).first()
+        else:
+            known_user = User.query.filter(db.func.lower(User.username) == normalized_username).first()
         disabled_attempt = bool(known_user and (known_user.deleted_at is not None or not getattr(known_user, "is_active", True)))
         suspicious = disabled_attempt or (failed_attempts + 1 >= suspicious_threshold)
         failure_reason = "Attempted login to disabled user" if disabled_attempt else "Invalid credentials"
@@ -6769,6 +8329,19 @@ def admin_required(f):
         if session.get("role") != "admin" and not session.get("can_manage_users"):
             flash("Access denied", "danger")
             return redirect("/")
+        return f(*args, **kwargs)
+    return w
+
+
+def super_admin_required(f):
+    @wraps(f)
+    def w(*args, **kwargs):
+        user = active_user_by_id(session.get("user_id"))
+        if not user or not is_super_admin_user(user):
+            flash("Super admin access required", "danger")
+            return redirect("/" if session.get("user_id") else "/login")
+        g.user = user
+        g.tenant = None
         return f(*args, **kwargs)
     return w
 
@@ -6852,7 +8425,7 @@ def vendor_note_access_required(api=False):
 
 @app.route("/system-center")
 @login_required
-@admin_required
+@super_admin_required
 def system_center():
     health = run_system_health_checks(include_counts=True)
     return render_template(
@@ -6874,7 +8447,7 @@ def system_center():
 
 @app.route("/system-center/backups/run", methods=["POST"])
 @login_required
-@admin_required
+@super_admin_required
 def run_backup_snapshot_now():
     snapshot = build_backup_snapshot(
         app,
@@ -6888,7 +8461,7 @@ def run_backup_snapshot_now():
 
 @app.route("/system-center/backups/restore-drill", methods=["POST"])
 @login_required
-@admin_required
+@super_admin_required
 def run_restore_drill():
     snapshot_name = (request.form.get("snapshot_name") or "latest").strip() or "latest"
     try:
@@ -6915,6 +8488,7 @@ def index():
     show_profit_cards = bool(
         session.get("role") == "admin" or session.get("can_view_profit_dashboard")
     )
+    business_identity = tenant_business_identity(current_tenant())
     # ---------- TODAY SALE ----------
     today = clinic_now().date()
     today_iso = today.isoformat()
@@ -7024,7 +8598,12 @@ def index():
         dead_stock_items=dead_stock_items,
         today_profit=today_profit,
         month_profit=month_profit,
-        show_profit_cards=show_profit_cards
+        show_profit_cards=show_profit_cards,
+        business_identity=business_identity,
+        business_profile_complete=bool(
+            business_identity.get("pharmacy_name")
+            and business_identity.get("address_line_1")
+        ),
     )
 @app.route("/low-stock")
 @login_required
@@ -7289,12 +8868,17 @@ def quarantine_stock():
 @login_required
 @admin_only
 def quarantine_restock(qid):
-    row = QuarantineStock.query.get_or_404(qid)
+    row = (
+        QuarantineStock.query.filter(QuarantineStock.id == qid)
+        .with_for_update()
+        .populate_existing()
+        .first_or_404()
+    )
     if (row.status or "").upper() != "PENDING":
         flash("This item is already resolved.", "info")
         return redirect("/quarantine-stock")
     med = Medicine.query.get(row.medicine_id) if row.medicine_id else None
-    if not med:
+    if not row.medicine_id:
         med = Medicine.query.filter_by(name=row.medicine_name, batch=row.batch).first()
     if not med:
         flash("Medicine batch not found in master.", "danger")
@@ -7337,7 +8921,12 @@ def quarantine_restock(qid):
 @login_required
 @admin_only
 def quarantine_write_off(qid):
-    row = QuarantineStock.query.get_or_404(qid)
+    row = (
+        QuarantineStock.query.filter(QuarantineStock.id == qid)
+        .with_for_update()
+        .populate_existing()
+        .first_or_404()
+    )
     if (row.status or "").upper() != "PENDING":
         flash("This item is already resolved.", "info")
         return redirect("/quarantine-stock")
@@ -7480,6 +9069,7 @@ def gst_report():
         def rate_rows(rows):
             return [[f'{row["key"]}%', row["qty"], row["taxable"], row["cgst"], row["sgst"], row["total"]] for row in rows]
         headers = ["GST Rate", "Qty", "Taxable Value", "CGST", "SGST", "Total"]
+        identity = tenant_business_identity(current_tenant())
         return excel_response(
             [
                 ("Sales (Outward)", headers, rate_rows(data["sales"])),
@@ -7490,10 +9080,25 @@ def gst_report():
                     ["Input GST (purchases)", data["input_tax"]],
                     ["Net GST payable (estimate)", data["net_tax"]],
                 ]),
+                ("Business Profile", ["Field", "Value"], [
+                    ["Pharmacy Name", identity["pharmacy_name"]],
+                    ["Legal Business Name", identity["legal_business_name"]],
+                    ["Address", ", ".join(value for value in (identity["address_line_1"], identity["address_line_2"]) if value)],
+                    ["GSTIN", identity["gst_no"]],
+                    ["Drug License", identity["licence_no"]],
+                    ["Contact", identity["mobile"]],
+                    ["Email", identity["email"]],
+                ]),
             ],
             f"GST_Summary_{start_date.isoformat()}_{end_date.isoformat()}.xlsx",
         )
-    return render_template("gst_report.html", data=data, start_date=start_date, end_date=end_date)
+    return render_template(
+        "gst_report.html",
+        data=data,
+        start_date=start_date,
+        end_date=end_date,
+        business_identity=tenant_business_identity(current_tenant()),
+    )
 
 
 # ---------------- SCHEDULE H1 / X REGISTER ----------------
@@ -8403,7 +10008,7 @@ def billing():
             allocations = []
 
             if batch_override:
-                med = Medicine.query.filter_by(name=name, batch=batch_override).first()
+                med = find_medicine_by_name_batch(name, batch_override)
                 if not med:
                     db.session.rollback()
                     flash(f"Batch not found for {name}", "danger")
@@ -8629,7 +10234,7 @@ def billing():
                 )
                 db.session.add(ret)
                 db.session.flush()
-                ret.return_no = f"RB-{ret.id:06d}"
+                assign_return_number(ret)
 
                 for row in exchange_return_requests:
                     item = row["item"]
@@ -8748,12 +10353,13 @@ def billing():
             flash("Return credit note generated. Stock updated.", "success")
             return redirect(f"/return-invoice/{ret.id}")
 
+        invoice_payment_breakdown = build_invoice_payment_breakdown(inv, collectable_amount)
         return render_template(
             "invoice.html",
             inv=inv,
             auto_print=request.form.get("auto_print") == "1",
             print_profile=resolve_invoice_print_profile(inv),
-            payment_breakdown=payment_breakdown,
+            payment_breakdown=invoice_payment_breakdown,
             cart=cart,
             exchange_return_bill=ret,
             exchange_return_items=exchange_return_requests,
@@ -9321,6 +10927,7 @@ def staff_download_lab_report(report_id):
     storage_key, file_path = private_lab_report_path(report.storage_key)
     if not storage_key or not os.path.isfile(file_path):
         abort(404)
+    report_dir = os.path.dirname(file_path)
 
     record_audit_event(
         action="Downloaded lab report (staff)",
@@ -9330,7 +10937,7 @@ def staff_download_lab_report(report_id):
         after=build_lab_report_audit_snapshot(report),
     )
     response = send_from_directory(
-        LAB_REPORT_UPLOAD_FOLDER,
+        report_dir,
         storage_key,
         as_attachment=True,
         download_name=lab_report_download_name(report),
@@ -9425,6 +11032,7 @@ def revoke_lab_report(report_id):
 @app.route("/my-lab-reports")
 def patient_report_portal():
     """Entry point for the public, OTP-protected report portal."""
+    resolve_public_portal_tenant_id()
     session.pop("pending_lab_report_mobile", None)
     session.pop("lab_report_portal", None)
     session.modified = True
@@ -9433,6 +11041,10 @@ def patient_report_portal():
 
 @app.route("/my-lab-reports/send-otp", methods=["POST"])
 def send_patient_report_otp():
+    portal_tenant_id = resolve_public_portal_tenant_id()
+    if not portal_tenant_id:
+        flash("Please open the report link for your pharmacy before requesting an OTP.", "warning")
+        return redirect(url_for("patient_report_portal"))
     mobile = normalize_public_report_mobile(request.form.get("mobile"))
     session.pop("pending_lab_report_mobile", None)
     session.pop("lab_report_portal", None)
@@ -9444,21 +11056,23 @@ def send_patient_report_otp():
     # Limit one IP from using this endpoint to send bulk OTP messages.  Per-mobile
     # resend and expiry limits are also enforced by create_portal_otp_challenge.
     recent_window = datetime.utcnow() - timedelta(minutes=PUBLIC_PORTAL_OTP_WINDOW_MINUTES)
-    recent_ip_requests = PortalOtpChallenge.query.filter(
-        PortalOtpChallenge.purpose == "LAB_REPORTS",
-        PortalOtpChallenge.request_ip == portal_request_ip(),
-        PortalOtpChallenge.sent_at >= recent_window,
-    ).count()
+    with tenant_context(portal_tenant_id):
+        recent_ip_requests = PortalOtpChallenge.query.filter(
+            PortalOtpChallenge.purpose == "LAB_REPORTS",
+            PortalOtpChallenge.request_ip == portal_request_ip(),
+            PortalOtpChallenge.sent_at >= recent_window,
+        ).count()
     if recent_ip_requests >= 10:
         flash("Too many verification requests from this connection. Please try again later.", "danger")
         return redirect(url_for("patient_report_portal"))
 
     # Always issue a challenge for a valid mobile. This prevents the endpoint
     # from revealing whether a number has a report before its owner verifies it.
-    _, _, delivery_error = create_portal_otp_challenge(
-        mobile=mobile,
-        purpose="LAB_REPORTS",
-    )
+    with tenant_context(portal_tenant_id):
+        _, _, delivery_error = create_portal_otp_challenge(
+            mobile=mobile,
+            purpose="LAB_REPORTS",
+        )
     if delivery_error:
         flash(delivery_error, "danger")
         return redirect(url_for("patient_report_portal"))
@@ -9473,6 +11087,10 @@ def send_patient_report_otp():
 
 @app.route("/my-lab-reports/verify-otp", methods=["GET", "POST"])
 def verify_patient_report_otp():
+    portal_tenant_id = resolve_public_portal_tenant_id()
+    if not portal_tenant_id:
+        flash("Please open the report link for your pharmacy before verifying an OTP.", "warning")
+        return redirect(url_for("patient_report_portal"))
     mobile = normalize_public_report_mobile(session.get("pending_lab_report_mobile"))
     if not mobile:
         flash("Start with your registered mobile number to request a verification code.", "warning")
@@ -9481,23 +11099,25 @@ def verify_patient_report_otp():
     if request.method == "GET":
         return render_template("patient_report_verify.html", mobile_masked=mask_mobile(mobile))
 
-    challenge, verification_error = verify_portal_otp_challenge(
-        mobile=mobile,
-        purpose="LAB_REPORTS",
-        otp_code=request.form.get("otp"),
-    )
+    with tenant_context(portal_tenant_id):
+        challenge, verification_error = verify_portal_otp_challenge(
+            mobile=mobile,
+            purpose="LAB_REPORTS",
+            otp_code=request.form.get("otp"),
+        )
     if verification_error:
         flash(verification_error, "danger")
         return render_template("patient_report_verify.html", mobile_masked=mask_mobile(mobile)), 400
 
     # Mark this one-time code consumed. The verified session has its own short TTL.
     if challenge:
-        challenge.used_at = datetime.utcnow()
-        try:
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            app.logger.warning("Unable to record OTP consumption for lab report portal")
+        with tenant_context(portal_tenant_id):
+            challenge.used_at = datetime.utcnow()
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                app.logger.warning("Unable to record OTP consumption for lab report portal")
     set_public_portal_session("lab_report_portal", mobile)
     session.pop("pending_lab_report_mobile", None)
     session.modified = True
@@ -9506,23 +11126,29 @@ def verify_patient_report_otp():
 
 @app.route("/my-lab-reports/list")
 def patient_report_list():
+    portal_tenant_id = resolve_public_portal_tenant_id()
+    if not portal_tenant_id:
+        flash("Please open the report link for your pharmacy before viewing reports.", "warning")
+        return redirect(url_for("patient_report_portal"))
     mobile = normalize_public_report_mobile(get_public_portal_session_mobile("lab_report_portal"))
     if not mobile:
         flash("Please verify your mobile number before viewing reports.", "warning")
         return redirect(url_for("patient_report_portal"))
 
-    reports = LabReport.query.filter(
-        LabReport.mobile == mobile,
-        LabReport.status == "PUBLISHED",
-    ).order_by(
-        LabReport.report_date.desc(), LabReport.uploaded_at.desc(), LabReport.id.desc()
-    ).all()
+    with tenant_context(portal_tenant_id):
+        reports = LabReport.query.filter(
+            LabReport.mobile == mobile,
+            LabReport.status == "PUBLISHED",
+        ).order_by(
+            LabReport.report_date.desc(), LabReport.uploaded_at.desc(), LabReport.id.desc()
+        ).all()
     if reports:
-        order_numbers = dict(
-            db.session.query(LabOrder.id, LabOrder.order_no)
-            .filter(LabOrder.id.in_([report.lab_order_id for report in reports]))
-            .all()
-        )
+        with tenant_context(portal_tenant_id):
+            order_numbers = dict(
+                db.session.query(LabOrder.id, LabOrder.order_no)
+                .filter(LabOrder.id.in_([report.lab_order_id for report in reports]))
+                .all()
+            )
         for report in reports:
             report.order_no = order_numbers.get(report.lab_order_id) or f"LAB-{report.lab_order_id:06d}"
 
@@ -9537,6 +11163,10 @@ def patient_report_list():
 
 @app.route("/my-lab-reports/<int:report_id>/download")
 def download_patient_lab_report(report_id):
+    portal_tenant_id = resolve_public_portal_tenant_id()
+    if not portal_tenant_id:
+        flash("Please open the report link for your pharmacy before downloading a report.", "warning")
+        return redirect(url_for("patient_report_portal"))
     mobile = normalize_public_report_mobile(get_public_portal_session_mobile("lab_report_portal"))
     if not mobile:
         flash("Please verify your mobile number before downloading a report.", "warning")
@@ -9544,37 +11174,40 @@ def download_patient_lab_report(report_id):
 
     # Filter by both verified mobile and published status so a guessed report ID
     # cannot disclose whether any other patient's record exists.
-    report = LabReport.query.filter(
-        LabReport.id == report_id,
-        LabReport.mobile == mobile,
-        LabReport.status == "PUBLISHED",
-    ).first()
+    with tenant_context(portal_tenant_id):
+        report = LabReport.query.filter(
+            LabReport.id == report_id,
+            LabReport.mobile == mobile,
+            LabReport.status == "PUBLISHED",
+        ).first()
     if not report:
         abort(404)
-    storage_key, file_path = private_lab_report_path(report.storage_key)
-    if not storage_key or not os.path.isfile(file_path):
-        abort(404)
+    with tenant_context(portal_tenant_id):
+        storage_key, file_path = private_lab_report_path(report.storage_key)
+        if not storage_key or not os.path.isfile(file_path):
+            abort(404)
+        report_dir = os.path.dirname(file_path)
 
-    before_snapshot = build_lab_report_audit_snapshot(report)
-    report.download_count = to_int_safe(report.download_count, 0) + 1
-    report.last_downloaded_at = datetime.utcnow()
-    try:
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Unable to record download for lab report %s", report.id)
+        before_snapshot = build_lab_report_audit_snapshot(report)
+        report.download_count = to_int_safe(report.download_count, 0) + 1
+        report.last_downloaded_at = datetime.utcnow()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Unable to record download for lab report %s", report.id)
 
-    record_audit_event(
-        action="Downloaded lab report (patient portal)",
-        entity_type="LAB_REPORT",
-        entity_id=report.id,
-        ref_code=str(report.lab_order_id),
-        before=before_snapshot,
-        after=build_lab_report_audit_snapshot(report),
-        extra={"verified_mobile": mask_mobile(mobile)},
-    )
+        record_audit_event(
+            action="Downloaded lab report (patient portal)",
+            entity_type="LAB_REPORT",
+            entity_id=report.id,
+            ref_code=str(report.lab_order_id),
+            before=before_snapshot,
+            after=build_lab_report_audit_snapshot(report),
+            extra={"verified_mobile": mask_mobile(mobile)},
+        )
     response = send_from_directory(
-        LAB_REPORT_UPLOAD_FOLDER,
+        report_dir,
         storage_key,
         as_attachment=True,
         download_name=lab_report_download_name(report),
@@ -9767,7 +11400,7 @@ def return_medicine():
                 )
                 db.session.add(ret)
                 db.session.flush()
-                ret.return_no = f"RB-{ret.id:06d}"
+                assign_return_number(ret)
 
                 for item in line_items:
                     med = item["med"]
@@ -9841,7 +11474,12 @@ def return_medicine():
             flash("Please enter invoice number", "danger")
             return redirect("/return-medicine")
 
-        invoice = Invoice.query.filter_by(invoice_no=invoice_no).first()
+        invoice = (
+            Invoice.query.filter_by(invoice_no=invoice_no)
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
         if not invoice:
             flash("Invoice not found", "danger")
             return redirect(f"/return-medicine?invoice_no={invoice_no}")
@@ -9898,7 +11536,7 @@ def return_medicine():
             )
             db.session.add(ret)
             db.session.flush()
-            ret.return_no = f"RB-{ret.id:06d}"
+            assign_return_number(ret)
 
             subtotal_return = 0
             total_cgst = 0
@@ -10250,7 +11888,12 @@ def delete_hold(id):
 @login_required
 @invoice_access_required
 def delete_return_bill(id):
-    ret = Return.query.get_or_404(id)
+    ret = (
+        Return.query.filter(Return.id == id)
+        .with_for_update()
+        .populate_existing()
+        .first_or_404()
+    )
     if ret.is_cancelled:
         flash("Return bill already cancelled.", "info")
         return redirect("/return-bills")
@@ -10288,55 +11931,68 @@ def delete_return_bill(id):
             "qty": required_stock.get(med.id, {}).get("qty", 0) + to_int(it.qty)
         }
 
-    for entry in required_stock.values():
-        med = entry["med"]
-        if to_int(med.qty) < entry["qty"]:
-            flash(
-                f"Cannot cancel: stock for {med.name} ({med.batch}) is less than total return qty.",
-                "danger"
-            )
-            return redirect("/return-bills")
+    try:
+        for entry in sorted(required_stock.values(), key=lambda row: row["med"].id):
+            entry["med"] = lock_medicine_for_update(entry["med"])
+            med = entry["med"]
+            if med is None or to_int(med.qty) < entry["qty"]:
+                db.session.rollback()
+                flash(
+                    "Cannot cancel: available stock changed or is less than the return quantity.",
+                    "danger"
+                )
+                return redirect("/return-bills")
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to lock stock while cancelling return id=%s", id)
+        flash("Return bill could not be cancelled. No stock was changed.", "danger")
+        return redirect("/return-bills")
 
-    for it in items:
-        quarantine = quarantine_by_item.get(it.id)
-        if not stock_was_added(it):
-            # Units never entered sellable stock: just close the quarantine record.
-            if quarantine and (quarantine.status or "").upper() == "PENDING":
+    try:
+        for it in items:
+            quarantine = quarantine_by_item.get(it.id)
+            if not stock_was_added(it):
+                if quarantine and (quarantine.status or "").upper() == "PENDING":
+                    quarantine.status = "CANCELLED"
+                    quarantine.resolved_by = session.get("username")
+                    quarantine.resolved_at = datetime.utcnow()
+                continue
+            med = item_medicines.get(it.id)
+            if not med:
+                continue
+            if it.invoice_item_id:
+                fallback_rate = it.cost_price or it.selling_rate or it.price or 0
+                fifo_cancel_return(it.invoice_item_id, it.qty, fallback_rate)
+            else:
+                reverse_manual_return_lots(it.id)
+            old_stock = med.qty
+            med.qty -= it.qty
+            history = StockHistory(
+                medicine_id=med.id,
+                medicine_name=med.name,
+                batch=med.batch,
+                action="RETURN_CANCEL",
+                stock_before=old_stock,
+                qty_change=-it.qty,
+                stock_after=med.qty,
+                user=session.get("username"),
+                remark=f"Return Bill cancelled {ret.return_no or f'RB-{ret.id:06d}'}"
+            )
+            db.session.add(history)
+            if quarantine:
                 quarantine.status = "CANCELLED"
                 quarantine.resolved_by = session.get("username")
                 quarantine.resolved_at = datetime.utcnow()
-            continue
-        med = item_medicines.get(it.id)
-        if not med:
-            continue
-        if it.invoice_item_id:
-            fallback_rate = it.cost_price or it.selling_rate or it.price or 0
-            fifo_cancel_return(it.invoice_item_id, it.qty, fallback_rate)
-        else:
-            reverse_manual_return_lots(it.id)
-        old_stock = med.qty
-        med.qty -= it.qty
-        history = StockHistory(
-            medicine_id=med.id,
-            medicine_name=med.name,
-            batch=med.batch,
-            action="RETURN_CANCEL",
-            stock_before=old_stock,
-            qty_change=-it.qty,
-            stock_after=med.qty,
-            user=session.get("username"),
-            remark=f"Return Bill cancelled {ret.return_no or f'RB-{ret.id:06d}'}"
-        )
-        db.session.add(history)
-        if quarantine:
-            quarantine.status = "CANCELLED"
-            quarantine.resolved_by = session.get("username")
-            quarantine.resolved_at = datetime.utcnow()
 
-    ret.is_cancelled = True
-    ret.cancelled_by = session.get("username")
-    ret.cancelled_at = datetime.now()
-    db.session.commit()
+        ret.is_cancelled = True
+        ret.cancelled_by = session.get("username")
+        ret.cancelled_at = datetime.now()
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Return bill cancellation failed for id=%s", id)
+        flash("Return bill could not be cancelled. No stock was changed.", "danger")
+        return redirect("/return-bills")
     flash("Return bill cancelled. Stock reversed and record kept for audit.", "warning")
     return redirect("/return-bills")
 
@@ -10423,12 +12079,25 @@ def render_invoice_page(inv, *, share_url="", is_public_invoice=False):
         exchange_refund_amount = round_currency(getattr(exchange_return_bill, "refund_amount", exchange_refund_amount))
         final_payable = round_currency(max(rounded_total - return_credit_total, 0))
 
+    print_profile = resolve_invoice_print_profile(inv)
+    if is_public_invoice and print_profile.get("logo_path", "").startswith("/tenant-business-logo/"):
+        filename = print_profile["logo_path"].rsplit("/", 1)[-1]
+        logo_share = URLSafeSerializer(
+            app.secret_key, salt="tenant-business-logo-v1"
+        ).dumps({
+            "tenant_id": getattr(inv, "tenant_id", None),
+            "filename": filename,
+        })
+        print_profile["logo_path"] = url_for(
+            "tenant_business_logo", filename=filename, share=logo_share
+        )
+
     return render_template(
         "invoice.html",
         inv=inv,
         is_public_invoice=is_public_invoice,
         share_url=share_url,
-        print_profile=resolve_invoice_print_profile(inv),
+        print_profile=print_profile,
         payment_breakdown=payment_breakdown,
         cart=items,
         exchange_return_bill=exchange_return_bill,
@@ -10499,7 +12168,9 @@ def build_single_invoice_excel(inv):
     header_font = Font(bold=True)
 
     summary.merge_cells("A1:B1")
-    summary["A1"] = "THE ENDO PHARMACY - Invoice Report"
+    summary["A1"] = " - ".join(
+        part for part in (print_profile.get("pharmacy_name"), "Invoice Report") if part
+    )
     summary["A1"].fill = title_fill
     summary["A1"].font = title_font
     summary["A1"].alignment = Alignment(horizontal="center")
@@ -10528,8 +12199,15 @@ def build_single_invoice_excel(inv):
         ("Pharmacy Address 1", print_profile.get("address_line_1", "")),
         ("Pharmacy Address 2", print_profile.get("address_line_2", "")),
         ("Pharmacy Mobile", print_profile.get("mobile", "")),
+        ("Pharmacy Alternate Mobile", print_profile.get("alternate_mobile", "")),
+        ("Pharmacy Name", print_profile.get("pharmacy_name", "")),
+        ("Legal Business Name", print_profile.get("legal_business_name", "")),
         ("Pharmacy GST No", print_profile.get("gst_no", "")),
         ("Pharmacy Licence No", print_profile.get("licence_no", "")),
+        ("Invoice Header", print_profile.get("invoice_header", "")),
+        ("Invoice Footer", print_profile.get("invoice_footer", "")),
+        ("Invoice Terms", print_profile.get("invoice_terms", "")),
+        ("Authorized Signatory", print_profile.get("authorized_signatory", "")),
     ]
 
     for row_number, (label, value) in enumerate(summary_rows, start=3):
@@ -10599,7 +12277,7 @@ def view_invoice(id):
     inv = Invoice.query.get_or_404(id)
     share_url = url_for(
         "shared_invoice",
-        token=build_invoice_share_token(inv.id),
+        token=build_invoice_share_token(inv),
         _external=True,
     )
     return render_invoice_page(inv, share_url=share_url, is_public_invoice=False)
@@ -10623,10 +12301,19 @@ def export_invoice_excel(id):
 
 @app.route("/invoice/share/<token>")
 def shared_invoice(token):
-    invoice_id = read_invoice_share_token(token)
+    payload = read_invoice_share_payload(token)
+    invoice_id = to_int_safe(payload.get("invoice_id"), 0) if payload else 0
     if not invoice_id:
         abort(404)
-    inv = Invoice.query.get_or_404(invoice_id)
+    tenant_id = to_int_safe(payload.get("tenant_id"), 0)
+    if tenant_id:
+        with tenant_context(tenant_id):
+            inv = Invoice.query.filter(
+                Invoice.id == invoice_id,
+                Invoice.tenant_id == tenant_id,
+            ).first_or_404()
+    else:
+        inv = Invoice.query.get_or_404(invoice_id)
     return render_invoice_page(inv, share_url=request.url, is_public_invoice=True)
 @app.route("/invoice/edit/<int:id>", methods=["GET", "POST"])
 @login_required
@@ -10780,7 +12467,12 @@ def cancel_invoice(id):
     if user.role != "admin" and not (user.can_delete_invoice or user.can_invoice_action):
         flash("Access denied", "danger")
         return redirect("/invoices")
-    inv = Invoice.query.get_or_404(id)
+    inv = (
+        Invoice.query.filter(Invoice.id == id)
+        .with_for_update()
+        .populate_existing()
+        .first_or_404()
+    )
     before_snapshot = build_invoice_audit_snapshot(inv)
     reason = (request.form.get("reason") or "").strip()
     try:
@@ -10835,13 +12527,14 @@ def vendor():
 @login_required
 @inventory_access_required
 def view_vendor_attachment(filename):
-    cleaned_name = secure_filename(filename or "")
+    cleaned_name, base_dir, file_path = resolve_tenant_upload_file(UPLOAD_FOLDER, filename)
     if not cleaned_name:
         return "Attachment not found.", 404
-    file_path = os.path.join(UPLOAD_FOLDER, cleaned_name)
+    if not active_vendor_query().filter(Vendor.attachment_ref == cleaned_name).first():
+        return "Attachment not found.", 404
     if not os.path.exists(file_path):
         return "Attachment file not found on server.", 404
-    return send_from_directory(UPLOAD_FOLDER, cleaned_name, as_attachment=False)
+    return send_from_directory(base_dir, cleaned_name, as_attachment=False)
 
 @app.route("/vendor-notes")
 @login_required
@@ -10982,11 +12675,7 @@ def add_vendor():
         attachment_ref = request.form.get("attachment_ref", "")
         file = request.files.get("attachment_file")
         if file and file.filename and allowed_file(file.filename):
-            safe_name = secure_filename(file.filename)
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            filename = f"{ts}_{safe_name}"
-            file.save(os.path.join(UPLOAD_FOLDER, filename))
-            attachment_ref = filename
+            attachment_ref = save_uploaded_file(file, UPLOAD_FOLDER, "vendor")
 
         v = Vendor(
             name=name,
@@ -11060,11 +12749,7 @@ def edit_vendor(id):
         attachment_ref = request.form.get("attachment_ref", v.attachment_ref or "")
         file = request.files.get("attachment_file")
         if file and file.filename and allowed_file(file.filename):
-            safe_name = secure_filename(file.filename)
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            filename = f"{ts}_{safe_name}"
-            file.save(os.path.join(UPLOAD_FOLDER, filename))
-            attachment_ref = filename
+            attachment_ref = save_uploaded_file(file, UPLOAD_FOLDER, f"vendor_{v.id}")
         elif not attachment_ref:
             attachment_ref = v.attachment_ref or ""
 
@@ -11421,6 +13106,24 @@ def add_vendor_purchase(id):
                     )
                 )
                 med = persist_new_medicine_record(med)
+                tenant_id = current_tenant_id()
+                if (
+                    not tenant_id
+                    or not med.id
+                    or med.id <= 0
+                    or med.tenant_id != tenant_id
+                ):
+                    raise RuntimeError(
+                        "New purchase medicine was not persisted for the active tenant."
+                    )
+                med = Medicine.query.filter(
+                    Medicine.id == med.id,
+                    Medicine.tenant_id == tenant_id,
+                ).first()
+                if med is None:
+                    raise RuntimeError(
+                        "New purchase medicine could not be retrieved for the active tenant."
+                    )
             else:
                 if item["expiry"]:
                     med.expiry = item["expiry"]
@@ -11447,6 +13150,7 @@ def add_vendor_purchase(id):
             med.qty += item["qty"] + item["free_qty"]
 
             history = StockHistory(
+                tenant_id=current_tenant_id(),
                 medicine_id=med.id,
                 medicine_name=med.name,
                 batch=med.batch,
@@ -11460,6 +13164,7 @@ def add_vendor_purchase(id):
             db.session.add(history)
 
             db.session.add(VendorPurchaseItem(
+                tenant_id=current_tenant_id(),
                 purchase_id=purchase.id,
                 vendor_id=vendor.id,
                 medicine_id=med.id,
@@ -11595,10 +13300,12 @@ def view_vendor_purchase_bill_file(purchase_id):
     filename = (purchase.bill_attachment_ref or "").strip()
     if not filename:
         return "No bill photo uploaded for this purchase.", 404
-    file_path = os.path.join(VENDOR_BILL_UPLOAD_FOLDER, filename)
+    cleaned_name, base_dir, file_path = resolve_tenant_upload_file(VENDOR_BILL_UPLOAD_FOLDER, filename)
+    if not cleaned_name:
+        return "Bill photo file not found on server.", 404
     if not os.path.exists(file_path):
         return "Bill photo file not found on server.", 404
-    return send_from_directory(VENDOR_BILL_UPLOAD_FOLDER, filename, as_attachment=False)
+    return send_from_directory(base_dir, cleaned_name, as_attachment=False)
 
 @app.route("/vendor/purchase/<int:purchase_id>/bill-file/upload", methods=["POST"])
 @login_required
@@ -12100,6 +13807,15 @@ def api_vendor_purchase_items(purchase_id):
     }), 200
 
 # ---------------- VENDOR NOTES (DEBIT/CREDIT) ----------------
+def lock_vendor_note_for_update(note_id):
+    return (
+        VendorNote.query.filter(VendorNote.id == note_id)
+        .with_for_update()
+        .populate_existing()
+        .first_or_404()
+    )
+
+
 @app.route("/api/vendor-notes", methods=["POST"])
 @login_required
 @vendor_note_access_required(api=True)
@@ -12159,7 +13875,7 @@ def api_create_vendor_note():
 @login_required
 @vendor_note_access_required(api=True)
 def api_update_vendor_note_items(note_id):
-    note = VendorNote.query.get_or_404(note_id)
+    note = lock_vendor_note_for_update(note_id)
     if note.status != "DRAFT":
         return jsonify({"error": "Only DRAFT notes can be edited"}), 400
 
@@ -12174,6 +13890,8 @@ def api_update_vendor_note_items(note_id):
             med_id = raw.get("medicine_id")
             if not med_id:
                 return jsonify({"error": f"medicine_id missing at item {idx+1}"}), 400
+            if not Medicine.query.filter(Medicine.id == med_id).first():
+                return jsonify({"error": f"Invalid medicine_id at item {idx+1}"}), 400
             if note.note_type == "DEBIT" and not (raw.get("batch_no") or "").strip():
                 return jsonify({"error": f"batch_no required at item {idx+1}"}), 400
             qty = int(raw.get("qty") or 0)
@@ -12226,7 +13944,7 @@ def api_update_vendor_note_items(note_id):
 @login_required
 @vendor_note_access_required(api=True)
 def api_post_vendor_note(note_id):
-    note = VendorNote.query.get_or_404(note_id)
+    note = lock_vendor_note_for_update(note_id)
     if note.status != "DRAFT":
         return jsonify({"error": "Only DRAFT notes can be posted"}), 400
     if note.reference_purchase_id:
@@ -12241,7 +13959,7 @@ def api_post_vendor_note(note_id):
     if note.note_type == "DEBIT":
         if not items:
             return jsonify({"error": "DEBIT note requires items"}), 400
-        adjustments = []
+        adjustment_by_medicine = {}
         allocations = []
         for it in items:
             if not it.batch_no:
@@ -12249,34 +13967,45 @@ def api_post_vendor_note(note_id):
             total_qty = to_int(it.qty) + to_int(it.free_qty)
             if total_qty <= 0:
                 return jsonify({"error": "qty must be > 0"}), 400
-            med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+            med = lock_medicine_for_update(
+                Medicine.query.filter(Medicine.id == it.medicine_id).first()
+                if it.medicine_id
+                else None
+            )
             if not med:
                 return jsonify({"error": "Invalid medicine_id in items"}), 400
-            if to_int(med.qty) < total_qty:
-                return jsonify({"error": f"Insufficient stock for {med.name} ({med.batch})"}), 400
 
             purchase_items = get_purchase_items_for_return(
                 med,
                 batch_no=it.batch_no,
-                reference_purchase_id=note.reference_purchase_id
+                reference_purchase_id=note.reference_purchase_id,
+                for_update=True,
             )
-            available = sum(to_int(p.remaining_qty) for p in purchase_items)
-            if available < total_qty:
-                return jsonify({"error": f"Return qty exceeds available purchase stock for {med.name} ({med.batch})"}), 400
-
             remaining = total_qty
             for pi in purchase_items:
                 if remaining <= 0:
                     break
-                avail = to_int(pi.remaining_qty)
+                already_allocated = sum(
+                    allocated_qty
+                    for _allocated_item, allocated_pi, allocated_qty in allocations
+                    if allocated_pi.id == pi.id
+                )
+                avail = max(0, to_int(pi.remaining_qty) - already_allocated)
                 if avail <= 0:
                     continue
                 take = avail if avail <= remaining else remaining
                 allocations.append((it, pi, take))
                 remaining -= take
-            adjustments.append((med, total_qty))
+            if remaining > 0:
+                return jsonify({"error": f"Return qty exceeds available purchase stock for {med.name} ({med.batch})"}), 400
+            adjustment = adjustment_by_medicine.setdefault(med.id, [med, 0])
+            adjustment[1] += total_qty
 
-        for med, total_qty in adjustments:
+        for med, total_qty in adjustment_by_medicine.values():
+            if to_int(med.qty) < total_qty:
+                return jsonify({"error": f"Insufficient stock for {med.name} ({med.batch})"}), 400
+
+        for med, total_qty in adjustment_by_medicine.values():
             old_qty = med.qty
             med.qty = to_int(med.qty) - total_qty
             history = StockHistory(
@@ -12348,7 +14077,7 @@ def api_post_vendor_note(note_id):
 @login_required
 @vendor_note_access_required(api=True)
 def api_cancel_vendor_note(note_id):
-    note = VendorNote.query.get_or_404(note_id)
+    note = lock_vendor_note_for_update(note_id)
     if note.status != "POSTED":
         return jsonify({"error": "Only POSTED notes can be cancelled"}), 400
 
@@ -12365,9 +14094,14 @@ def api_cancel_vendor_note(note_id):
             total_qty = to_int(it.qty) + to_int(it.free_qty)
             if total_qty <= 0:
                 continue
-            med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+            med = lock_medicine_for_update(
+                Medicine.query.filter(Medicine.id == it.medicine_id).first()
+                if it.medicine_id
+                else None
+            )
             if not med:
-                continue
+                db.session.rollback()
+                return jsonify({"error": "Cannot cancel: linked medicine missing for posted debit note"}), 400
             old_qty = med.qty
             med.qty = to_int(med.qty) + total_qty
             history = StockHistory(
@@ -12387,22 +14121,29 @@ def api_cancel_vendor_note(note_id):
 
         if allocations:
             for alloc in allocations:
-                pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                pi = lock_vendor_purchase_item_for_update(alloc.purchase_item_id)
                 if not pi:
-                    continue
+                    db.session.rollback()
+                    return jsonify({"error": "Cannot cancel: linked purchase allocation missing"}), 400
                 pi.remaining_qty = to_int(pi.remaining_qty) + to_int(alloc.qty)
         else:
             for it in items:
                 total_qty = to_int(it.qty) + to_int(it.free_qty)
                 if total_qty <= 0:
                     continue
-                med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                med = lock_medicine_for_update(
+                    Medicine.query.filter(Medicine.id == it.medicine_id).first()
+                    if it.medicine_id
+                    else None
+                )
                 if not med:
-                    continue
+                    db.session.rollback()
+                    return jsonify({"error": "Cannot cancel: linked medicine missing for purchase restore"}), 400
                 purchase_items = get_purchase_items_for_return(
                     med,
                     batch_no=it.batch_no,
-                    reference_purchase_id=note.reference_purchase_id
+                    reference_purchase_id=note.reference_purchase_id,
+                    for_update=True,
                 )
                 remaining = total_qty
                 for pi in purchase_items:
@@ -12411,6 +14152,9 @@ def api_cancel_vendor_note(note_id):
                     take = remaining
                     pi.remaining_qty = to_int(pi.remaining_qty) + take
                     remaining -= take
+                if remaining > 0:
+                    db.session.rollback()
+                    return jsonify({"error": "Cannot cancel: purchase restore mapping failed"}), 400
         reversal_credit = quantize_decimal(note.grand_total or 0, "0.0001")
     elif note.note_type == "CREDIT":
         reversal_debit = quantize_decimal(note.grand_total or 0, "0.0001")
@@ -12491,7 +14235,7 @@ def api_view_vendor_note(note_id):
 @login_required
 @vendor_note_access_required(api=True)
 def api_delete_vendor_note(note_id):
-    note = VendorNote.query.get_or_404(note_id)
+    note = lock_vendor_note_for_update(note_id)
     items = VendorNoteItem.query.filter_by(note_id=note.id).all()
     allocations = VendorNoteAllocation.query.filter_by(note_id=note.id).all()
 
@@ -12504,7 +14248,11 @@ def api_delete_vendor_note(note_id):
                 total_qty = to_int(it.qty) + to_int(it.free_qty)
                 if total_qty <= 0:
                     continue
-                med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                med = lock_medicine_for_update(
+                    Medicine.query.filter(Medicine.id == it.medicine_id).first()
+                    if it.medicine_id
+                    else None
+                )
                 if not med:
                     return jsonify({"error": "Cannot delete: linked medicine missing for posted debit note"}), 400
                 stock_restore.append((med, total_qty))
@@ -12514,7 +14262,7 @@ def api_delete_vendor_note(note_id):
                     qty = to_int(alloc.qty)
                     if qty <= 0:
                         continue
-                    pi = VendorPurchaseItem.query.get(alloc.purchase_item_id)
+                    pi = lock_vendor_purchase_item_for_update(alloc.purchase_item_id)
                     if not pi:
                         return jsonify({"error": "Cannot delete: linked purchase allocation missing"}), 400
                     purchase_restore.append((pi, qty))
@@ -12523,13 +14271,18 @@ def api_delete_vendor_note(note_id):
                     total_qty = to_int(it.qty) + to_int(it.free_qty)
                     if total_qty <= 0:
                         continue
-                    med = Medicine.query.get(it.medicine_id) if it.medicine_id else None
+                    med = lock_medicine_for_update(
+                        Medicine.query.filter(Medicine.id == it.medicine_id).first()
+                        if it.medicine_id
+                        else None
+                    )
                     if not med:
                         return jsonify({"error": "Cannot delete: linked medicine missing for purchase restore"}), 400
                     purchase_items = get_purchase_items_for_return(
                         med,
                         batch_no=it.batch_no,
-                        reference_purchase_id=note.reference_purchase_id
+                        reference_purchase_id=note.reference_purchase_id,
+                        for_update=True,
                     )
                     remaining = total_qty
                     for pi in purchase_items:
@@ -14048,14 +15801,30 @@ def bind_runtime_boolean_value(enabled, storage_mode):
 
 
 def persist_new_medicine_record(med):
+    tenant_id = current_tenant_id()
+    if not tenant_id:
+        raise RuntimeError("Cannot persist a medicine without an active tenant context.")
+    med.tenant_id = tenant_id
+
     storage_mode = runtime_boolean_storage_mode("medicine", "is_active")
     if storage_mode != "integer":
         db.session.add(med)
         db.session.flush()
-        return med
+        if not med.id or med.id <= 0:
+            raise RuntimeError("New medicine was not assigned a database ID.")
+        persisted = Medicine.query.filter(
+            Medicine.id == med.id,
+            Medicine.tenant_id == tenant_id,
+        ).first()
+        if persisted is None:
+            raise RuntimeError("New medicine could not be retrieved for the active tenant.")
+        return persisted
 
     runtime_columns = table_runtime_columns("medicine")
+    if runtime_columns and "tenant_id" not in runtime_columns:
+        raise RuntimeError("Medicine table is missing required tenant ownership storage.")
     insert_values = {
+        "tenant_id": tenant_id,
         "name": getattr(med, "name", ""),
         "medicine_code": getattr(med, "medicine_code", ""),
         "composition": getattr(med, "composition", ""),
@@ -14069,6 +15838,8 @@ def persist_new_medicine_record(med):
         "discount_percent": getattr(med, "discount_percent", 0),
         "barcode": getattr(med, "barcode", ""),
         "reorder_level": getattr(med, "reorder_level", 10),
+        "gst_percent": getattr(med, "gst_percent", 5),
+        "schedule_type": getattr(med, "schedule_type", ""),
         "is_active": bind_runtime_boolean_value(getattr(med, "is_active", True), storage_mode),
         "created_at": sql_text_bindable_value(getattr(med, "created_at", None) or datetime.utcnow()),
     }
@@ -14102,14 +15873,15 @@ def persist_new_medicine_record(med):
         )
         medicine_id = getattr(result, "lastrowid", None)
 
-    if medicine_id:
-        persisted = db.session.get(Medicine, medicine_id)
-        if persisted:
-            return persisted
-    return Medicine.query.filter_by(
-        name=getattr(med, "name", ""),
-        batch=getattr(med, "batch", ""),
-    ).order_by(Medicine.id.desc()).first() or med
+    if not medicine_id or medicine_id <= 0:
+        raise RuntimeError("New medicine was not assigned a database ID.")
+    persisted = Medicine.query.filter(
+        Medicine.id == medicine_id,
+        Medicine.tenant_id == tenant_id,
+    ).first()
+    if persisted is None:
+        raise RuntimeError("New medicine could not be retrieved for the active tenant.")
+    return persisted
 
 
 def persist_user_update(user, payload):
@@ -14166,6 +15938,7 @@ def persist_new_user(payload):
     }
     storage_map = user_boolean_storage_mode_map()
     user = User(
+        tenant_id=payload.get("tenant_id") or session.get("tenant_id"),
         username=payload["username"],
         role=payload["role"],
         access_profile=payload["access_profile"],
@@ -14179,6 +15952,7 @@ def persist_new_user(payload):
         return user
 
     insert_values = {
+        "tenant_id": payload.get("tenant_id") or session.get("tenant_id"),
         "username": payload["username"],
         "password_hash": user.password_hash,
         "role": payload["role"],
@@ -16638,6 +18412,7 @@ def export_excel():
     } for ri in return_items]
 
     meta_rows = [
+        {"Metric": "Report Date", "Value": now.strftime("%d-%m-%Y")},
         {"Metric": "Generated At", "Value": now.strftime("%d-%m-%Y %I:%M:%S %p")},
         {"Metric": "Database Dialect", "Value": db_dialect},
         {"Metric": "Scope", "Value": "all"},
@@ -16784,11 +18559,928 @@ def print_appointments_report():
         generated_at=datetime.now(),
         public_arrival_window_label=public_arrival_context["arrival_window_label"],
     )
+
+
+def parse_optional_date(value):
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    try:
+        return datetime.strptime(cleaned, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def subscription_form_payload(form):
+    plan_ref = normalize_plan_ref(form.get("plan_ref") or form.get("subscription_plan_ref") or "trial")
+    plan = plan_definition(plan_ref)
+    start_date = parse_optional_date(form.get("subscription_start")) or clinic_now().date()
+    expiry_date = parse_optional_date(form.get("subscription_expiry"))
+    if not expiry_date:
+        expiry_date = start_date + timedelta(days=int(plan.get("days") or 30))
+    user_limit_raw = form.get("user_limit")
+    user_limit = user_limit_raw if user_limit_raw not in (None, "", " ") else plan.get("user_limit")
+    device_limit_raw = form.get("device_limit")
+    device_limit = device_limit_raw if device_limit_raw not in (None, "", " ") else plan.get("device_limit")
+    feature_names = ("pos", "inventory", "reports", "exports", "lab", "appointments")
+    features = dict(plan.get("features") or {})
+    has_feature_fields = any(f"feature_{feature}" in form for feature in feature_names)
+    if has_feature_fields:
+        for feature in feature_names:
+            field_name = f"feature_{feature}"
+            features[feature] = form.get(field_name) == "1"
+    return {
+        "plan_ref": plan_ref,
+        "start_date": start_date,
+        "expiry_date": expiry_date,
+        "amount": parse_subscription_amount(form.get("amount"), plan.get("amount", 0)),
+        "payment_mode": (form.get("payment_mode") or "Manual").strip(),
+        "payment_reference": (form.get("payment_reference") or "").strip(),
+        "user_limit": user_limit,
+        "device_limit": device_limit,
+        "features": features,
+        "notes": (form.get("subscription_notes") or form.get("notes") or "").strip(),
+        "status": (form.get("status") or "Active").strip().title(),
+    }
+
+
+def tenant_admin_permissions():
+    return {field_name: True for field_name in USER_PERMISSION_FIELDS}
+
+
+def create_tenant_admin_user(tenant, username, email=""):
+    user = User(
+        tenant_id=tenant.id,
+        username=(username or "").strip(),
+        role="admin",
+        access_profile="admin",
+        **tenant_admin_permissions(),
+    )
+    user.set_password(secrets.token_urlsafe(32))
+    db.session.add(user)
+    db.session.flush()
+    return user
+
+
+def build_tenant_audit_snapshot(tenant):
+    if not tenant:
+        return None
+    return {
+        "id": tenant.id,
+        "tenant_uid": tenant.tenant_uid,
+        "tenant_code": tenant.tenant_code,
+        "pharmacy_name": tenant.pharmacy_name,
+        "subscription_plan_ref": tenant.subscription_plan_ref,
+        "subscription_start": tenant.subscription_start.isoformat() if tenant.subscription_start else None,
+        "subscription_expiry": tenant.subscription_expiry.isoformat() if tenant.subscription_expiry else None,
+        "status": tenant.status,
+        "activated_at": tenant.activated_at.isoformat() if tenant.activated_at else None,
+    }
+
+
+SUPER_ADMIN_TENANT_SORTS = {
+    "created_desc": (Tenant.created_at.desc(), Tenant.id.desc()),
+    "created_asc": (Tenant.created_at.asc(), Tenant.id.asc()),
+    "name_asc": (db.func.lower(Tenant.pharmacy_name).asc(), Tenant.id.asc()),
+    "name_desc": (db.func.lower(Tenant.pharmacy_name).desc(), Tenant.id.desc()),
+    "expiry_asc": (Tenant.subscription_expiry.asc(), Tenant.id.asc()),
+    "expiry_desc": (Tenant.subscription_expiry.desc(), Tenant.id.desc()),
+}
+SUPER_ADMIN_TENANT_PAGE_SIZE = 8
+
+
+def super_admin_subscription_status(tenant, today_value=None):
+    today_value = today_value or clinic_now().date()
+    raw_status = (getattr(tenant, "status", "") or "").strip().lower()
+    expiry = getattr(tenant, "subscription_expiry", None)
+    if raw_status in {"suspended", "cancelled"}:
+        return raw_status
+    if raw_status == "expired" or (expiry and expiry < today_value):
+        return "expired"
+    if expiry and today_value <= expiry <= today_value + timedelta(days=30):
+        return "expiring"
+    if raw_status == "trial":
+        return "trial"
+    if raw_status == "active":
+        return "active"
+    return raw_status or "unknown"
+
+
+def super_admin_subscription_label(status):
+    return {
+        "active": "Active",
+        "trial": "Trial",
+        "expiring": "Expiring Soon",
+        "expired": "Expired",
+        "suspended": "Suspended",
+        "cancelled": "Cancelled",
+    }.get(status, "Unknown")
+
+
+def super_admin_system_access_enabled(tenant):
+    return (getattr(tenant, "status", "") or "").strip().lower() not in {"suspended", "cancelled"}
+
+
+def super_admin_user_count_subquery():
+    return (
+        db.session.query(User.tenant_id, db.func.count(User.id).label("user_count"))
+        .filter(
+            User.tenant_id.isnot(None),
+            db.func.coalesce(User.role, "") != PLATFORM_SUPER_ADMIN_ROLE,
+            User.deleted_at.is_(None),
+        )
+        .group_by(User.tenant_id)
+        .subquery()
+    )
+
+
+def super_admin_dashboard_stats():
+    today_value = clinic_now().date()
+    expiring_until = today_value + timedelta(days=30)
+    tenants = Tenant.query.order_by(Tenant.created_at.desc(), Tenant.id.desc()).all()
+    for tenant in tenants:
+        refresh_tenant_subscription_status(tenant)
+    db.session.flush()
+    by_status = {}
+    for tenant in tenants:
+        key = (tenant.status or "").strip().lower()
+        by_status[key] = by_status.get(key, 0) + 1
+    active_subscriptions = sum(
+        1 for tenant in tenants
+        if (tenant.status or "").strip().lower() in {"trial", "active"}
+        and (not tenant.subscription_expiry or tenant.subscription_expiry >= today_value)
+    )
+    expiring_subscriptions = sum(
+        1 for tenant in tenants
+        if tenant.subscription_expiry
+        and today_value <= tenant.subscription_expiry <= expiring_until
+        and (tenant.status or "").strip().lower() in {"trial", "active"}
+    )
+    total_users = (
+        db.session.query(db.func.coalesce(db.func.count(User.id), 0))
+        .filter(
+            User.tenant_id.isnot(None),
+            db.func.coalesce(User.role, "") != PLATFORM_SUPER_ADMIN_ROLE,
+            User.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    revenue = db.session.query(db.func.coalesce(db.func.sum(SubscriptionHistory.amount), 0)).scalar() or 0
+    return {
+        "total_tenants": len(tenants),
+        "active_tenants": by_status.get("active", 0),
+        "trial_tenants": by_status.get("trial", 0),
+        "expired_tenants": by_status.get("expired", 0),
+        "suspended_tenants": by_status.get("suspended", 0),
+        "active_subscriptions": active_subscriptions,
+        "expiring_subscriptions": expiring_subscriptions,
+        "total_users": int(total_users),
+        "recorded_subscription_revenue": float(revenue),
+    }, tenants
+
+
+def build_super_admin_tenant_table_context():
+    today_value = clinic_now().date()
+    filters = {
+        "q": (request.args.get("q") or "").strip(),
+        "plan": normalize_plan_ref(request.args.get("plan") or "") if request.args.get("plan") else "",
+        "status": (request.args.get("status") or "").strip().lower(),
+        "access": (request.args.get("access") or "").strip().lower(),
+        "expiry": (request.args.get("expiry") or "").strip().lower(),
+        "sort": (request.args.get("sort") or "created_desc").strip(),
+    }
+    if filters["sort"] not in SUPER_ADMIN_TENANT_SORTS:
+        filters["sort"] = "created_desc"
+    query = Tenant.query
+    if filters["q"]:
+        like = f"%{filters['q']}%"
+        query = query.filter(
+            or_(
+                Tenant.pharmacy_name.ilike(like),
+                Tenant.tenant_code.ilike(like),
+                Tenant.tenant_uid.ilike(like),
+                Tenant.owner_name.ilike(like),
+                Tenant.email.ilike(like),
+            )
+        )
+    if filters["plan"]:
+        query = query.filter(Tenant.subscription_plan_ref == filters["plan"])
+    if filters["status"]:
+        if filters["status"] == "expiring":
+            query = query.filter(
+                Tenant.subscription_expiry.isnot(None),
+                Tenant.subscription_expiry >= today_value,
+                Tenant.subscription_expiry <= today_value + timedelta(days=30),
+                db.func.lower(db.func.coalesce(Tenant.status, "")).in_(("trial", "active")),
+            )
+        elif filters["status"] == "expired":
+            query = query.filter(
+                or_(
+                    db.func.lower(db.func.coalesce(Tenant.status, "")) == "expired",
+                    Tenant.subscription_expiry < today_value,
+                )
+            )
+        else:
+            query = query.filter(db.func.lower(db.func.coalesce(Tenant.status, "")) == filters["status"])
+    if filters["access"] == "enabled":
+        query = query.filter(~db.func.lower(db.func.coalesce(Tenant.status, "")).in_(("suspended", "cancelled")))
+    elif filters["access"] == "disabled":
+        query = query.filter(db.func.lower(db.func.coalesce(Tenant.status, "")).in_(("suspended", "cancelled")))
+    if filters["expiry"] == "30":
+        query = query.filter(
+            Tenant.subscription_expiry.isnot(None),
+            Tenant.subscription_expiry >= today_value,
+            Tenant.subscription_expiry <= today_value + timedelta(days=30),
+        )
+    elif filters["expiry"] == "expired":
+        query = query.filter(Tenant.subscription_expiry.isnot(None), Tenant.subscription_expiry < today_value)
+    elif filters["expiry"] == "none":
+        query = query.filter(Tenant.subscription_expiry.is_(None))
+
+    total = query.count()
+    try:
+        page = max(1, int(request.args.get("page", "1")))
+    except (TypeError, ValueError):
+        page = 1
+    page_count = max(1, math.ceil(total / SUPER_ADMIN_TENANT_PAGE_SIZE))
+    if page > page_count:
+        page = page_count
+
+    user_counts = super_admin_user_count_subquery()
+    order_by = SUPER_ADMIN_TENANT_SORTS[filters["sort"]]
+    rows = (
+        query.outerjoin(user_counts, user_counts.c.tenant_id == Tenant.id)
+        .with_entities(Tenant, db.func.coalesce(user_counts.c.user_count, 0).label("user_count"))
+        .order_by(*order_by)
+        .offset((page - 1) * SUPER_ADMIN_TENANT_PAGE_SIZE)
+        .limit(SUPER_ADMIN_TENANT_PAGE_SIZE)
+        .all()
+    )
+    tenant_rows = []
+    for tenant, user_count in rows:
+        status_key = super_admin_subscription_status(tenant, today_value)
+        plan_ref = normalize_plan_ref(getattr(tenant, "subscription_plan_ref", "") or "trial")
+        plan = plan_definition(plan_ref)
+        tenant_rows.append({
+            "tenant": tenant,
+            "tenant_id": tenant.tenant_uid or tenant.tenant_code or tenant.id,
+            "initials": "".join(part[:1] for part in (tenant.pharmacy_name or tenant.tenant_code or "PH").split()[:2]).upper(),
+            "plan_name": plan.get("name", plan_ref.title()),
+            "user_count": int(user_count or 0),
+            "subscription_status": status_key,
+            "subscription_label": super_admin_subscription_label(status_key),
+            "access_enabled": super_admin_system_access_enabled(tenant),
+        })
+
+    args_without_page = request.args.to_dict(flat=True)
+    args_without_page.pop("page", None)
+    prev_args = dict(args_without_page)
+    prev_args["page"] = page - 1
+    next_args = dict(args_without_page)
+    next_args["page"] = page + 1
+    return {
+        "tenant_rows": tenant_rows,
+        "tenant_filters": filters,
+        "tenant_total": total,
+        "tenant_page": page,
+        "tenant_page_count": page_count,
+        "tenant_page_size": SUPER_ADMIN_TENANT_PAGE_SIZE,
+        "tenant_args_without_page": args_without_page,
+        "tenant_prev_url": url_for("super_admin_dashboard", **prev_args) if page > 1 else "",
+        "tenant_next_url": url_for("super_admin_dashboard", **next_args) if page < page_count else "",
+        "tenant_showing_from": ((page - 1) * SUPER_ADMIN_TENANT_PAGE_SIZE + 1) if total else 0,
+        "tenant_showing_to": min(total, page * SUPER_ADMIN_TENANT_PAGE_SIZE),
+    }
+
+
+def render_super_admin(template_name="super_admin.html", **context):
+    with tenant_scope_disabled():
+        stats, tenants = super_admin_dashboard_stats()
+        table_context = build_super_admin_tenant_table_context()
+        recent_subscriptions = SubscriptionHistory.query.order_by(
+            SubscriptionHistory.created_at.desc(),
+            SubscriptionHistory.id.desc(),
+        ).limit(12).all()
+    context.setdefault("stats", stats)
+    context.setdefault("tenants", tenants)
+    context.setdefault("recent_subscriptions", recent_subscriptions)
+    context.setdefault("plans", SUBSCRIPTION_PLAN_DEFINITIONS)
+    context.setdefault("status_options", TENANT_STATUS_OPTIONS)
+    for key, value in table_context.items():
+        context.setdefault(key, value)
+    return render_template(template_name, **context)
+
+
+@app.route("/activate-account/<token>", methods=["GET", "POST"])
+def activate_account(token):
+    payload = read_admin_activation_token(token)
+    if not payload:
+        flash("Activation link is invalid or expired.", "danger")
+        return redirect("/login")
+    tenant_id = to_int_safe(payload.get("tenant_id"), 0)
+    user_id = to_int_safe(payload.get("user_id"), 0)
+    with tenant_context(tenant_id):
+        user = active_user_query().filter(User.id == user_id, User.tenant_id == tenant_id).first()
+    if not user or int(user.session_version or 0) != to_int_safe(payload.get("session_version"), -1):
+        flash("Activation link is no longer valid.", "danger")
+        return redirect("/login")
+    if request.method == "POST":
+        password = (request.form.get("password") or "").strip()
+        confirm = (request.form.get("confirm_password") or "").strip()
+        if not password:
+            flash("Password is required.", "danger")
+            return render_template("activate_account.html", token=token, user=user)
+        if password != confirm:
+            flash("Password and confirmation do not match.", "danger")
+            return render_template("activate_account.html", token=token, user=user)
+        with tenant_context(tenant_id):
+            user.set_password(password)
+            user.session_version = int(user.session_version or 0) + 1
+            db.session.commit()
+        flash("Account activated. Please sign in with your pharmacy code.", "success")
+        return redirect("/login")
+    return render_template("activate_account.html", token=token, user=user)
+
+
+@app.route("/super-admin")
+@login_required
+@super_admin_required
+def super_admin_dashboard():
+    return render_super_admin()
+
+
+@app.route("/super-admin/tenants/create", methods=["POST"])
+@login_required
+@super_admin_required
+def super_admin_create_tenant():
+    pharmacy_name = (request.form.get("pharmacy_name") or "").strip()
+    tenant_code = normalize_tenant_code(request.form.get("tenant_code") or pharmacy_name)
+    admin_username = (request.form.get("admin_username") or "admin").strip()
+    if not pharmacy_name or not admin_username:
+        flash("Pharmacy name and administrator username are required.", "danger")
+        return redirect("/super-admin")
+    with tenant_scope_disabled():
+        if Tenant.query.filter(db.func.lower(Tenant.tenant_code) == tenant_code.lower()).first():
+            flash("Tenant code already exists.", "danger")
+            return redirect("/super-admin")
+        if User.query.filter(User.tenant_id.is_(None), db.func.lower(User.username) == admin_username.lower()).first():
+            flash("That username is reserved for the platform.", "danger")
+            return redirect("/super-admin")
+        try:
+            settings = TenantSettings(settings_json="{}")
+            tenant = Tenant(
+                tenant_uid=generate_tenant_uid(),
+                tenant_code=tenant_code,
+                pharmacy_name=pharmacy_name,
+                owner_name=(request.form.get("owner_name") or "").strip(),
+                contact_number=(request.form.get("contact_number") or "").strip(),
+                email=(request.form.get("email") or "").strip(),
+                business_address=(request.form.get("business_address") or "").strip(),
+                gstin=(request.form.get("gstin") or "").strip(),
+                drug_license=(request.form.get("drug_license") or "").strip(),
+                settings=settings,
+                status="Trial",
+            )
+            db.session.add(settings)
+            db.session.add(tenant)
+            db.session.flush()
+            update_tenant_settings(tenant, {
+                "invoice_prefix": re.sub(r"[^A-Za-z0-9]+", "", (request.form.get("invoice_prefix") or "INV").upper())[:8] or "INV",
+                "purchase_prefix": re.sub(r"[^A-Za-z0-9]+", "", (request.form.get("purchase_prefix") or "PB").upper())[:8] or "PB",
+                "return_prefix": re.sub(r"[^A-Za-z0-9]+", "", (request.form.get("return_prefix") or "RB").upper())[:8] or "RB",
+                "invoice_format": "standard",
+                "tax_preference": "inclusive",
+                "billing_preference": "standard",
+                "stock_preference": "fifo",
+            })
+            subscription_payload = subscription_form_payload(request.form)
+            if subscription_payload["plan_ref"] == "trial":
+                subscription_payload["status"] = "Trial"
+            apply_subscription_to_tenant(tenant, created_by=session.get("username"), **subscription_payload)
+            with tenant_context(tenant.id):
+                admin_user = create_tenant_admin_user(
+                    tenant,
+                    admin_username,
+                    email=(request.form.get("admin_email") or tenant.email or ""),
+                )
+                db.session.commit()
+                activation_url = url_for(
+                    "activate_account",
+                    token=build_admin_activation_token(admin_user),
+                    _external=True,
+                )
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Tenant provisioning failed")
+            flash("Tenant could not be created. No partial pharmacy setup was kept.", "danger")
+            return redirect("/super-admin")
+    flash(f"Pharmacy created. Activation link: {activation_url}", "success")
+    return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant.id))
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>", methods=["GET", "POST"])
+@login_required
+@super_admin_required
+def super_admin_tenant_detail(tenant_id):
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+        if request.method == "POST":
+            tenant.pharmacy_name = (request.form.get("pharmacy_name") or tenant.pharmacy_name).strip()
+            tenant.owner_name = (request.form.get("owner_name") or "").strip()
+            tenant.contact_number = (request.form.get("contact_number") or "").strip()
+            tenant.email = (request.form.get("email") or "").strip()
+            tenant.business_address = (request.form.get("business_address") or "").strip()
+            tenant.gstin = (request.form.get("gstin") or "").strip()
+            tenant.drug_license = (request.form.get("drug_license") or "").strip()
+            status = (request.form.get("status") or tenant.status or "Trial").strip().title()
+            if status in TENANT_STATUS_OPTIONS:
+                previous = (tenant.status or "").lower()
+                tenant.status = status
+                if previous != "active" and status == "Active":
+                    tenant.activated_at = datetime.utcnow()
+            db.session.commit()
+            flash("Tenant details updated.", "success")
+            return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant.id))
+        settings = tenant_settings_dict(tenant)
+        with tenant_context(tenant.id):
+            admins = active_user_query().filter(User.tenant_id == tenant.id, User.role == "admin").order_by(User.username.asc()).all()
+            audit_logs = AuditLog.query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(25).all()
+        history = SubscriptionHistory.query.filter_by(tenant_id=tenant.id).order_by(
+            SubscriptionHistory.created_at.desc(), SubscriptionHistory.id.desc()
+        ).all()
+    return render_super_admin(
+        selected_tenant=tenant,
+        selected_settings=settings,
+        selected_admins=admins,
+        selected_history=history,
+        selected_audit_logs=audit_logs,
+    )
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/pharmacy-business", methods=["GET", "POST"])
+@login_required
+@super_admin_required
+def super_admin_pharmacy_business_setup(tenant_id):
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+
+    if request.method == "POST":
+        with tenant_context(tenant.id):
+            values, error = _validate_business_setup(
+                request.form, request.files.get("pharmacy_logo")
+            )
+        if error:
+            flash(error, "danger")
+            return _business_setup_template(
+                tenant,
+                back_url=url_for("super_admin_tenant_detail", tenant_id=tenant.id),
+                back_label="Back to Tenant",
+            )
+
+        for field in (
+            "pharmacy_name",
+            "owner_name",
+            "contact_number",
+            "email",
+            "business_address",
+            "gstin",
+            "drug_license",
+        ):
+            setattr(tenant, field, values[field])
+        settings_updates = {
+            field: values[field]
+            for field in (
+                "legal_business_name",
+                "alternate_mobile",
+                "city",
+                "state",
+                "pin_code",
+                "business_type",
+                "invoice_header",
+                "invoice_footer",
+                "invoice_terms",
+                "authorized_signatory",
+                "invoice_prefix",
+                "logo_width_mm",
+                "logo_height_mm",
+            )
+        }
+        existing_identity = tenant_business_identity(tenant)
+        uploaded_logo = values.pop("_uploaded_logo")
+        if uploaded_logo:
+            settings_updates["logo_path"] = url_for(
+                "tenant_business_logo", filename=uploaded_logo
+            )
+        elif request.form.get("remove_logo") == "1":
+            settings_updates["logo_path"] = ""
+        else:
+            settings_updates["logo_path"] = existing_identity["logo_path"]
+
+        update_tenant_settings(tenant, settings_updates)
+        try:
+            with tenant_context(tenant.id):
+                sync_invoice_print_profiles_to_current_business_identity()
+            with tenant_scope_disabled():
+                db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            app.logger.exception(
+                "Super admin pharmacy business setup save failed for tenant_id=%s",
+                tenant.id,
+            )
+            flash("Business settings could not be saved. Please try again.", "danger")
+            return _business_setup_template(
+                tenant,
+                back_url=url_for("super_admin_tenant_detail", tenant_id=tenant.id),
+                back_label="Back to Tenant",
+            )
+        flash("Pharmacy Business Setup saved.", "success")
+        return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant.id))
+
+    with tenant_context(tenant.id):
+        return _business_setup_template(
+            tenant,
+            back_url=url_for("super_admin_tenant_detail", tenant_id=tenant.id),
+            back_label="Back to Tenant",
+        )
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/status", methods=["POST"])
+@login_required
+@super_admin_required
+def super_admin_tenant_status(tenant_id):
+    status = (request.form.get("status") or "").strip().title()
+    if status not in TENANT_STATUS_OPTIONS:
+        flash("Invalid tenant status.", "danger")
+        return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+        tenant.status = status
+        if status == "Active" and not tenant.activated_at:
+            tenant.activated_at = datetime.utcnow()
+        db.session.commit()
+    flash(f"Tenant marked {status}.", "success")
+    return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/access", methods=["POST"])
+@login_required
+@super_admin_required
+def super_admin_tenant_access(tenant_id):
+    enabled = (request.form.get("enabled") or "").strip() == "1"
+    next_url = request.form.get("next") or url_for("super_admin_dashboard")
+    if not next_url.startswith("/super-admin"):
+        next_url = url_for("super_admin_dashboard")
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+        before = build_tenant_audit_snapshot(tenant)
+        previous_status = (tenant.status or "").strip().title()
+        if enabled:
+            if previous_status in {"Suspended", "Cancelled"}:
+                if tenant.subscription_expiry and tenant.subscription_expiry < clinic_now().date():
+                    tenant.status = "Expired"
+                else:
+                    tenant.status = "Active"
+                if tenant.status == "Active" and not tenant.activated_at:
+                    tenant.activated_at = datetime.utcnow()
+        else:
+            tenant.status = "Suspended"
+        db.session.commit()
+        record_audit_event(
+            action="Updated tenant system access",
+            entity_type="TENANT",
+            entity_id=tenant.id,
+            ref_code=tenant.tenant_code,
+            before=before,
+            after=build_tenant_audit_snapshot(tenant),
+            extra={"enabled": enabled, "previous_status": previous_status},
+        )
+    flash(
+        f"System access {'enabled' if enabled else 'disabled'} for {tenant.pharmacy_name}.",
+        "success",
+    )
+    return redirect(next_url)
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/subscription", methods=["POST"])
+@login_required
+@super_admin_required
+def super_admin_tenant_subscription(tenant_id):
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+        try:
+            payload = subscription_form_payload(request.form)
+            apply_subscription_to_tenant(tenant, created_by=session.get("username"), **payload)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Subscription update failed for tenant_id=%s", tenant_id)
+            flash("Subscription could not be updated.", "danger")
+            return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+    flash("Subscription updated and history recorded.", "success")
+    return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/devices/reset", methods=["POST"])
+@login_required
+@super_admin_required
+def super_admin_reset_tenant_devices(tenant_id):
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+        access = tenant_device_access_settings(tenant)
+        update_tenant_device_registry(tenant, limit=access.get("limit"), devices={})
+        db.session.commit()
+    flash("Approved computers reset. The next login will register a fresh computer.", "success")
+    return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/admin", methods=["POST"])
+@login_required
+@super_admin_required
+def super_admin_manage_tenant_admin(tenant_id):
+    username = (request.form.get("admin_username") or "").strip()
+    if not username:
+        flash("Administrator username is required.", "danger")
+        return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+        try:
+            with tenant_context(tenant.id):
+                user = active_user_query().filter(
+                    User.tenant_id == tenant.id,
+                    db.func.lower(User.username) == username.lower(),
+                ).first()
+                if not user:
+                    if tenant_user_limit_reached(tenant):
+                        flash("User limit reached for this subscription.", "danger")
+                        return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+                    user = create_tenant_admin_user(tenant, username)
+                else:
+                    user.role = "admin"
+                    user.access_profile = "admin"
+                    for field_name in USER_PERMISSION_FIELDS:
+                        setattr(user, field_name, True)
+                user.session_version = int(user.session_version or 0) + 1
+                db.session.flush()
+                activation_url = url_for("activate_account", token=build_admin_activation_token(user), _external=True)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Tenant administrator update failed for tenant_id=%s", tenant_id)
+            flash("Tenant administrator could not be updated.", "danger")
+            return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+    flash(f"Tenant administrator ready. Activation link: {activation_url}", "success")
+    return redirect(url_for("super_admin_tenant_detail", tenant_id=tenant_id))
+
+
+@app.route("/super-admin/tenants/<int:tenant_id>/audit")
+@login_required
+@super_admin_required
+def super_admin_tenant_audit(tenant_id):
+    with tenant_scope_disabled():
+        tenant = Tenant.query.get_or_404(tenant_id)
+    with tenant_context(tenant.id):
+        logs = AuditLog.query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(250).all()
+    return render_template("super_admin_audit.html", tenant=tenant, logs=logs)
+
+
+@app.route("/tenant-master", methods=["GET", "POST"])
+@login_required
+@admin_required
+def tenant_master():
+    tenant = current_tenant()
+    if not tenant:
+        flash("Tenant context is unavailable. Please login again.", "danger")
+        return redirect("/login")
+
+    if request.method == "POST":
+        if any(
+            field in request.form
+            for field in (
+                "subscription_plan_ref",
+                "subscription_start",
+                "subscription_expiry",
+                "status",
+            )
+        ):
+            abort(403)
+
+        pharmacy_name = (request.form.get("pharmacy_name") or "").strip()
+        if not pharmacy_name:
+            flash("Pharmacy name is required.", "danger")
+            return render_template(
+                "tenant_master.html",
+                tenant=tenant,
+                status_options=TENANT_STATUS_OPTIONS,
+                tenant_settings=tenant_settings_dict(tenant),
+                business_identity=tenant_business_identity(tenant),
+                business_setup_only=False,
+            )
+
+        tenant.pharmacy_name = pharmacy_name
+        tenant.owner_name = (request.form.get("owner_name") or "").strip()
+        tenant.contact_number = (request.form.get("contact_number") or "").strip()
+        tenant.email = (request.form.get("email") or "").strip()
+        tenant.business_address = (request.form.get("business_address") or "").strip()
+        tenant.gstin = (request.form.get("gstin") or "").strip()
+        tenant.drug_license = (request.form.get("drug_license") or "").strip()
+        invoice_prefix = re.sub(r"[^A-Za-z0-9]+", "", (request.form.get("invoice_prefix") or "INV").upper())[:8] or "INV"
+        purchase_prefix = re.sub(r"[^A-Za-z0-9]+", "", (request.form.get("purchase_prefix") or "PB").upper())[:8] or "PB"
+        return_prefix = re.sub(r"[^A-Za-z0-9]+", "", (request.form.get("return_prefix") or "RB").upper())[:8] or "RB"
+        update_tenant_settings(tenant, {
+            "invoice_prefix": invoice_prefix,
+            "purchase_prefix": purchase_prefix,
+            "return_prefix": return_prefix,
+            "invoice_format": (request.form.get("invoice_format") or "standard").strip()[:40],
+            "tax_preference": (request.form.get("tax_preference") or "inclusive").strip()[:40],
+            "billing_preference": (request.form.get("billing_preference") or "standard").strip()[:80],
+            "stock_preference": (request.form.get("stock_preference") or "fifo").strip()[:40],
+        })
+        sync_invoice_print_profiles_to_current_business_identity()
+        db.session.commit()
+        session["tenant_name"] = tenant.pharmacy_name
+        flash("Tenant Master updated successfully.", "success")
+        return redirect("/tenant-master")
+
+    return render_template(
+        "tenant_master.html",
+        tenant=tenant,
+        status_options=TENANT_STATUS_OPTIONS,
+        tenant_settings=tenant_settings_dict(tenant),
+        business_identity=tenant_business_identity(tenant),
+        business_setup_only=False,
+    )
+
+
+def _business_setup_template(tenant, *, business_setup_only=True, back_url=None, back_label=None):
+    business_identity = tenant_business_identity(tenant)
+    logo_path = business_identity.get("logo_path") or ""
+    if is_super_admin_user() and logo_path.startswith("/tenant-business-logo/"):
+        filename = logo_path.rsplit("/", 1)[-1]
+        share_token = URLSafeSerializer(
+            app.secret_key, salt="tenant-business-logo-v1"
+        ).dumps({"tenant_id": tenant.id, "filename": filename})
+        business_identity["logo_path"] = url_for(
+            "tenant_business_logo",
+            filename=filename,
+            share=share_token,
+        )
+    return render_template(
+        "tenant_master.html",
+        tenant=tenant,
+        status_options=TENANT_STATUS_OPTIONS,
+        tenant_settings=tenant_settings_dict(tenant),
+        business_identity=business_identity,
+        business_setup_only=business_setup_only,
+        back_url=back_url,
+        back_label=back_label,
+    )
+
+
+def _validate_business_setup(form, logo_file):
+    values = {
+        "pharmacy_name": (form.get("pharmacy_name") or "").strip(),
+        "legal_business_name": (form.get("legal_business_name") or "").strip(),
+        "owner_name": (form.get("owner_name") or "").strip(),
+        "contact_number": (form.get("contact_number") or "").strip(),
+        "alternate_mobile": (form.get("alternate_mobile") or "").strip(),
+        "email": (form.get("email") or "").strip(),
+        "business_address": (form.get("business_address") or "").strip(),
+        "city": (form.get("city") or "").strip(),
+        "state": (form.get("state") or "").strip(),
+        "pin_code": (form.get("pin_code") or "").strip(),
+        "gstin": (form.get("gstin") or "").strip().upper(),
+        "drug_license": (form.get("drug_license") or "").strip(),
+        "business_type": (form.get("business_type") or "").strip(),
+        "invoice_header": (form.get("invoice_header") or "").strip(),
+        "invoice_footer": (form.get("invoice_footer") or "").strip(),
+        "invoice_terms": (form.get("invoice_terms") or "").strip(),
+        "authorized_signatory": (form.get("authorized_signatory") or "").strip(),
+        "invoice_prefix": re.sub(
+            r"[^A-Za-z0-9]+", "", (form.get("invoice_prefix") or "INV").upper()
+        )[:8] or "INV",
+        "logo_width_mm": normalize_logo_dimension_mm(
+            form.get("logo_width_mm"), 44, minimum=20, maximum=70
+        ),
+        "logo_height_mm": normalize_logo_dimension_mm(
+            form.get("logo_height_mm"), 21, minimum=10, maximum=40
+        ),
+    }
+    limits = {
+        "pharmacy_name": 160,
+        "legal_business_name": 160,
+        "owner_name": 120,
+        "contact_number": 30,
+        "alternate_mobile": 30,
+        "email": 160,
+        "business_address": 2000,
+        "city": 100,
+        "state": 100,
+        "pin_code": 20,
+        "gstin": 30,
+        "drug_license": 80,
+        "business_type": 80,
+        "invoice_header": 500,
+        "invoice_footer": 500,
+        "invoice_terms": 2000,
+        "authorized_signatory": 120,
+    }
+    for field, maximum in limits.items():
+        if len(values[field]) > maximum:
+            return None, f"{field.replace('_', ' ').title()} cannot exceed {maximum} characters."
+    if not values["pharmacy_name"]:
+        return None, "Pharmacy name is required."
+    if values["email"] and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", values["email"]):
+        return None, "Enter a valid business email address."
+    gstin = values["gstin"]
+    if gstin and not re.fullmatch(r"[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]", gstin):
+        return None, "Enter a valid GSTIN or leave it blank for a non-GST business."
+
+    uploaded_logo = ""
+    if logo_file and (logo_file.filename or "").strip():
+        extension = os.path.splitext(secure_filename(logo_file.filename))[1].lower()
+        if extension not in {".png", ".jpg", ".jpeg"}:
+            return None, "Logo must be a PNG or JPEG image."
+        try:
+            image_header = logo_file.stream.read(2 * 1024 * 1024 + 1)
+            logo_file.stream.seek(0)
+        except (OSError, ValueError) as exc:
+            app.logger.warning("Unable to read pharmacy logo upload: %s", exc)
+            return None, "Unable to read the selected logo."
+        if len(image_header) > 2 * 1024 * 1024:
+            return None, "Logo must be 2 MB or smaller."
+        from PIL import Image, UnidentifiedImageError
+        try:
+            with Image.open(BytesIO(image_header)) as uploaded_image:
+                matches_extension = (
+                    (extension == ".png" and uploaded_image.format == "PNG")
+                    or (extension in {".jpg", ".jpeg"} and uploaded_image.format == "JPEG")
+                )
+                if (
+                    not matches_extension
+                    or uploaded_image.width * uploaded_image.height > 16_000_000
+                ):
+                    return None, "The uploaded file is not a supported pharmacy logo image."
+                uploaded_image.verify()
+        except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+            return None, "The uploaded file is not a valid PNG or JPEG image."
+        try:
+            uploaded_logo = save_uploaded_file(logo_file, UPLOAD_FOLDER, "pharmacy-logo")
+        except OSError:
+            app.logger.exception("Unable to save pharmacy logo upload.")
+            return None, "The selected logo could not be saved."
+        if not uploaded_logo:
+            return None, "The selected logo could not be saved."
+    values["_uploaded_logo"] = uploaded_logo
+    return values, ""
+
+
+@app.route("/settings/pharmacy-business", methods=["GET", "POST"])
+@login_required
+def pharmacy_business_setup():
+    if is_super_admin_user():
+        return redirect(url_for("super_admin_dashboard"))
+    flash("Pharmacy Business Setup is managed by the platform super admin.", "warning")
+    return redirect("/")
+
+
+@app.route("/tenant-business-logo/<filename>")
+def tenant_business_logo(filename):
+    cleaned_name = _safe_stored_filename(filename)
+    if not cleaned_name or not cleaned_name.lower().endswith((".png", ".jpg", ".jpeg")):
+        abort(404)
+    tenant_id = current_tenant_id()
+    if not tenant_id:
+        try:
+            share = URLSafeSerializer(
+                app.secret_key, salt="tenant-business-logo-v1"
+            ).loads(request.args.get("share") or "")
+        except BadSignature:
+            abort(404)
+        if not isinstance(share, dict) or share.get("filename") != cleaned_name:
+            abort(404)
+        tenant_id = to_int_safe(share.get("tenant_id"), 0)
+    if not tenant_id:
+        abort(404)
+    tenant_dir = _tenant_storage_dir(UPLOAD_FOLDER, tenant_id)
+    file_path = os.path.join(tenant_dir, cleaned_name)
+    if not os.path.isfile(file_path):
+        abort(404)
+    response = send_from_directory(tenant_dir, cleaned_name, as_attachment=False)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
 @app.route("/users")
 @login_required
 @admin_required
 def users():
-    users = active_user_query().order_by(User.username.asc()).all()
+    users_query = active_user_query()
+    if session.get("tenant_id"):
+        users_query = users_query.filter(User.tenant_id == session.get("tenant_id"))
+    users = users_query.order_by(User.username.asc()).all()
     for listed_user in users:
         if listed_user.role == "admin":
             listed_user.access_profile = "admin"
@@ -16805,7 +19497,10 @@ def users():
 @login_required
 @admin_required
 def edit_user(user_id):
-    user = active_user_query().filter(User.id == user_id).first_or_404()
+    scoped_query = active_user_query().filter(User.id == user_id)
+    if session.get("tenant_id"):
+        scoped_query = scoped_query.filter(User.tenant_id == session.get("tenant_id"))
+    user = scoped_query.first_or_404()
 
     if request.method == "POST":
         payload = validate_user_form(request.form, is_create=False)
@@ -16882,7 +19577,18 @@ def add_user():
                 submit_label="Create User",
                 profile_options=ACCESS_PROFILE_PRESETS
             )
+        tenant = current_tenant()
+        if tenant and tenant_user_limit_reached(tenant):
+            flash("User limit reached for this subscription. Upgrade the plan to add more users.", "danger")
+            return render_template(
+                "user_form.html",
+                user=None,
+                form_title="Add User",
+                submit_label="Create User",
+                profile_options=ACCESS_PROFILE_PRESETS
+            )
         try:
+            payload["tenant_id"] = session.get("tenant_id")
             persist_new_user(payload)
         except Exception:
             db.session.rollback()
@@ -16909,7 +19615,10 @@ def add_user():
 @login_required
 @admin_required
 def change_user_password(user_id):
-    user = active_user_query().filter(User.id == user_id).first_or_404()
+    scoped_query = active_user_query().filter(User.id == user_id)
+    if session.get("tenant_id"):
+        scoped_query = scoped_query.filter(User.tenant_id == session.get("tenant_id"))
+    user = scoped_query.first_or_404()
 
     if request.method == "POST":
         new_password = (request.form.get("new_password") or request.form.get("password") or "").strip()
@@ -16936,7 +19645,10 @@ def change_user_password(user_id):
 @login_required
 @admin_required
 def delete_user(user_id):
-    user = active_user_query().filter(User.id == user_id).first_or_404()
+    scoped_query = active_user_query().filter(User.id == user_id)
+    if session.get("tenant_id"):
+        scoped_query = scoped_query.filter(User.tenant_id == session.get("tenant_id"))
+    user = scoped_query.first_or_404()
     if user.username == "admin":
         flash("Admin user cannot be deleted", "danger")
         return redirect("/users")

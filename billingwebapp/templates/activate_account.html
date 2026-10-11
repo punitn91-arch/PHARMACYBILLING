@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Activate Account</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app_premium.css') }}">
+    <style>
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7fb; font-family: Arial, sans-serif; }
+        .activation-card { width: min(420px, calc(100vw - 32px)); background: #fff; border: 1px solid #dbe4f0; border-radius: 8px; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.10); padding: 28px; }
+        .activation-card h1 { margin: 0 0 6px; font-size: 24px; color: #10223e; }
+        .activation-card p { margin: 0 0 20px; color: #607089; }
+        .activation-card label { display: block; margin: 14px 0 6px; font-weight: 700; color: #22324a; }
+        .activation-card input { width: 100%; height: 42px; border: 1px solid #ccd8e8; border-radius: 6px; padding: 0 12px; }
+        .activation-card button { width: 100%; height: 44px; margin-top: 18px; border: 0; border-radius: 6px; background: #0d6efd; color: #fff; font-weight: 700; cursor: pointer; }
+        .flash { margin: 0 0 12px; padding: 10px 12px; border-radius: 6px; background: #fff7ed; color: #9a3412; }
+    </style>
+</head>
+<body>
+    <form class="activation-card" method="POST">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+            <div class="flash">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+        <h1>Activate Account</h1>
+        <p>{{ user.username }} can now create a secure password.</p>
+        <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+        <label>New Password</label>
+        <input type="password" name="password" autocomplete="new-password" required>
+        <label>Confirm Password</label>
+        <input type="password" name="confirm_password" autocomplete="new-password" required>
+        <button type="submit">Activate</button>
+    </form>
+</body>
+</html>

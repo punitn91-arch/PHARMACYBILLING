@@ -5,10 +5,76 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 db = SQLAlchemy()
 
+
+TENANT_STATUSES = ("Trial", "Active", "Expired", "Suspended", "Cancelled")
+
+
+# ================= TENANT =================
+class TenantSettings(db.Model):
+    __tablename__ = "tenant_settings"
+
+    id = db.Column(db.Integer, primary_key=True)
+    settings_json = db.Column(db.Text, nullable=False, default="{}")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Tenant(db.Model):
+    __tablename__ = "tenant"
+
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_uid = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    tenant_code = db.Column(db.String(80), nullable=False, unique=True, index=True)
+    pharmacy_name = db.Column(db.String(160), nullable=False, index=True)
+    owner_name = db.Column(db.String(120))
+    contact_number = db.Column(db.String(30))
+    email = db.Column(db.String(160), index=True)
+    business_address = db.Column(db.Text)
+    gstin = db.Column(db.String(30))
+    drug_license = db.Column(db.String(80))
+    subscription_plan_ref = db.Column(db.String(80))
+    subscription_start = db.Column(db.Date)
+    subscription_expiry = db.Column(db.Date, index=True)
+    status = db.Column(db.String(20), nullable=False, default="Trial", index=True)
+    settings_id = db.Column(db.Integer, db.ForeignKey("tenant_settings.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    activated_at = db.Column(db.DateTime, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    settings = db.relationship("TenantSettings", lazy="joined")
+
+    @property
+    def is_login_allowed(self):
+        return (self.status or "").strip().lower() in {"trial", "active"}
+
+
+class SubscriptionHistory(db.Model):
+    __tablename__ = "subscription_history"
+
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), nullable=False, index=True)
+    plan_ref = db.Column(db.String(80), nullable=False, index=True)
+    plan_name = db.Column(db.String(120), nullable=False)
+    billing_cycle = db.Column(db.String(30), nullable=False, default="trial", index=True)
+    start_date = db.Column(db.Date, nullable=False, index=True)
+    expiry_date = db.Column(db.Date, nullable=False, index=True)
+    status = db.Column(db.String(30), nullable=False, default="Active", index=True)
+    user_limit = db.Column(db.Integer)
+    feature_entitlements_json = db.Column(db.Text, nullable=False, default="{}")
+    amount = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    payment_mode = db.Column(db.String(40))
+    payment_reference = db.Column(db.String(120))
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    tenant = db.relationship("Tenant", lazy="joined")
+
 # ================= USER =================
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
+    username = db.Column(db.String(50), nullable=False, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
 
     password_hash = db.Column(db.String(255), nullable=True)  # ⚠️ IMPORTANT
 
@@ -38,6 +104,8 @@ class User(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
+    tenant = db.relationship("Tenant", lazy="joined")
+
     # Use PBKDF2 explicitly so hashes work reliably across Python/OpenSSL builds.
     def set_password(self, password):
         self.password_hash = generate_password_hash(password, method="pbkdf2:sha256")
@@ -52,11 +120,29 @@ class User(db.Model):
             return False
 
 
+db.Index(
+    "uq_user_tenant_username_ci",
+    User.tenant_id,
+    db.func.lower(User.username),
+    unique=True,
+    sqlite_where=db.text("tenant_id IS NOT NULL AND username IS NOT NULL"),
+    postgresql_where=db.text("tenant_id IS NOT NULL AND username IS NOT NULL"),
+)
+db.Index(
+    "uq_user_platform_username_ci",
+    db.func.lower(User.username),
+    unique=True,
+    sqlite_where=db.text("tenant_id IS NULL AND username IS NOT NULL"),
+    postgresql_where=db.text("tenant_id IS NULL AND username IS NOT NULL"),
+)
+
+
 # ================= MEDICINE =================
 class Medicine(db.Model):
     __tablename__ = "medicine"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     name = db.Column(db.String(150), nullable=False, index=True)
     medicine_code = db.Column(db.String(40), index=True)
     composition = db.Column(db.String(255))
@@ -82,9 +168,13 @@ class Medicine(db.Model):
 # ================= INVOICE =================
 class Invoice(db.Model):
     __tablename__ = "invoice"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "invoice_no", name="uq_invoice_tenant_invoice_no_model"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    invoice_no = db.Column(db.String(50), unique=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    invoice_no = db.Column(db.String(50), index=True)
     patient_id = db.Column(db.Integer, index=True)
     customer = db.Column(db.String(100), index=True)
     mobile = db.Column(db.String(20), index=True)
@@ -112,6 +202,13 @@ class Invoice(db.Model):
     print_gst_no = db.Column(db.String(40))
     print_licence_no = db.Column(db.String(80))
     print_logo_path = db.Column(db.String(255))
+    print_pharmacy_name = db.Column(db.String(160))
+    print_legal_business_name = db.Column(db.String(160))
+    print_alternate_mobile = db.Column(db.String(30))
+    print_invoice_header = db.Column(db.Text)
+    print_invoice_footer = db.Column(db.Text)
+    print_invoice_terms = db.Column(db.Text)
+    print_authorized_signatory = db.Column(db.String(120))
 
     # Invoices are never deleted (GST rule): they are cancelled and kept.
     is_cancelled = db.Column(db.Boolean, default=False, index=True)
@@ -126,6 +223,7 @@ class InvoiceItem(db.Model):
     __tablename__ = "invoice_item"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     invoice_id = db.Column(db.Integer, nullable=False, index=True)
 
     name = db.Column(db.String(150), index=True)
@@ -149,9 +247,13 @@ class InvoiceItem(db.Model):
 # ================= RETURN =================
 class Return(db.Model):
     __tablename__ = "return_bill"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "return_no", name="uq_return_tenant_return_no_model"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    return_no = db.Column(db.String(30), unique=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    return_no = db.Column(db.String(30), index=True)
     invoice_id = db.Column(db.Integer, nullable=False, index=True)
     invoice_no = db.Column(db.String(50))
     customer = db.Column(db.String(100))
@@ -178,6 +280,7 @@ class ReturnItem(db.Model):
     __tablename__ = "return_item"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     return_id = db.Column(db.Integer, nullable=False, index=True)
     invoice_item_id = db.Column(db.Integer, nullable=False, index=True)
 
@@ -209,6 +312,7 @@ class ReturnLotAllocation(db.Model):
     __tablename__ = "return_lot_allocation"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     return_item_id = db.Column(db.Integer, nullable=False, index=True)
     purchase_item_id = db.Column(db.Integer, nullable=False, index=True)
     qty = db.Column(db.Integer, default=0)
@@ -222,6 +326,7 @@ class QuarantineStock(db.Model):
     __tablename__ = "quarantine_stock"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     medicine_id = db.Column(db.Integer, index=True)
     medicine_name = db.Column(db.String(150), index=True)
     batch = db.Column(db.String(50), index=True)
@@ -244,6 +349,7 @@ class HoldBill(db.Model):
     __tablename__ = "hold_bill"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     customer = db.Column(db.String(100))
     mobile = db.Column(db.String(20))
     doctor = db.Column(db.String(100))
@@ -260,6 +366,7 @@ class PendingBillStore(db.Model):
     __tablename__ = "pending_bill_store"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     legacy_hold_bill_id = db.Column(db.Integer, unique=True, index=True)
     customer = db.Column(db.String(100))
     mobile = db.Column(db.String(20))
@@ -276,8 +383,9 @@ class Patient(db.Model):
     __tablename__ = "patient"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     name = db.Column(db.String(120), nullable=False, index=True)
-    mobile = db.Column(db.String(20), unique=True, index=True)
+    mobile = db.Column(db.String(20), index=True)
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
     notes = db.Column(db.Text)
@@ -294,12 +402,27 @@ class Patient(db.Model):
             return None
 
 
+db.Index(
+    "uq_patient_tenant_mobile",
+    Patient.tenant_id,
+    Patient.mobile,
+    unique=True,
+    sqlite_where=db.text(
+        "tenant_id IS NOT NULL AND mobile IS NOT NULL AND mobile <> ''"
+    ),
+    postgresql_where=db.text(
+        "tenant_id IS NOT NULL AND mobile IS NOT NULL AND mobile <> ''"
+    ),
+)
+
+
 # ================= APPOINTMENT =================
 class Appointment(db.Model):
     __tablename__ = "appointment"
 
     id = db.Column(db.Integer, primary_key=True)
-    appointment_no = db.Column(db.String(30), unique=True, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    appointment_no = db.Column(db.String(30), index=True)
     token_no = db.Column(db.Integer, index=True)
     patient_id = db.Column(db.Integer, index=True)
 
@@ -366,14 +489,28 @@ class Appointment(db.Model):
             return None
 
 
+db.Index(
+    "uq_appointment_tenant_appointment_no",
+    Appointment.tenant_id,
+    Appointment.appointment_no,
+    unique=True,
+    sqlite_where=db.text("tenant_id IS NOT NULL AND appointment_no IS NOT NULL"),
+    postgresql_where=db.text("tenant_id IS NOT NULL AND appointment_no IS NOT NULL"),
+)
+
+
 # ================= LAB =================
 class LabTest(db.Model):
     """Central, admin-managed catalog used by the lab billing screen."""
 
     __tablename__ = "lab_test"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "test_code", name="uq_lab_test_tenant_test_code_model"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    test_code = db.Column(db.String(40), unique=True, nullable=False, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    test_code = db.Column(db.String(40), nullable=False, index=True)
     name = db.Column(db.String(180), nullable=False, index=True)
     category = db.Column(db.String(100), index=True)
     specimen_type = db.Column(db.String(100))
@@ -394,9 +531,13 @@ class LabOrder(db.Model):
     """A lab receipt/order kept independent from medicine invoices and stock."""
 
     __tablename__ = "lab_order"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "order_no", name="uq_lab_order_tenant_order_no_model"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    order_no = db.Column(db.String(40), unique=True, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    order_no = db.Column(db.String(40), index=True)
     patient_id = db.Column(db.Integer, index=True)
     patient_name = db.Column(db.String(120), nullable=False, index=True)
     mobile = db.Column(db.String(20), index=True)
@@ -424,6 +565,7 @@ class LabOrderItem(db.Model):
     __tablename__ = "lab_order_item"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     lab_order_id = db.Column(db.Integer, nullable=False, index=True)
     lab_test_id = db.Column(db.Integer, index=True)
     test_code = db.Column(db.String(40), index=True)
@@ -443,8 +585,12 @@ class LabReport(db.Model):
     """A private, publishable PDF report linked to a lab order."""
 
     __tablename__ = "lab_report"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "storage_key", name="uq_lab_report_tenant_storage_key"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     lab_order_id = db.Column(db.Integer, nullable=False, index=True)
     lab_order_item_id = db.Column(db.Integer, index=True)
     patient_id = db.Column(db.Integer, index=True)
@@ -453,7 +599,7 @@ class LabReport(db.Model):
     title = db.Column(db.String(180), nullable=False)
     report_date = db.Column(db.Date, index=True)
     patient_note = db.Column(db.String(500))
-    storage_key = db.Column(db.String(255), nullable=False, unique=True)
+    storage_key = db.Column(db.String(255), nullable=False, index=True)
     original_filename = db.Column(db.String(255), nullable=False)
     mime_type = db.Column(db.String(100), nullable=False, default="application/pdf")
     file_size = db.Column(db.Integer, default=0)
@@ -478,6 +624,7 @@ class PortalOtpChallenge(db.Model):
     __tablename__ = "portal_otp_challenge"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     purpose = db.Column(db.String(30), nullable=False, index=True)
     context_ref = db.Column(db.String(100), index=True)
     mobile = db.Column(db.String(20), nullable=False, index=True)
@@ -499,6 +646,7 @@ class AppointmentBookingSettings(db.Model):
     __tablename__ = "appointment_booking_settings"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     booking_enabled = db.Column(db.Boolean, nullable=False, default=True)
     normal_daily_limit = db.Column(db.Integer, nullable=False, default=15)
     priority_daily_limit = db.Column(db.Integer, nullable=False, default=2)
@@ -524,6 +672,7 @@ class PublicAppointmentBooking(db.Model):
     __tablename__ = "public_appointment_booking"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     booking_ref = db.Column(db.String(64), nullable=False, unique=True, index=True)
     appointment_id = db.Column(db.Integer, index=True)
     patient_id = db.Column(db.Integer, index=True)
@@ -559,8 +708,23 @@ class PublicAppointmentDayLock(db.Model):
     __tablename__ = "public_appointment_day_lock"
 
     id = db.Column(db.Integer, primary_key=True)
-    appointment_date = db.Column(db.Date, nullable=False, unique=True, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    appointment_date = db.Column(db.Date, nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+db.Index(
+    "uq_public_appointment_day_lock_tenant_date",
+    PublicAppointmentDayLock.tenant_id,
+    PublicAppointmentDayLock.appointment_date,
+    unique=True,
+    sqlite_where=db.text(
+        "tenant_id IS NOT NULL AND appointment_date IS NOT NULL"
+    ),
+    postgresql_where=db.text(
+        "tenant_id IS NOT NULL AND appointment_date IS NOT NULL"
+    ),
+)
 
 
 # ================= CLINIC SCHEDULE =================
@@ -570,7 +734,8 @@ class ClinicLocation(db.Model):
     __tablename__ = "clinic_location"
 
     id = db.Column(db.Integer, primary_key=True)
-    code = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    code = db.Column(db.String(40), nullable=False, index=True)
     display_name = db.Column(db.String(120), nullable=False, index=True)
     public_address = db.Column(db.String(255))
     public_phone = db.Column(db.String(30))
@@ -591,13 +756,24 @@ class ClinicLocation(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+db.Index(
+    "uq_clinic_location_tenant_code",
+    ClinicLocation.tenant_id,
+    ClinicLocation.code,
+    unique=True,
+    sqlite_where=db.text("tenant_id IS NOT NULL AND code IS NOT NULL"),
+    postgresql_where=db.text("tenant_id IS NOT NULL AND code IS NOT NULL"),
+)
+
+
 class Clinician(db.Model):
     """A public-facing clinician record; it does not imply a booked slot."""
 
     __tablename__ = "clinician"
 
     id = db.Column(db.Integer, primary_key=True)
-    code = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    code = db.Column(db.String(40), nullable=False, index=True)
     display_name = db.Column(db.String(120), nullable=False, index=True)
     public_title = db.Column(db.String(80))
     specialty = db.Column(db.String(120), index=True)
@@ -625,6 +801,16 @@ class Clinician(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+db.Index(
+    "uq_clinician_tenant_code",
+    Clinician.tenant_id,
+    Clinician.code,
+    unique=True,
+    sqlite_where=db.text("tenant_id IS NOT NULL AND code IS NOT NULL"),
+    postgresql_where=db.text("tenant_id IS NOT NULL AND code IS NOT NULL"),
+)
+
+
 class ClinicScheduleRule(db.Model):
     """An admin-managed recurring public schedule rule.
 
@@ -636,6 +822,7 @@ class ClinicScheduleRule(db.Model):
     __tablename__ = "clinic_schedule_rule"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     location_id = db.Column(
         db.Integer,
         db.ForeignKey("clinic_location.id", ondelete="RESTRICT"),
@@ -679,6 +866,7 @@ class ClinicScheduleException(db.Model):
     __tablename__ = "clinic_schedule_exception"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     location_id = db.Column(
         db.Integer,
         db.ForeignKey("clinic_location.id", ondelete="RESTRICT"),
@@ -712,6 +900,7 @@ class StockHistory(db.Model):
     __tablename__ = "stock_history"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
 
     medicine_id = db.Column(db.Integer)
     medicine_name = db.Column(db.String(150), index=True)
@@ -737,6 +926,7 @@ class Vendor(db.Model):
     __tablename__ = "vendor"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
 
     name = db.Column(db.String(150), nullable=False, index=True)
     mobile = db.Column(db.String(20), index=True)
@@ -781,10 +971,15 @@ class Vendor(db.Model):
 # ================= VENDOR PURCHASE =================
 class VendorPurchase(db.Model):
     __tablename__ = "vendor_purchase"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "purchase_no", name="uq_vendor_purchase_tenant_purchase_no_model"),
+        db.UniqueConstraint("tenant_id", "vendor_id", "invoice_no", name="uq_vendor_purchase_tenant_vendor_invoice"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     vendor_id = db.Column(db.Integer, nullable=False)
-    purchase_no = db.Column(db.String(30), unique=True)
+    purchase_no = db.Column(db.String(30), index=True)
     invoice_no = db.Column(db.String(60), index=True)
     bill_attachment_ref = db.Column(db.String(255))
     purchase_date = db.Column(db.DateTime, default=datetime.utcnow, index=True)
@@ -804,6 +999,7 @@ class VendorPurchaseItem(db.Model):
     __tablename__ = "vendor_purchase_item"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     purchase_id = db.Column(db.Integer, nullable=False, index=True)
     vendor_id = db.Column(db.Integer, nullable=False)
     medicine_id = db.Column(db.Integer)
@@ -832,9 +1028,13 @@ class VendorPurchaseItem(db.Model):
 # ================= VENDOR NOTES (DEBIT/CREDIT) =================
 class VendorNote(db.Model):
     __tablename__ = "vendor_notes"
+    __table_args__ = (
+        db.UniqueConstraint("tenant_id", "note_no", name="uq_vendor_notes_tenant_note_no"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    note_no = db.Column(db.String(40), unique=True, nullable=False)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
+    note_no = db.Column(db.String(40), nullable=False)
     note_type = db.Column(db.String(10), nullable=False)  # DEBIT / CREDIT
     vendor_id = db.Column(db.Integer, db.ForeignKey("vendor.id"), nullable=False, index=True)
     reference_purchase_id = db.Column(db.Integer, db.ForeignKey("vendor_purchase.id"), index=True)
@@ -860,6 +1060,7 @@ class VendorNoteItem(db.Model):
     __tablename__ = "vendor_note_items"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     note_id = db.Column(db.Integer, db.ForeignKey("vendor_notes.id"), nullable=False, index=True)
     medicine_id = db.Column(db.Integer, db.ForeignKey("medicine.id"), index=True)
     batch_no = db.Column(db.String(50))
@@ -878,6 +1079,7 @@ class VendorNoteAllocation(db.Model):
     __tablename__ = "vendor_note_allocations"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     note_id = db.Column(db.Integer, db.ForeignKey("vendor_notes.id"), nullable=False, index=True)
     note_item_id = db.Column(db.Integer, db.ForeignKey("vendor_note_items.id"), nullable=False, index=True)
     purchase_item_id = db.Column(db.Integer, db.ForeignKey("vendor_purchase_item.id"), nullable=False, index=True)
@@ -889,6 +1091,7 @@ class VendorLedgerEntry(db.Model):
     __tablename__ = "vendor_ledger"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     vendor_id = db.Column(db.Integer, db.ForeignKey("vendor.id"), nullable=False, index=True)
     txn_date = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     txn_type = db.Column(db.String(30))  # PURCHASE / PAYMENT / DEBIT_NOTE / CREDIT_NOTE / REVERSAL
@@ -905,6 +1108,7 @@ class SalesAllocation(db.Model):
     __tablename__ = "sales_allocation"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     invoice_item_id = db.Column(db.Integer, nullable=False)
     purchase_item_id = db.Column(db.Integer)
     qty = db.Column(db.Integer, default=0)
@@ -918,6 +1122,7 @@ class AuditLog(db.Model):
     __tablename__ = "audit_log"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     user = db.Column(db.String(50), index=True)
     action = db.Column(db.String(255), index=True)
     entity_type = db.Column(db.String(50))
@@ -933,6 +1138,7 @@ class LoginSecurityEvent(db.Model):
     __tablename__ = "login_security_event"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     username = db.Column(db.String(50), index=True)
     user_id = db.Column(db.Integer, index=True)
     ip_address = db.Column(db.String(80), index=True)
@@ -962,6 +1168,7 @@ class VoiceCall(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     provider = db.Column(db.String(64), nullable=False, index=True)
     provider_call_id = db.Column(db.String(128), nullable=False, index=True)
     caller_fingerprint = db.Column(db.String(64), index=True)
@@ -1000,6 +1207,7 @@ class VoiceCallEvent(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     voice_call_id = db.Column(
         db.Integer,
         db.ForeignKey("voice_call.id", ondelete="RESTRICT"),
@@ -1033,6 +1241,7 @@ class AIAPIClient(db.Model):
     __tablename__ = "ai_api_client"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     name = db.Column(db.String(120), nullable=False)
     client_id = db.Column(db.String(80), nullable=False, unique=True, index=True)
     secret_hash = db.Column(db.String(512), nullable=False)
@@ -1058,6 +1267,7 @@ class AIAccessToken(db.Model):
     __tablename__ = "ai_access_token"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     api_client_id = db.Column(
         db.Integer,
         db.ForeignKey("ai_api_client.id", ondelete="CASCADE"),
@@ -1079,6 +1289,7 @@ class AIAPIRequestAudit(db.Model):
     __tablename__ = "ai_api_request_audit"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     api_client_id = db.Column(
         db.Integer,
         db.ForeignKey("ai_api_client.id", ondelete="SET NULL"),
@@ -1114,6 +1325,7 @@ class AIIdempotencyRecord(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     api_client_id = db.Column(
         db.Integer,
         db.ForeignKey("ai_api_client.id", ondelete="CASCADE"),
@@ -1157,6 +1369,7 @@ class OmnidimGatewayAction(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     operation = db.Column(db.String(80), nullable=False, index=True)
     idempotency_key_hash = db.Column(db.String(64), nullable=False, index=True)
     request_fingerprint = db.Column(db.String(64), nullable=False)
@@ -1181,6 +1394,7 @@ class ClinicProfile(db.Model):
     __tablename__ = "clinic_profile"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     clinic_name = db.Column(db.String(160), nullable=False)
     phone = db.Column(db.String(30))
     email = db.Column(db.String(160))
@@ -1226,6 +1440,7 @@ class AppointmentSlotLock(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     clinician_id = db.Column(db.Integer, nullable=False, index=True)
     location_id = db.Column(db.Integer, nullable=False, index=True)
     appointment_date = db.Column(db.Date, nullable=False, index=True)
@@ -1237,6 +1452,7 @@ class AppointmentSlotBlock(db.Model):
     __tablename__ = "appointment_slot_block"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     clinician_id = db.Column(db.Integer, db.ForeignKey("clinician.id"), index=True)
     location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), index=True)
     block_date = db.Column(db.Date, nullable=False, index=True)
@@ -1253,6 +1469,7 @@ class AppointmentWaitlist(db.Model):
     __tablename__ = "appointment_waitlist"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     waitlist_ref = db.Column(db.String(40), nullable=False, unique=True, index=True)
     patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), nullable=False, index=True)
     clinician_id = db.Column(db.Integer, db.ForeignKey("clinician.id"), nullable=False, index=True)
@@ -1276,6 +1493,7 @@ class PatientVerificationSession(db.Model):
     __tablename__ = "patient_verification_session"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
     api_client_id = db.Column(db.Integer, db.ForeignKey("ai_api_client.id"), nullable=False, index=True)
     patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), nullable=False, index=True)
@@ -1300,6 +1518,7 @@ class PatientVerificationIntent(db.Model):
     __tablename__ = "patient_verification_intent"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     reference_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
     api_client_id = db.Column(db.Integer, db.ForeignKey("ai_api_client.id"), nullable=False, index=True)
     patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), index=True)
@@ -1316,6 +1535,7 @@ class SecureDocumentToken(db.Model):
     __tablename__ = "secure_document_token"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
     report_id = db.Column(db.Integer, db.ForeignKey("lab_report.id"), nullable=False, index=True)
     patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), nullable=False, index=True)
@@ -1334,6 +1554,7 @@ class ClinicKnowledgeEntry(db.Model):
     __tablename__ = "clinic_knowledge_entry"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     category = db.Column(db.String(80), nullable=False, index=True)
     question = db.Column(db.String(240), nullable=False, index=True)
     answer = db.Column(db.Text, nullable=False)
@@ -1352,6 +1573,7 @@ class ReceptionSchedule(db.Model):
     __tablename__ = "reception_schedule"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), nullable=False, index=True)
     weekday = db.Column(db.Integer, nullable=False, index=True)
     is_open = db.Column(db.Boolean, nullable=False, default=True, index=True)
@@ -1371,6 +1593,7 @@ class ReceptionScheduleOverride(db.Model):
     __tablename__ = "reception_schedule_override"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     location_id = db.Column(db.Integer, db.ForeignKey("clinic_location.id"), nullable=False, index=True)
     schedule_date = db.Column(db.Date, nullable=False, index=True)
     is_open = db.Column(db.Boolean, nullable=False, default=False, index=True)
@@ -1386,6 +1609,7 @@ class CallbackRequest(db.Model):
     __tablename__ = "callback_request"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     callback_ref = db.Column(db.String(40), nullable=False, unique=True, index=True)
     patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), index=True)
     caller_name = db.Column(db.String(120))
@@ -1413,6 +1637,7 @@ class Complaint(db.Model):
     __tablename__ = "complaint"
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     complaint_ref = db.Column(db.String(40), nullable=False, unique=True, index=True)
     patient_id = db.Column(db.Integer, db.ForeignKey("patient.id"), index=True)
     caller_name = db.Column(db.String(120))
@@ -1443,6 +1668,7 @@ class NotificationTemplate(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     event_code = db.Column(db.String(80), nullable=False, index=True)
     channel = db.Column(db.String(20), nullable=False, index=True)
     language = db.Column(db.String(12), nullable=False, default="en", index=True)
@@ -1467,6 +1693,7 @@ class NotificationDelivery(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     api_client_id = db.Column(db.Integer, db.ForeignKey("ai_api_client.id"), nullable=False, index=True)
     template_id = db.Column(db.Integer, db.ForeignKey("notification_template.id"), nullable=False, index=True)
     channel = db.Column(db.String(20), nullable=False, index=True)

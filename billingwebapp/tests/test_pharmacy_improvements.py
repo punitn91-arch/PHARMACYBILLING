@@ -118,6 +118,23 @@ class PharmacyImprovementTests(unittest.TestCase):
             self.assertAlmostEqual(inv.sgst, 90.0, places=2)
             self.assertAlmostEqual(inv.total, 1180.0, places=2)
 
+    def test_billing_matches_medicine_name_case_insensitively(self):
+        with self.app.app_context():
+            med_id, _lot_id = self.seed_stock(name="golu", batch="yuyuyu", qty=200, mrp=30.0)
+        self.login()
+        response = self.bill(name="GOLU", qty=1, batch="yuyuyu")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"No stock available for GOLU", response.data)
+        self.assertIn(b"Payment Mode", response.data)
+        self.assertIn(b"CASH", response.data)
+
+        with self.app.app_context():
+            med = self.app_module.Medicine.query.get(med_id)
+            inv = self.latest_invoice()
+            item = self.app_module.InvoiceItem.query.filter_by(invoice_id=inv.id).first()
+            self.assertEqual(med.qty, 199)
+            self.assertEqual(item.name, "golu")
+
     # ---------------- Schedule H1 ----------------
     def test_schedule_h1_requires_doctor_and_appears_in_register(self):
         with self.app.app_context():
@@ -206,10 +223,15 @@ class PharmacyImprovementTests(unittest.TestCase):
 
         # Admin checks it and moves it back to stock -> stock and lot go up.
         self.client.post(f"/quarantine-stock/{qid}/restock")
+        self.client.post(f"/quarantine-stock/{qid}/restock")
         with self.app.app_context():
             m = self.app_module
             self.assertEqual(m.Medicine.query.get(med_id).qty, 8)
             self.assertEqual(m.VendorPurchaseItem.query.get(lot_id).remaining_qty, 8)
+            self.assertEqual(
+                m.StockHistory.query.filter_by(action="QUARANTINE_RESTOCK").count(),
+                1,
+            )
             self.assertEqual(m.QuarantineStock.query.get(qid).status, "RESTOCKED")
 
         # Cancelling the return bill now reverses the restocked units.
@@ -404,10 +426,15 @@ class PharmacyImprovementTests(unittest.TestCase):
             med_id, lot_id = self.seed_stock(name="OLD BATCH", batch="E1", expiry="2020-01-31", qty=4)
         self.login()
         self.client.post(f"/expired-stock/{med_id}/write-off")
+        self.client.post(f"/expired-stock/{med_id}/write-off")
         with self.app.app_context():
             m = self.app_module
             self.assertEqual(m.Medicine.query.get(med_id).qty, 0)
             self.assertEqual(m.VendorPurchaseItem.query.get(lot_id).remaining_qty, 0)
+            self.assertEqual(
+                m.StockHistory.query.filter_by(action="EXPIRY_WRITE_OFF").count(),
+                1,
+            )
 
 
 if __name__ == "__main__":

@@ -93,6 +93,11 @@ class AIFunctionalAPITests(unittest.TestCase):
             self.db.session.remove()
             self.db.drop_all()
             self.db.create_all()
+            tenant = self.app_module.create_default_tenant()
+            self.tenant_id = tenant.id
+            tenant_context = self.app_module.tenant_context(tenant.id)
+            tenant_context.__enter__()
+            self.addCleanup(tenant_context.__exit__, None, None, None)
             self.db.session.add(M["ClinicProfile"](
                 clinic_name="Test Endo Clinic", phone="01123456789",
                 reception_phone="01123456780", timezone_name="Asia/Kolkata",

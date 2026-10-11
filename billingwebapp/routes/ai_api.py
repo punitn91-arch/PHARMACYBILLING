@@ -10,9 +10,10 @@ import time
 import uuid
 
 from flask import Blueprint, current_app, g, jsonify, request
+from sqlalchemy import text
 
 try:
-    from ..models import db, AIAPIRequestAudit
+    from ..models import db, AIAPIClient, AIAPIRequestAudit
     from ..services.ai_auth_service import (
         AIAuthenticationError,
         authenticate_bearer_token,
@@ -20,7 +21,7 @@ try:
         require_scope,
     )
 except ImportError:  # pragma: no cover - direct ``python app.py`` execution
-    from models import db, AIAPIRequestAudit
+    from models import db, AIAPIClient, AIAPIRequestAudit
     from services.ai_auth_service import (
         AIAuthenticationError,
         authenticate_bearer_token,
@@ -115,6 +116,7 @@ def require_ai_scope(scope):
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
+            _activate_ai_tenant_context(None)
             principal = authenticate_bearer_token(
                 db.session,
                 request.headers.get("Authorization"),
@@ -122,6 +124,7 @@ def require_ai_scope(scope):
             )
             g.ai_principal = principal
             require_scope(principal, scope)
+            _activate_ai_tenant_context(principal.tenant_id)
             return view(*args, **kwargs)
 
         return wrapped
@@ -176,6 +179,43 @@ def set_ai_audit_action(action, *, resource_type=None, resource_id=None):
     g.ai_audit_resource_id = str(resource_id)[:80] if resource_id is not None else None
 
 
+def _activate_ai_tenant_context(tenant_id):
+    if tenant_id is not None:
+        try:
+            tenant_id = int(tenant_id)
+        except (TypeError, ValueError):
+            raise AIAuthenticationError("UNAUTHORIZED", "Invalid service credentials", 401)
+        if tenant_id <= 0:
+            raise AIAuthenticationError("UNAUTHORIZED", "Invalid service credentials", 401)
+    tenant_context_factory = current_app.extensions.get("tenant_context")
+    if not callable(tenant_context_factory):
+        raise AIAuthenticationError(
+            "SERVICE_UNAVAILABLE",
+            "Tenant context is unavailable",
+            503,
+        )
+    manager = tenant_context_factory(tenant_id)
+    manager.__enter__()
+    g.ai_tenant_context_managers.append(manager)
+    g.ai_tenant_id = tenant_id
+
+
+def _set_ai_rls_lookup_context(*, client_id=None, token_hash=None):
+    if db.engine.dialect.name.lower() != "postgresql":
+        return
+    connection = db.session.connection()
+    if client_id is not None:
+        connection.execute(
+            text("SELECT set_config('app.ai_client_lookup_id', :value, true)"),
+            {"value": str(client_id)},
+        )
+    if token_hash is not None:
+        connection.execute(
+            text("SELECT set_config('app.ai_access_token_hash', :value, true)"),
+            {"value": str(token_hash)},
+        )
+
+
 @ai_api_bp.before_request
 def prepare_ai_request_context():
     g.ai_started_at = time.perf_counter()
@@ -183,6 +223,8 @@ def prepare_ai_request_context():
     g.ai_call_id = _safe_header_id("X-Call-ID", _SAFE_CONTEXT_ID)
     g.ai_session_id = _safe_header_id("X-Session-ID", _SAFE_CONTEXT_ID)
     g.ai_principal = None
+    g.ai_tenant_context_managers = []
+    g.ai_tenant_id = None
     g.ai_error_code = None
     g.ai_audit_action = None
     g.ai_audit_resource_type = None
@@ -211,6 +253,11 @@ def finalize_ai_request(response):
         if audited_endpoint.startswith(AI_API_PREFIX + "/documents/"):
             audited_endpoint = AI_API_PREFIX + "/documents/{token}"
         audit = AIAPIRequestAudit(
+            tenant_id=(
+                principal.tenant_id
+                if principal
+                else getattr(g, "ai_tenant_id", None)
+            ),
             api_client_id=principal.api_client_id if principal else None,
             request_id=g.ai_request_id,
             call_id=getattr(g, "ai_call_id", None),
@@ -251,6 +298,13 @@ def finalize_ai_request(response):
             getattr(g, "ai_request_id", "unknown"),
         )
     return response
+
+
+@ai_api_bp.teardown_request
+def reset_ai_tenant_context(_exc):
+    for manager in reversed(getattr(g, "ai_tenant_context_managers", [])):
+        manager.__exit__(None, None, None)
+    g.ai_tenant_context_managers = []
 
 
 @ai_api_bp.errorhandler(AIAuthenticationError)
@@ -325,6 +379,11 @@ def create_access_token():
     client_id, client_secret, requested_scopes = _token_credentials()
     if not client_id or not client_secret:
         raise AIAPIError("INVALID_REQUEST", "Client credentials are required", 400)
+    _activate_ai_tenant_context(None)
+    _set_ai_rls_lookup_context(client_id=client_id)
+    client = AIAPIClient.query.filter_by(client_id=client_id).first()
+    if client is not None:
+        _activate_ai_tenant_context(client.tenant_id)
     raw_token, token, client, ttl = issue_access_token(
         db.session,
         client_identifier=client_id,
@@ -340,6 +399,7 @@ def create_access_token():
     g.ai_principal = SimpleNamespace(
         api_client_id=client.id,
         client_id=client.client_id,
+        tenant_id=client.tenant_id,
     )
     return success_response(
         {

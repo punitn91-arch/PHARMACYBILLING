@@ -54,6 +54,8 @@ def configure_monitoring(app, db, *, env_flag):
             return response
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         sql_durations = getattr(g, "sql_query_durations_ms", [])
+        user = getattr(g, "user", None)
+        user_state = getattr(user, "__dict__", {}) if user is not None else {}
         payload = {
             "method": request.method,
             "path": request.path,
@@ -61,7 +63,7 @@ def configure_monitoring(app, db, *, env_flag):
             "duration_ms": duration_ms,
             "sql_queries": len(sql_durations),
             "sql_time_ms": round(sum(sql_durations), 2),
-            "user": getattr(getattr(g, "user", None), "username", None),
+            "user": user_state.get("username"),
         }
         message = json.dumps(payload, ensure_ascii=True)
         if duration_ms >= slow_request_ms:
@@ -99,4 +101,3 @@ def configure_monitoring(app, db, *, env_flag):
                         ensure_ascii=True,
                     ),
                 )
-
