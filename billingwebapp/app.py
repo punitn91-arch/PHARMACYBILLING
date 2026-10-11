@@ -7391,10 +7391,17 @@ with app.app_context():
             db.session.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_def}'))
             db.session.commit()
 
+    def startup_dialect_name():
+        try:
+            bind = db.session.get_bind()
+        except Exception:
+            bind = None
+        bind = bind or db.engine
+        return (bind.dialect.name if bind and bind.dialect else "").lower()
+
     def startup_boolean_bind_value(table, column, enabled):
         try:
-            dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
-            if dialect_name != "postgresql":
+            if startup_dialect_name() != "postgresql":
                 return bool(enabled)
             column_meta = next(
                 (
@@ -7652,7 +7659,7 @@ with app.app_context():
         db.session.commit()
         run_tenant_scoped_startup_backfill(backfill_invoice_print_profiles)
         run_tenant_scoped_startup_backfill(sync_invoice_print_profiles_to_cutover)
-        if (db.session.bind.dialect.name if db.session.bind else "").lower() == "postgresql":
+        if startup_dialect_name() == "postgresql":
             legacy_boolean_columns = {
                 "user": {
                     "is_active": True,
@@ -7899,17 +7906,32 @@ with app.app_context():
                 db.func.lower(User.username) == super_admin_username.lower(),
             ).first()
             if not existing_super_admin:
-                platform_owner = User(
-                    tenant_id=None,
-                    username=super_admin_username,
-                    role=PLATFORM_SUPER_ADMIN_ROLE,
-                    access_profile="platform_owner",
-                    can_manage_users=True,
-                    can_view_reports=True,
-                    can_view_audit_logs=True,
+                password_hash = generate_password_hash(super_admin_password, method="pbkdf2:sha256")
+                permission_values = {field_name: False for field_name in USER_PERMISSION_FIELDS}
+                permission_values.update({
+                    "can_manage_users": True,
+                    "can_view_reports": True,
+                    "can_view_audit_logs": True,
+                })
+                insert_values = {
+                    "tenant_id": None,
+                    "username": super_admin_username,
+                    "password_hash": password_hash,
+                    "role": PLATFORM_SUPER_ADMIN_ROLE,
+                    "access_profile": "platform_owner",
+                    "session_version": 0,
+                    "is_active": startup_boolean_bind_value("user", "is_active", True),
+                    "created_at": datetime.utcnow(),
+                }
+                for field_name, enabled in permission_values.items():
+                    insert_values[field_name] = startup_boolean_bind_value("user", field_name, enabled)
+                insert_columns = list(insert_values.keys())
+                columns_sql = ", ".join(f'"{column_name}"' for column_name in insert_columns)
+                placeholders_sql = ", ".join(f":{column_name}" for column_name in insert_columns)
+                db.session.execute(
+                    text(f'INSERT INTO "user" ({columns_sql}) VALUES ({placeholders_sql})'),
+                    insert_values,
                 )
-                platform_owner.set_password(super_admin_password)
-                db.session.add(platform_owner)
                 db.session.commit()
 
 configure_monitoring(app, db, env_flag=env_flag)
