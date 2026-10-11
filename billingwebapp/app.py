@@ -7391,6 +7391,28 @@ with app.app_context():
             db.session.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_def}'))
             db.session.commit()
 
+    def startup_boolean_bind_value(table, column, enabled):
+        try:
+            dialect_name = (db.session.bind.dialect.name if db.session.bind else "").lower()
+            if dialect_name != "postgresql":
+                return bool(enabled)
+            column_meta = next(
+                (
+                    item
+                    for item in inspect(db.engine).get_columns(table)
+                    if item.get("name") == column
+                ),
+                None,
+            )
+            if not column_meta:
+                return bool(enabled)
+            type_name = column_meta["type"].__class__.__name__.lower()
+            if "bool" in type_name:
+                return bool(enabled)
+            return 1 if bool(enabled) else 0
+        except Exception:
+            return bool(enabled)
+
     # Safe schema upgrades for return system (no data loss)
     try:
         # User permissions
@@ -7425,7 +7447,7 @@ with app.app_context():
             'UPDATE "user" '
             'SET "is_active" = :active '
             'WHERE "is_active" IS NULL'
-        ), {"active": True})
+        ), {"active": startup_boolean_bind_value("user", "is_active", True)})
         db.session.commit()
 
         # Medicine extra fields
@@ -7714,22 +7736,22 @@ with app.app_context():
                 'UPDATE "medicine" '
                 'SET "is_active" = :active '
                 'WHERE "is_active" IS NULL'
-            ), {"active": True})
+            ), {"active": startup_boolean_bind_value("medicine", "is_active", True)})
             db.session.execute(text(
                 'UPDATE "appointment" '
                 'SET "is_deleted" = :deleted '
                 'WHERE "is_deleted" IS NULL'
-            ), {"deleted": False})
+            ), {"deleted": startup_boolean_bind_value("appointment", "is_deleted", False)})
             db.session.execute(text(
                 'UPDATE "hold_bill" '
                 'SET "is_deleted" = :deleted '
                 'WHERE "is_deleted" IS NULL'
-            ), {"deleted": False})
+            ), {"deleted": startup_boolean_bind_value("hold_bill", "is_deleted", False)})
             db.session.execute(text(
                 'UPDATE "pending_bill_store" '
                 'SET "is_deleted" = :deleted '
                 'WHERE "is_deleted" IS NULL'
-            ), {"deleted": False})
+            ), {"deleted": startup_boolean_bind_value("pending_bill_store", "is_deleted", False)})
             db.session.commit()
 
             appointments_without_token = Appointment.query.filter(
