@@ -123,13 +123,18 @@ def _indexes(table):
     return names
 
 
+def _quoted_identifier(name):
+    return _bind().dialect.identifier_preparer.quote(name)
+
+
 def _assert_no_duplicates(table, columns, where, label):
     if table not in _tables():
         return
     column_sql = ", ".join(columns)
+    table_sql = _quoted_identifier(table)
     duplicate = _bind().execute(
         sa.text(
-            f"SELECT {column_sql}, COUNT(*) FROM {table} "
+            f"SELECT {column_sql}, COUNT(*) FROM {table_sql} "
             f"WHERE {where} GROUP BY {column_sql} HAVING COUNT(*) > 1 LIMIT 1"
         )
     ).first()
