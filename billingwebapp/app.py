@@ -15633,7 +15633,11 @@ def ensure_ai_clinic_lab_runtime_schema():
 
 
 def create_appointment_record(*, appointment_no, patient, mobile, validated, form_data):
+    tenant_id = current_tenant_id()
+    if not tenant_id:
+        raise RuntimeError("Cannot create an appointment without an active tenant context.")
     common_values = {
+        "tenant_id": tenant_id,
         "appointment_no": appointment_no,
         "token_no": get_next_daily_token(validated["appointment_date"]),
         "patient_id": patient.id if patient else None,

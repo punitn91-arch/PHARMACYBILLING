@@ -2487,6 +2487,14 @@ class EngineeringFlowTests(unittest.TestCase):
 
     def test_appointment_create_handles_legacy_integer_soft_delete_column(self):
         self.login()
+        with self.app.app_context(), self.app_module.tenant_scope_disabled():
+            tenant = self.app_module.Tenant.query.filter_by(tenant_code="default").one()
+            self.app_module.apply_subscription_to_tenant(
+                tenant,
+                features={"appointments": True, "pos": True, "inventory": True, "reports": True, "exports": True},
+                created_by="test",
+            )
+            self.db.session.commit()
         original_helper = self.app_module.appointment_soft_delete_uses_legacy_integer
         self.app_module.appointment_soft_delete_uses_legacy_integer = lambda: True
         try:
@@ -2514,7 +2522,11 @@ class EngineeringFlowTests(unittest.TestCase):
         with self.app.app_context():
             appointment = self.app_module.Appointment.query.filter_by(patient_name="Legacy Create").first()
             self.assertIsNotNone(appointment)
+            self.assertIsNotNone(appointment.tenant_id)
             self.assertFalse(bool(appointment.is_deleted))
+        list_response = self.client.get("/appointments")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertIn(b"Legacy Create", list_response.data)
 
     def test_profit_report_accuracy(self):
         with self.app.app_context():
