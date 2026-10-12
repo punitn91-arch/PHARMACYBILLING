@@ -1544,35 +1544,47 @@ TENANT_DASHBOARD_LOGO_OVERRIDES = (
         "logo_path": "/static/arthrogenix-dashboard-logo.png",
         "width_mm": 160,
         "height_mm": 80,
+        "invoice_logo_path": "/static/arthrogenix-dashboard-logo.png",
+        "invoice_width_mm": 29,
+        "invoice_height_mm": 9,
     },
     {
         "match_terms": ("the endo", "endo pharmacy", "endo clinic", "endopharmacy"),
         "logo_path": "/static/endo-dashboard-logo.png",
         "width_mm": 110,
         "height_mm": 110,
+        "invoice_logo_path": "/static/endo-dashboard-logo.png",
+        "invoice_width_mm": 14,
+        "invoice_height_mm": 14,
     },
 )
+
+
+def tenant_logo_override(tenant=None, identity=None):
+    tenant_tokens = " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            getattr(tenant, "tenant_code", ""),
+            getattr(tenant, "pharmacy_name", ""),
+            (identity or {}).get("pharmacy_name", ""),
+            (identity or {}).get("legal_business_name", ""),
+        )
+    )
+    for override in TENANT_DASHBOARD_LOGO_OVERRIDES:
+        if any(term in tenant_tokens for term in override["match_terms"]):
+            return override
+    return None
 
 
 def tenant_dashboard_logo_identity(tenant=None, business_identity=None):
     if tenant is None:
         tenant = current_tenant()
     identity = dict(business_identity or tenant_business_identity(tenant))
-    tenant_tokens = " ".join(
-        str(value or "").strip().lower()
-        for value in (
-            getattr(tenant, "tenant_code", ""),
-            getattr(tenant, "pharmacy_name", ""),
-            identity.get("pharmacy_name", ""),
-            identity.get("legal_business_name", ""),
-        )
-    )
-    for override in TENANT_DASHBOARD_LOGO_OVERRIDES:
-        if any(term in tenant_tokens for term in override["match_terms"]):
-            identity["logo_path"] = override["logo_path"]
-            identity["logo_width_mm"] = override["width_mm"]
-            identity["logo_height_mm"] = override["height_mm"]
-            break
+    override = tenant_logo_override(tenant, identity)
+    if override:
+        identity["logo_path"] = override["logo_path"]
+        identity["logo_width_mm"] = override["width_mm"]
+        identity["logo_height_mm"] = override["height_mm"]
     return identity
 
 
@@ -1611,6 +1623,14 @@ def tenant_invoice_print_profile(base_profile, tenant=None):
     if not tenant:
         return base_profile
     identity = tenant_business_identity(tenant)
+    override = tenant_logo_override(tenant, identity)
+    logo_path = identity["logo_path"]
+    logo_width_mm = identity["logo_width_mm"]
+    logo_height_mm = identity["logo_height_mm"]
+    if override:
+        logo_path = override.get("invoice_logo_path") or override["logo_path"]
+        logo_width_mm = override.get("invoice_width_mm", logo_width_mm)
+        logo_height_mm = override.get("invoice_height_mm", logo_height_mm)
     base_profile.update({
         "profile_code": f"tenant_{tenant.id}",
         "pharmacy_name": identity["pharmacy_name"],
@@ -1621,9 +1641,9 @@ def tenant_invoice_print_profile(base_profile, tenant=None):
         "alternate_mobile": identity["alternate_mobile"],
         "gst_no": identity["gst_no"],
         "licence_no": identity["licence_no"],
-        "logo_path": identity["logo_path"],
-        "logo_width_mm": identity["logo_width_mm"],
-        "logo_height_mm": identity["logo_height_mm"],
+        "logo_path": logo_path,
+        "logo_width_mm": logo_width_mm,
+        "logo_height_mm": logo_height_mm,
         "invoice_header": identity["invoice_header"],
         "invoice_footer": identity["invoice_footer"],
         "invoice_terms": identity["invoice_terms"],
