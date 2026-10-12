@@ -1545,6 +1545,12 @@ TENANT_DASHBOARD_LOGO_OVERRIDES = (
         "width_mm": 160,
         "height_mm": 80,
     },
+    {
+        "match_terms": ("the endo", "endo pharmacy", "endo clinic", "endopharmacy"),
+        "logo_path": "/static/endo-dashboard-logo.png",
+        "width_mm": 110,
+        "height_mm": 110,
+    },
 )
 
 
