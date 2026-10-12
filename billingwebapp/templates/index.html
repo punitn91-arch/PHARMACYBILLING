@@ -49,10 +49,10 @@
 
     <section class="dashboard-logo-stage app-surface">
         <img
-            src="{{ business_identity.logo_path or url_for('static', filename='logo.png') }}"
+            src="{{ dashboard_logo_identity.logo_path or business_identity.logo_path or url_for('static', filename='logo.png') }}"
             alt="{{ business_identity.pharmacy_name or 'Pharmacy' }} Logo"
             class="dashboard-logo-image"
-            style="max-width: min(100%, {{ (business_identity.logo_width_mm|default(44)) * 8 }}px); max-height: {{ (business_identity.logo_height_mm|default(21)) * 8 }}px;"
+            style="max-width: min(100%, {{ (dashboard_logo_identity.logo_width_mm|default(business_identity.logo_width_mm|default(44))) * 8 }}px); max-height: {{ (dashboard_logo_identity.logo_height_mm|default(business_identity.logo_height_mm|default(21))) * 8 }}px;"
         >
     </section>
 

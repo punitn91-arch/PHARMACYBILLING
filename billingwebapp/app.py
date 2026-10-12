@@ -1538,6 +1538,38 @@ def tenant_business_identity(tenant=None):
     }
 
 
+TENANT_DASHBOARD_LOGO_OVERRIDES = (
+    {
+        "match_terms": ("arthrogenix", "arthro", "artho"),
+        "logo_path": "/static/arthrogenix-dashboard-logo.png",
+        "width_mm": 160,
+        "height_mm": 80,
+    },
+)
+
+
+def tenant_dashboard_logo_identity(tenant=None, business_identity=None):
+    if tenant is None:
+        tenant = current_tenant()
+    identity = dict(business_identity or tenant_business_identity(tenant))
+    tenant_tokens = " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            getattr(tenant, "tenant_code", ""),
+            getattr(tenant, "pharmacy_name", ""),
+            identity.get("pharmacy_name", ""),
+            identity.get("legal_business_name", ""),
+        )
+    )
+    for override in TENANT_DASHBOARD_LOGO_OVERRIDES:
+        if any(term in tenant_tokens for term in override["match_terms"]):
+            identity["logo_path"] = override["logo_path"]
+            identity["logo_width_mm"] = override["width_mm"]
+            identity["logo_height_mm"] = override["height_mm"]
+            break
+    return identity
+
+
 def update_tenant_settings(tenant, updates):
     if not tenant:
         return {}
@@ -7955,9 +7987,10 @@ def set_login_session(user, tenant=None):
     session["tenant_code"] = getattr(resolved_tenant, "tenant_code", "") or ""
     session["tenant_name"] = getattr(resolved_tenant, "pharmacy_name", "") or ""
     business_identity = tenant_business_identity(resolved_tenant)
-    session["tenant_logo_path"] = business_identity.get("logo_path", "")
-    session["tenant_logo_width_mm"] = business_identity.get("logo_width_mm", 44)
-    session["tenant_logo_height_mm"] = business_identity.get("logo_height_mm", 21)
+    dashboard_logo_identity = tenant_dashboard_logo_identity(resolved_tenant, business_identity)
+    session["tenant_logo_path"] = dashboard_logo_identity.get("logo_path", "")
+    session["tenant_logo_width_mm"] = dashboard_logo_identity.get("logo_width_mm", 44)
+    session["tenant_logo_height_mm"] = dashboard_logo_identity.get("logo_height_mm", 21)
     session["session_version"] = int(user.session_version or 0)
     session["username"] = user.username
     session["role"] = user.role
@@ -8532,7 +8565,9 @@ def index():
     show_profit_cards = bool(
         session.get("role") == "admin" or session.get("can_view_profit_dashboard")
     )
-    business_identity = tenant_business_identity(current_tenant())
+    tenant = current_tenant()
+    business_identity = tenant_business_identity(tenant)
+    dashboard_logo_identity = tenant_dashboard_logo_identity(tenant, business_identity)
     # ---------- TODAY SALE ----------
     today = clinic_now().date()
     today_iso = today.isoformat()
@@ -8644,6 +8679,7 @@ def index():
         month_profit=month_profit,
         show_profit_cards=show_profit_cards,
         business_identity=business_identity,
+        dashboard_logo_identity=dashboard_logo_identity,
         business_profile_complete=bool(
             business_identity.get("pharmacy_name")
             and business_identity.get("address_line_1")
