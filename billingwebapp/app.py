@@ -15964,9 +15964,19 @@ def persist_new_medicine_record(med):
             filtered_values,
         )
         medicine_id = getattr(result, "lastrowid", None)
+        if not medicine_id and dialect == "sqlite":
+            medicine_id = db.session.execute(text("SELECT last_insert_rowid()")).scalar()
 
     if not medicine_id or medicine_id <= 0:
-        raise RuntimeError("New medicine was not assigned a database ID.")
+        lookup_filters = [
+            Medicine.tenant_id == tenant_id,
+            Medicine.name == filtered_values.get("name", ""),
+            Medicine.batch == filtered_values.get("batch", ""),
+        ]
+        persisted = Medicine.query.filter(*lookup_filters).order_by(Medicine.id.desc()).first()
+        if persisted is None:
+            raise RuntimeError("New medicine was not assigned a database ID.")
+        return persisted
     persisted = Medicine.query.filter(
         Medicine.id == medicine_id,
         Medicine.tenant_id == tenant_id,
