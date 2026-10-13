@@ -78,9 +78,27 @@ class PublicPatientPortalTests(unittest.TestCase):
             self.db.session.remove()
 
     def _seed_admin(self):
+        tenant = self.app_module.create_default_tenant(commit=False)
+        self.db.session.flush()
+        self.app_module.update_tenant_settings(
+            tenant,
+            {
+                "subscription": {
+                    "features": {
+                        "pos": True,
+                        "inventory": True,
+                        "reports": True,
+                        "exports": True,
+                        "appointments": True,
+                        "lab": True,
+                    }
+                }
+            },
+        )
         admin = self.app_module.User(
             username="admin",
             role="admin",
+            tenant_id=tenant.id,
             access_profile="admin",
             can_manage_users=True,
             can_view_reports=True,
@@ -99,6 +117,9 @@ class PublicPatientPortalTests(unittest.TestCase):
         admin.set_password("Admin@123")
         self.db.session.add(admin)
         self.db.session.commit()
+
+    def _tenant_id(self):
+        return self.app_module.Tenant.query.order_by(self.app_module.Tenant.id.asc()).first().id
 
     def _login_admin(self):
         response = self.client.post(
@@ -159,7 +180,9 @@ class PublicPatientPortalTests(unittest.TestCase):
         first_slot = datetime.combine(target_date, time(10, 0))
 
         with self.app.app_context():
+            tenant_id = self._tenant_id()
             settings = self.app_module.AppointmentBookingSettings(
+                tenant_id=tenant_id,
                 booking_enabled=True,
                 normal_daily_limit=15,
                 priority_daily_limit=2,
@@ -177,6 +200,7 @@ class PublicPatientPortalTests(unittest.TestCase):
                 appointment_time = (first_slot + timedelta(minutes=20 * index)).time()
                 self.db.session.add(
                     self.app_module.Appointment(
+                        tenant_id=tenant_id,
                         appointment_no=f"APT-{index + 1:06d}",
                         token_no=index + 1,
                         patient_name=f"Existing Patient {index + 1}",
@@ -307,7 +331,9 @@ class PublicPatientPortalTests(unittest.TestCase):
         target_date = self.app_module.clinic_now().date() + timedelta(days=1)
         first_slot = datetime.combine(target_date, time(10, 0))
         with self.app.app_context():
+            tenant_id = self._tenant_id()
             settings = self.app_module.AppointmentBookingSettings(
+                tenant_id=tenant_id,
                 booking_enabled=True,
                 normal_daily_limit=15,
                 priority_daily_limit=2,
@@ -324,6 +350,7 @@ class PublicPatientPortalTests(unittest.TestCase):
             for index in range(15):
                 self.db.session.add(
                     self.app_module.Appointment(
+                        tenant_id=tenant_id,
                         appointment_no=f"APT-{index + 1:06d}",
                         token_no=index + 1,
                         patient_name=f"Regular {index + 1}",
@@ -388,7 +415,7 @@ class PublicPatientPortalTests(unittest.TestCase):
         with patch.dict(os.environ, {"PUBLIC_BOOKING_BASE_URL": "https://clinic.example"}, clear=False):
             page_response = self.client.get("/appointment-booking/qr")
             self.assertEqual(page_response.status_code, 200)
-            self.assertIn(b"https://clinic.example/appointment", page_response.data)
+            self.assertIn(b"https://clinic.example/appointment?tenant=default", page_response.data)
             self.assertNotIn(b"patient_name", page_response.data)
 
             png_response = self.client.get("/appointment-booking/qr.png")
@@ -400,7 +427,7 @@ class PublicPatientPortalTests(unittest.TestCase):
         response = self.client.get("/appointment")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Book Appointment", response.data)
-        self.assertIn(b'href="/book-appointment"', response.data)
+        self.assertIn(b'href="/book-appointment?tenant=default"', response.data)
 
     def test_admin_can_manage_public_booking_controls(self):
         self._login_admin()

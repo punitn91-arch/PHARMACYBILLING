@@ -47,22 +47,27 @@
             box-shadow: 0 14px 20px -22px rgba(26, 54, 93, .72);
         }
         .appointment-doctor-banner {
+            display: flex;
+            align-items: center;
+            justify-content: center;
             overflow: hidden;
             margin: 0;
             border: 1px solid var(--line);
             border-radius: 20px;
+            min-height: 96px;
+            max-height: 170px;
+            padding: clamp(6px, 1vw, 10px);
             background: #fff;
             box-shadow: var(--shadow);
         }
         .appointment-doctor-banner img {
             display: block;
             width: 100%;
-            max-height: min(34svh, 330px);
-            margin: 0 auto;
+            height: auto;
+            max-height: 150px;
             object-fit: contain;
             object-position: center;
         }
-        .intro { max-width: 720px; margin: 22px 0; color: var(--muted); font-size: 14px; }
         .flash-list { display: grid; gap: 9px; margin: 0 0 18px; padding: 0; list-style: none; }
         .flash { border: 1px solid #fecaca; border-radius: 12px; background: var(--danger-soft); color: var(--danger); padding: 11px 13px; font-size: 13px; font-weight: 600; }
         .flash.success { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
@@ -151,8 +156,8 @@
         @media (max-width: 600px) {
             .shell { width: min(100% - 20px, 960px); }
             .sticky-clinic-intro { padding: 0 0 11px; }
-            .appointment-doctor-banner { border-radius: 15px; }
-            .appointment-doctor-banner img { max-height: min(29svh, 190px); }
+            .appointment-doctor-banner { min-height: 72px; max-height: 105px; border-radius: 15px; padding: 6px; }
+            .appointment-doctor-banner img { max-height: 93px; }
             .card-head, .booking-form { padding: 17px; }
             .field { grid-column: 1 / -1; }
             .availability, .type-options { grid-template-columns: 1fr; }
@@ -170,6 +175,9 @@
 {% set priority_fee = public_settings.priority_fee|default(public_settings.priority_fee_amount|default(1000)) %}
 {% set normal_fee = public_settings.normal_fee|default(0) %}
 {% set current_availability = availability|default({}, true) %}
+{% set appointment_identity = appointment_identity|default({}, true) %}
+{% set booking_form_url = booking_form_url|default(url_for('public_appointment_booking'), true) %}
+{% set public_tenant_code = public_tenant_code|default('', true) %}
 {% set normal_remaining = current_availability.normal_remaining|default(current_availability.regular_remaining|default(0)) %}
 {% set priority_remaining = current_availability.priority_remaining|default(0) %}
 {% set normal_full = current_availability.normal_full|default((normal_remaining|int) <= 0) %}
@@ -180,12 +188,10 @@
 {% set saved_type = form_data.booking_type|default(form_data.appointment_type|default('NORMAL')) if form_data else 'NORMAL' %}
 <main class="shell">
     <div class="sticky-clinic-intro">
-        <figure class="appointment-doctor-banner">
-            <img src="{{ url_for('static', filename='doctor-appointment-banner.png') }}" alt="Dr. Abhishek Prakash — Diabetologist and Endocrinologist" width="1983" height="793" fetchpriority="high" decoding="async">
+        <figure class="appointment-doctor-banner" style="--banner-ratio: {{ appointment_identity.banner_width|default(16, true) }} / {{ appointment_identity.banner_height|default(9, true) }};">
+            <img src="{{ appointment_identity.banner_path|default(url_for('static', filename='doctor-appointment-banner.png'), true) }}" alt="{{ appointment_identity.banner_alt|default('Clinic appointment banner', true) }}" width="{{ appointment_identity.banner_width|default(1983, true) }}" height="{{ appointment_identity.banner_height|default(793, true) }}" fetchpriority="high" decoding="async">
         </figure>
     </div>
-
-    <p class="intro">Choose an available date and submit your details. We will verify your mobile number with a one-time password before confirming the booking.</p>
 
     {% if not booking_is_enabled %}
     <p class="empty" role="status">Online appointment booking is currently unavailable. Please contact the clinic directly.</p>
@@ -205,7 +211,8 @@
         <div class="card-head">
             <h2 id="booking-title">Request an appointment</h2>
             <p>All fields marked required are needed to reserve one place in the clinic’s daily queue.</p>
-            <form class="date-picker" method="get" action="/book-appointment">
+            <form class="date-picker" method="get" action="{{ booking_form_url }}">
+                {% if public_tenant_code %}<input type="hidden" name="tenant" value="{{ public_tenant_code }}">{% endif %}
                 <div>
                     <label for="availability_date">Check availability for date</label>
                     <select id="availability_date" name="date" required>
@@ -228,7 +235,8 @@
             </form>
         </div>
 
-        <form class="booking-form" method="post" action="/book-appointment">
+        <form class="booking-form" method="post" action="{{ booking_form_url }}">
+            {% if public_tenant_code %}<input type="hidden" name="tenant" value="{{ public_tenant_code }}">{% endif %}
             <section class="section" aria-labelledby="patient-details-title">
                 <h3 class="section-title" id="patient-details-title"><span class="step">1</span> Your details</h3>
                 <div class="fields">

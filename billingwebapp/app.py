@@ -2,7 +2,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_from_directory, send_file, g, abort, has_app_context
 from datetime import datetime, time, timedelta, date, timezone
 from functools import wraps
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import contextvars
 import json
 import math
@@ -15698,6 +15698,7 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
     tenant_id = current_tenant_id()
     if not tenant_id:
         raise RuntimeError("Cannot create an appointment without an active tenant context.")
+    appointment_identity = tenant_appointment_identity()
     common_values = {
         "tenant_id": tenant_id,
         "appointment_no": appointment_no,
@@ -15707,7 +15708,7 @@ def create_appointment_record(*, appointment_no, patient, mobile, validated, for
         "mobile": mobile,
         "age": None,
         "gender": validated["gender"],
-        "doctor_name": APPOINTMENT_DEFAULT_DOCTOR,
+        "doctor_name": appointment_identity["doctor_name"],
         "appointment_date": validated["appointment_date"],
         "appointment_time": validated["appointment_time"],
         "payment_mode": form_data["payment_mode"],
@@ -16412,6 +16413,7 @@ def get_patient_suggestions(limit=200):
 # staff appointment screen.  It reserves capacity while an OTP is pending,
 # then creates the same Appointment record the reception team already uses.
 PUBLIC_APPOINTMENT_SESSION_KEY = "public_appointment_booking_ref"
+PUBLIC_APPOINTMENT_TENANT_SESSION_KEY = "public_appointment_tenant"
 PUBLIC_APPOINTMENT_RESERVATION_MINUTES = max(
     5,
     min(30, to_int_safe(os.environ.get("PUBLIC_APPOINTMENT_RESERVATION_MINUTES"), 10)),
@@ -16419,6 +16421,136 @@ PUBLIC_APPOINTMENT_RESERVATION_MINUTES = max(
 PUBLIC_APPOINTMENT_ACTIVE_STATUSES = {"OTP_PENDING", "PAYMENT_PENDING", "BOOKED"}
 PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START = "17:30"
 PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END = "19:45"
+TENANT_APPOINTMENT_OVERRIDES = (
+    {
+        "match_terms": ("arthrogenix", "arthro", "artho"),
+        "clinic_name": "ARTHROGENIX",
+        "doctor_name": "DR. ABHISHEK SAXENA",
+        "doctor_title": "Sports Orthopedic Surgeon",
+        "banner_path": "/static/arthrogenix-appointment-banner.png",
+        "banner_alt": "Dr. Abhishek Saxena - Arthrogenix sports orthopedic surgeon",
+        "banner_width": 2400,
+        "banner_height": 300,
+        "landing_image_path": "/static/arthrogenix-appointment-landing.png",
+        "landing_image_alt": "Arthrogenix appointment page for Dr. Abhishek Saxena",
+        "landing_image_width": 2400,
+        "landing_image_height": 1350,
+    },
+    {
+        "match_terms": ("the endo", "endo pharmacy", "endo clinic", "endopharmacy"),
+        "clinic_name": "The Endo Clinic",
+        "doctor_name": "Dr. Abhishek Prakash",
+        "doctor_title": "Diabetologist and Endocrinologist",
+        "banner_path": "/static/doctor-appointment-banner.png",
+        "banner_alt": "Dr. Abhishek Prakash - Diabetologist and Endocrinologist",
+        "banner_width": 1983,
+        "banner_height": 793,
+    },
+)
+
+
+def tenant_appointment_override(tenant=None, identity=None):
+    tenant_tokens = " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            getattr(tenant, "tenant_code", ""),
+            getattr(tenant, "pharmacy_name", ""),
+            (identity or {}).get("pharmacy_name", ""),
+            (identity or {}).get("legal_business_name", ""),
+        )
+    )
+    for override in TENANT_APPOINTMENT_OVERRIDES:
+        if any(term in tenant_tokens for term in override["match_terms"]):
+            return override
+    return None
+
+
+def public_appointment_context_tenant():
+    tenant = current_tenant()
+    if tenant:
+        return tenant
+    tenant_id = current_tenant_id()
+    if not tenant_id:
+        return None
+    with tenant_scope_disabled():
+        return Tenant.query.filter(Tenant.id == tenant_id).first()
+
+
+def tenant_appointment_identity(tenant=None):
+    if tenant is None:
+        tenant = public_appointment_context_tenant()
+    identity = tenant_business_identity(tenant) if tenant else {}
+    settings = tenant_settings_dict(tenant) if tenant else {}
+    appointment_identity = {
+        "clinic_name": identity.get("pharmacy_name") or "Clinic",
+        "doctor_name": (settings.get("appointment_default_doctor") or APPOINTMENT_DEFAULT_DOCTOR).strip(),
+        "doctor_title": (settings.get("appointment_doctor_title") or "Doctor").strip(),
+        "banner_path": "/static/doctor-appointment-banner.png",
+        "banner_alt": "Clinic appointment banner",
+        "banner_width": 1983,
+        "banner_height": 793,
+    }
+    override = tenant_appointment_override(tenant, identity)
+    if override:
+        appointment_identity.update({
+            key: value
+            for key, value in override.items()
+            if key not in {"match_terms"}
+        })
+    return appointment_identity
+
+
+def resolve_public_appointment_tenant():
+    raw_identifier = (
+        request.args.get("tenant")
+        or request.form.get("tenant")
+        or session.get(PUBLIC_APPOINTMENT_TENANT_SESSION_KEY)
+        or ""
+    ).strip()
+    with tenant_scope_disabled():
+        tenant = tenant_from_identifier(raw_identifier) if raw_identifier else None
+    if not tenant:
+        tenant_id = current_tenant_id()
+        if tenant_id:
+            with tenant_scope_disabled():
+                tenant = Tenant.query.filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        with tenant_scope_disabled():
+            tenant = Tenant.query.order_by(Tenant.id.asc()).first() if Tenant.query.count() == 1 else None
+    if tenant and tenant_login_allowed(tenant):
+        session[PUBLIC_APPOINTMENT_TENANT_SESSION_KEY] = tenant.tenant_code
+        session[f"{PUBLIC_APPOINTMENT_TENANT_SESSION_KEY}_id"] = tenant.id
+        session.modified = True
+        return tenant
+    session.pop(PUBLIC_APPOINTMENT_TENANT_SESSION_KEY, None)
+    session.pop(f"{PUBLIC_APPOINTMENT_TENANT_SESSION_KEY}_id", None)
+    session.modified = True
+    return None
+
+
+def public_appointment_requires_tenant():
+    with tenant_scope_disabled():
+        return Tenant.query.count() > 0
+
+
+@contextmanager
+def public_appointment_request_scope():
+    tenant = resolve_public_appointment_tenant()
+    if not tenant and public_appointment_requires_tenant():
+        abort(404)
+    with (tenant_context(tenant.id) if tenant else nullcontext()):
+        yield tenant
+
+
+def public_appointment_tenant_identifier(tenant=None):
+    tenant = tenant or current_tenant()
+    if not tenant:
+        return ""
+    return (
+        getattr(tenant, "tenant_code", "")
+        or getattr(tenant, "tenant_uid", "")
+        or str(getattr(tenant, "id", "") or "")
+    ).strip()
 
 
 def get_public_appointment_booking_settings():
@@ -16875,7 +17007,7 @@ def confirm_public_normal_appointment(booking, settings):
         patient_name=booking.patient_name,
         mobile=booking.mobile,
         gender=booking.gender,
-        doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
+        doctor_name=tenant_appointment_identity()["doctor_name"],
         appointment_date=booking.appointment_date,
         appointment_time=public_appointment_server_time_marker(settings),
         payment_mode="CASH",
@@ -16968,7 +17100,7 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
         patient_name=booking.patient_name,
         mobile=booking.mobile,
         gender=booking.gender,
-        doctor_name=APPOINTMENT_DEFAULT_DOCTOR,
+        doctor_name=tenant_appointment_identity()["doctor_name"],
         appointment_date=booking.appointment_date,
         appointment_time=public_appointment_server_time_marker(settings),
         payment_mode=payment_mode,
@@ -17020,6 +17152,8 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
 
 
 def render_public_appointment_booking_form(*, form_data=None, selected_date=None, status_code=200):
+    tenant = public_appointment_context_tenant()
+    tenant_identifier = public_appointment_tenant_identifier(tenant)
     settings = get_public_appointment_booking_settings()
     today = clinic_now().date()
     requested_date = selected_date or (form_data or {}).get("appointment_date") or today.isoformat()
@@ -17048,58 +17182,62 @@ def render_public_appointment_booking_form(*, form_data=None, selected_date=None
         selected_date=selected.isoformat(),
         available_dates=available_dates,
         form_data=form_data or {},
+        appointment_identity=tenant_appointment_identity(tenant),
+        public_tenant_code=tenant_identifier,
+        booking_form_url=url_for("public_appointment_booking", tenant=tenant_identifier) if tenant_identifier else url_for("public_appointment_booking"),
         **public_appointment_arrival_window_context(settings),
     ), status_code
 
 
 @app.route("/book-appointment", methods=["GET", "POST"])
 def public_appointment_booking():
-    if request.method == "GET":
-        requested_date = (request.args.get("date") or "").strip()
-        return render_public_appointment_booking_form(selected_date=requested_date)
+    with public_appointment_request_scope():
+        if request.method == "GET":
+            requested_date = (request.args.get("date") or "").strip()
+            return render_public_appointment_booking_form(selected_date=requested_date)
 
-    form_data = public_appointment_form_data(request.form)
-    settings = get_public_appointment_booking_settings()
-    selected_date = parse_date(form_data.get("appointment_date"))
-    availability = get_public_appointment_availability(selected_date or clinic_now().date(), settings)
-    payload, error = validate_public_appointment_request(form_data, settings, availability)
-    if error:
-        flash(error, "danger")
-        return render_public_appointment_booking_form(
-            form_data=form_data,
-            selected_date=form_data.get("appointment_date"),
-            status_code=400,
-        )
+        form_data = public_appointment_form_data(request.form)
+        settings = get_public_appointment_booking_settings()
+        selected_date = parse_date(form_data.get("appointment_date"))
+        availability = get_public_appointment_availability(selected_date or clinic_now().date(), settings)
+        payload, error = validate_public_appointment_request(form_data, settings, availability)
+        if error:
+            flash(error, "danger")
+            return render_public_appointment_booking_form(
+                form_data=form_data,
+                selected_date=form_data.get("appointment_date"),
+                status_code=400,
+            )
 
-    booking, error = create_public_appointment_reservation(payload, settings)
-    if error:
-        flash(error, "danger")
-        return render_public_appointment_booking_form(
-            form_data=form_data,
-            selected_date=form_data.get("appointment_date"),
-            status_code=409,
+        booking, error = create_public_appointment_reservation(payload, settings)
+        if error:
+            flash(error, "danger")
+            return render_public_appointment_booking_form(
+                form_data=form_data,
+                selected_date=form_data.get("appointment_date"),
+                status_code=409,
+            )
+        challenge, _development_code, error = create_portal_otp_challenge(
+            mobile=booking.mobile,
+            purpose="PUBLIC_APPOINTMENT",
+            context_ref=booking.booking_ref,
         )
-    challenge, _development_code, error = create_portal_otp_challenge(
-        mobile=booking.mobile,
-        purpose="PUBLIC_APPOINTMENT",
-        context_ref=booking.booking_ref,
-    )
-    if not challenge:
-        try:
-            db.session.delete(booking)
-            db.session.commit()
-        except SQLAlchemyError:
-            db.session.rollback()
-        flash(error or "Unable to send the verification code. Please try again.", "danger")
-        return render_public_appointment_booking_form(
-            form_data=form_data,
-            selected_date=form_data.get("appointment_date"),
-            status_code=503,
-        )
+        if not challenge:
+            try:
+                db.session.delete(booking)
+                db.session.commit()
+            except SQLAlchemyError:
+                db.session.rollback()
+            flash(error or "Unable to send the verification code. Please try again.", "danger")
+            return render_public_appointment_booking_form(
+                form_data=form_data,
+                selected_date=form_data.get("appointment_date"),
+                status_code=503,
+            )
 
-    session[PUBLIC_APPOINTMENT_SESSION_KEY] = booking.booking_ref
-    session.modified = True
-    return redirect(url_for("public_appointment_verify"))
+        session[PUBLIC_APPOINTMENT_SESSION_KEY] = booking.booking_ref
+        session.modified = True
+        return redirect(url_for("public_appointment_verify"))
 
 
 def get_public_appointment_session_booking():
@@ -17111,53 +17249,113 @@ def get_public_appointment_session_booking():
 
 @app.route("/book-appointment/verify", methods=["GET", "POST"])
 def public_appointment_verify():
-    booking = get_public_appointment_session_booking()
-    if not booking:
-        flash("Please start a new appointment request.", "warning")
-        return redirect(url_for("public_appointment_booking"))
-    if (booking.status or "").upper() != "OTP_PENDING" or not public_appointment_booking_is_active(booking):
-        if (booking.status or "").upper() == "OTP_PENDING":
+    with public_appointment_request_scope():
+        booking = get_public_appointment_session_booking()
+        if not booking:
+            flash("Please start a new appointment request.", "warning")
+            return redirect(url_for("public_appointment_booking"))
+        if (booking.status or "").upper() != "OTP_PENDING" or not public_appointment_booking_is_active(booking):
+            if (booking.status or "").upper() == "OTP_PENDING":
+                booking.status = "EXPIRED"
+                db.session.commit()
+            flash("This appointment request has expired. Please start a new booking request.", "warning")
+            return redirect(url_for("public_appointment_booking"))
+
+        if request.method == "GET":
+            settings = get_public_appointment_booking_settings()
+            return render_template(
+                "public_appointment_verify.html",
+                booking=booking,
+                masked_mobile=mask_mobile(booking.mobile),
+                **public_appointment_arrival_window_context(settings),
+            )
+
+        challenge, error = verify_portal_otp_challenge(
+            mobile=booking.mobile,
+            purpose="PUBLIC_APPOINTMENT",
+            context_ref=booking.booking_ref,
+            otp_code=request.form.get("otp_code"),
+        )
+        if error:
+            flash(error, "danger")
+            settings = get_public_appointment_booking_settings()
+            return render_template(
+                "public_appointment_verify.html",
+                booking=booking,
+                masked_mobile=mask_mobile(booking.mobile),
+                **public_appointment_arrival_window_context(settings),
+            ), 400
+
+        settings = get_public_appointment_booking_settings()
+        booking_type = (booking.booking_type or "NORMAL").upper()
+        if booking_type == "NORMAL":
+            appointment, error = confirm_public_normal_appointment(booking, settings)
+            if error:
+                fresh_booking = PublicAppointmentBooking.query.get(booking.id)
+                if fresh_booking and fresh_booking.status == "OTP_PENDING":
+                    fresh_booking.status = "EXPIRED"
+                    db.session.commit()
+                flash(error, "danger")
+                return redirect(url_for("public_appointment_booking"))
+            return render_template(
+                "public_appointment_confirmation.html",
+                booking=booking,
+                appointment=appointment,
+                **public_appointment_arrival_window_context(settings),
+            )
+
+        if not lock_public_appointment_capacity(booking.appointment_date):
+            flash("Unable to confirm the priority request right now. Please try again.", "danger")
+            return redirect(url_for("public_appointment_booking"))
+        availability = get_public_appointment_availability(
+            booking.appointment_date,
+            settings,
+            exclude_booking_id=booking.id,
+        )
+        capacity_error = public_appointment_capacity_error("PRIORITY", availability)
+        if availability.get("same_day_booking_closed") or capacity_error:
             booking.status = "EXPIRED"
             db.session.commit()
-        flash("This appointment request has expired. Please start a new booking request.", "warning")
-        return redirect(url_for("public_appointment_booking"))
+            flash(capacity_error or "Online booking for today is closed. Please choose another date.", "warning")
+            return redirect(url_for("public_appointment_booking"))
 
-    if request.method == "GET":
-        settings = get_public_appointment_booking_settings()
+        # A browser callback must never be treated as payment proof.  Until a
+        # signed gateway webhook is configured, keep this as a visible staff
+        # review/payment-pending request instead of creating a paid appointment.
+        booking.otp_verified_at = challenge.verified_at or datetime.utcnow()
+        booking.status = "PAYMENT_PENDING"
+        booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES)
+        db.session.commit()
+        record_audit_event(
+            action="Created priority appointment payment request",
+            entity_type="PUBLIC_APPOINTMENT_BOOKING",
+            entity_id=booking.id,
+            ref_code=booking.booking_ref,
+            before=None,
+            after={
+                "booking_type": "PRIORITY",
+                "status": booking.status,
+                "amount": booking.amount,
+                "appointment_date": booking.appointment_date.isoformat(),
+            },
+            extra={"source": "PUBLIC_QR", "payment_provider": "NOT_CONFIGURED"},
+        )
         return render_template(
-            "public_appointment_verify.html",
+            "public_appointment_confirmation.html",
             booking=booking,
-            masked_mobile=mask_mobile(booking.mobile),
+            appointment=None,
             **public_appointment_arrival_window_context(settings),
         )
 
-    challenge, error = verify_portal_otp_challenge(
-        mobile=booking.mobile,
-        purpose="PUBLIC_APPOINTMENT",
-        context_ref=booking.booking_ref,
-        otp_code=request.form.get("otp_code"),
-    )
-    if error:
-        settings = get_public_appointment_booking_settings()
-        flash(error, "danger")
-        return render_template(
-            "public_appointment_verify.html",
-            booking=booking,
-            masked_mobile=mask_mobile(booking.mobile),
-            **public_appointment_arrival_window_context(settings),
-        ), 400
 
-    settings = get_public_appointment_booking_settings()
-    booking_type = (booking.booking_type or "NORMAL").upper()
-    if booking_type == "NORMAL":
-        appointment, error = confirm_public_normal_appointment(booking, settings)
-        if error:
-            fresh_booking = PublicAppointmentBooking.query.get(booking.id)
-            if fresh_booking and fresh_booking.status == "OTP_PENDING":
-                fresh_booking.status = "EXPIRED"
-                db.session.commit()
-            flash(error, "danger")
+@app.route("/book-appointment/confirmation")
+def public_appointment_confirmation():
+    with public_appointment_request_scope():
+        booking = get_public_appointment_session_booking()
+        if not booking:
             return redirect(url_for("public_appointment_booking"))
+        appointment = Appointment.query.get(booking.appointment_id) if booking.appointment_id else None
+        settings = get_public_appointment_booking_settings()
         return render_template(
             "public_appointment_confirmation.html",
             booking=booking,
@@ -17165,83 +17363,31 @@ def public_appointment_verify():
             **public_appointment_arrival_window_context(settings),
         )
 
-    if not lock_public_appointment_capacity(booking.appointment_date):
-        flash("Unable to confirm the priority request right now. Please try again.", "danger")
-        return redirect(url_for("public_appointment_booking"))
-    availability = get_public_appointment_availability(
-        booking.appointment_date,
-        settings,
-        exclude_booking_id=booking.id,
-    )
-    capacity_error = public_appointment_capacity_error("PRIORITY", availability)
-    if availability.get("same_day_booking_closed") or capacity_error:
-        booking.status = "EXPIRED"
-        db.session.commit()
-        flash(capacity_error or "Online booking for today is closed. Please choose another date.", "warning")
-        return redirect(url_for("public_appointment_booking"))
-
-    # A browser callback must never be treated as payment proof.  Until a
-    # signed gateway webhook is configured, keep this as a visible staff
-    # review/payment-pending request instead of creating a paid appointment.
-    booking.otp_verified_at = challenge.verified_at or datetime.utcnow()
-    booking.status = "PAYMENT_PENDING"
-    booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES)
-    db.session.commit()
-    record_audit_event(
-        action="Created priority appointment payment request",
-        entity_type="PUBLIC_APPOINTMENT_BOOKING",
-        entity_id=booking.id,
-        ref_code=booking.booking_ref,
-        before=None,
-        after={
-            "booking_type": "PRIORITY",
-            "status": booking.status,
-            "amount": booking.amount,
-            "appointment_date": booking.appointment_date.isoformat(),
-        },
-        extra={"source": "PUBLIC_QR", "payment_provider": "NOT_CONFIGURED"},
-    )
-    return render_template(
-        "public_appointment_confirmation.html",
-        booking=booking,
-        appointment=None,
-        **public_appointment_arrival_window_context(settings),
-    )
-
-
-@app.route("/book-appointment/confirmation")
-def public_appointment_confirmation():
-    booking = get_public_appointment_session_booking()
-    if not booking:
-        return redirect(url_for("public_appointment_booking"))
-    appointment = Appointment.query.get(booking.appointment_id) if booking.appointment_id else None
-    settings = get_public_appointment_booking_settings()
-    return render_template(
-        "public_appointment_confirmation.html",
-        booking=booking,
-        appointment=appointment,
-        **public_appointment_arrival_window_context(settings),
-    )
-
 
 @app.route("/appointment")
 def public_appointment_landing():
     """Public QR destination with a clear hand-off to the booking form."""
-    settings = get_public_appointment_booking_settings()
-    return render_template(
-        "public_appointment_landing.html",
-        settings=settings,
-        booking_url=url_for("public_appointment_booking"),
-        **public_appointment_arrival_window_context(settings),
-    )
+    with public_appointment_request_scope() as tenant:
+        tenant_identifier = public_appointment_tenant_identifier(tenant)
+        settings = get_public_appointment_booking_settings()
+        return render_template(
+            "public_appointment_landing.html",
+            settings=settings,
+            appointment_identity=tenant_appointment_identity(tenant),
+            booking_url=url_for("public_appointment_booking", tenant=tenant_identifier) if tenant_identifier else url_for("public_appointment_booking"),
+            **public_appointment_arrival_window_context(settings),
+        )
 
 
 def public_appointment_booking_url():
     """Use the configured public HTTPS origin when sharing a reception QR."""
+    tenant = public_appointment_context_tenant()
+    tenant_identifier = public_appointment_tenant_identifier(tenant)
+    landing_path = url_for("public_appointment_landing", tenant=tenant_identifier) if tenant_identifier else url_for("public_appointment_landing")
     configured_base = (os.environ.get("PUBLIC_BOOKING_BASE_URL") or "").strip().rstrip("/")
     if configured_base.startswith(("https://", "http://")):
-        return f"{configured_base}{url_for('public_appointment_landing')}", True
-    return f"{request.url_root.rstrip('/')}{url_for('public_appointment_landing')}", False
+        return f"{configured_base}{landing_path}", True
+    return f"{request.url_root.rstrip('/')}{landing_path}", False
 
 
 def appointment_qr_library():

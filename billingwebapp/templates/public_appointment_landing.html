@@ -359,6 +359,41 @@
 
         .site-footer { padding: 24px 0 30px; color: var(--muted); font-size: 12px; text-align: center; }
 
+        .poster-landing {
+            min-height: 100svh;
+            display: grid;
+            place-items: start center;
+            background: #eef7ff;
+        }
+        .poster-stage {
+            position: relative;
+            width: min(100vw, 2400px);
+            aspect-ratio: 16 / 9;
+            overflow: hidden;
+            background: #fff;
+        }
+        .poster-stage img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: top center;
+        }
+        .poster-booking-link {
+            position: absolute;
+            left: 30.4%;
+            top: 53.6%;
+            width: 20.4%;
+            height: 5.9%;
+            border-radius: 999px;
+            text-indent: -9999px;
+            overflow: hidden;
+        }
+        .poster-booking-link:focus-visible {
+            outline: 4px solid rgba(15, 118, 110, .45);
+            outline-offset: 4px;
+        }
+
         @media (max-width: 900px) {
             .hero-grid { grid-template-columns: minmax(0, 1fr) minmax(280px, .75fr); gap: 32px; }
             .doctor-card { min-height: 440px; }
@@ -405,10 +440,19 @@
 </head>
 <body>
 {% set public_settings = settings|default({}, true) %}
+{% set appointment_identity = appointment_identity|default({}, true) %}
 {% set clinic_name = public_settings.clinic_name|default(public_settings.business_name|default('The Endo Clinic')) %}
 {% set booking_href = booking_url|default(url_for('public_appointment_booking')) %}
 {% set clinic_hours_start = arrival_window_start|default('5:30 PM') %}
 {% set clinic_hours_end = arrival_window_end|default('7:45 PM') %}
+{% if appointment_identity.landing_image_path %}
+    <main class="poster-landing" id="main-content">
+        <figure class="poster-stage" aria-label="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}">
+            <img src="{{ appointment_identity.landing_image_path }}" alt="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}" width="{{ appointment_identity.landing_image_width|default(2400, true) }}" height="{{ appointment_identity.landing_image_height|default(1350, true) }}" fetchpriority="high" decoding="async">
+            <a class="poster-booking-link" href="{{ booking_href }}">Book an Appointment</a>
+        </figure>
+    </main>
+{% else %}
     <a class="skip-link" href="#main-content">Skip to main content</a>
 
     <header class="site-header">
@@ -549,5 +593,6 @@
     <footer class="site-footer">
         <div class="container">{{ clinic_name }} &middot; Specialist diabetes, thyroid and hormone care</div>
     </footer>
+{% endif %}
 </body>
 </html>
