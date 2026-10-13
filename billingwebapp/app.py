@@ -6809,13 +6809,18 @@ def parse_time_value(val):
 
 def generate_appointment_no():
     prefix = "APT-"
-    last = Appointment.query.order_by(Appointment.id.desc()).first()
-    next_num = 1
-    if last and last.appointment_no and last.appointment_no.startswith(prefix):
-        try:
-            next_num = int(last.appointment_no.replace(prefix, "")) + 1
-        except Exception:
-            next_num = last.id + 1
+    max_seen = 0
+    existing_numbers = (
+        Appointment.query
+        .filter(Appointment.appointment_no.like(f"{prefix}%"))
+        .with_entities(Appointment.appointment_no)
+        .all()
+    )
+    for (appointment_no,) in existing_numbers:
+        suffix = (appointment_no or "")[len(prefix):]
+        if suffix.isdigit():
+            max_seen = max(max_seen, int(suffix))
+    next_num = max_seen + 1
     return f"{prefix}{next_num:06d}"
 
 def get_doctor_suggestions():
