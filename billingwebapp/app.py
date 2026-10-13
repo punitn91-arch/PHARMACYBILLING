@@ -15870,6 +15870,49 @@ def appointment_soft_delete_uses_legacy_integer():
     return False
 
 
+def stage_new_appointment(appointment):
+    """Insert a new Appointment in the current transaction and return it.
+
+    The ORM binds ``is_deleted`` as BOOLEAN, which PostgreSQL rejects when the
+    deployed column is still a legacy INTEGER.  In that case insert the row with
+    raw SQL (as ``create_appointment_record`` does) and load it back.
+    """
+    if not appointment_soft_delete_uses_legacy_integer():
+        db.session.add(appointment)
+        db.session.flush()
+        return appointment
+
+    provided = inspect(appointment).dict
+    values = {}
+    for column in Appointment.__table__.columns:
+        if column.primary_key:
+            continue
+        if column.key in provided:
+            values[column.name] = provided[column.key]
+        elif column.default is not None and column.default.is_scalar:
+            values[column.name] = column.default.arg
+        elif column.default is not None and column.default.is_callable:
+            values[column.name] = column.default.arg(None)
+    values["tenant_id"] = values.get("tenant_id") or current_tenant_id()
+    values["is_deleted"] = 1 if values.get("is_deleted") else 0
+    appointment_columns = table_runtime_columns("appointment")
+    values = {
+        key: sql_text_bindable_value(value)
+        for key, value in values.items()
+        if not appointment_columns or key in appointment_columns
+    }
+    quoted_columns = ", ".join(f'"{name}"' for name in values)
+    placeholders = ", ".join(f":{name}" for name in values)
+    new_id = db.session.execute(
+        text(f'INSERT INTO "appointment" ({quoted_columns}) VALUES ({placeholders}) RETURNING "id"'),
+        values,
+    ).scalar()
+    return db.session.get(Appointment, new_id)
+
+
+app.extensions["stage_new_appointment"] = stage_new_appointment
+
+
 USER_RUNTIME_BOOLEAN_COLUMNS = ("is_active",) + USER_PERMISSION_FIELDS
 
 
@@ -17029,8 +17072,7 @@ def confirm_public_normal_appointment(booking, settings):
         is_deleted=False,
     )
     try:
-        db.session.add(appointment)
-        db.session.flush()
+        appointment = stage_new_appointment(appointment)
         booking.appointment_id = appointment.id
         booking.patient_id = patient.id
         booking.otp_verified_at = booking.otp_verified_at or datetime.utcnow()
@@ -17123,8 +17165,7 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
     )
     now = datetime.utcnow()
     try:
-        db.session.add(appointment)
-        db.session.flush()
+        appointment = stage_new_appointment(appointment)
         booking.appointment_id = appointment.id
         booking.patient_id = patient.id
         booking.status = "BOOKED"

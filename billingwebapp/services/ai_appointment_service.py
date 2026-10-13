@@ -6,7 +6,8 @@ import json
 import re
 import secrets
 
-from sqlalchemy import and_, or_
+from flask import current_app
+from sqlalchemy import String, and_, cast, func, or_
 from sqlalchemy.exc import IntegrityError
 
 try:
@@ -57,6 +58,12 @@ class AppointmentAPIError(Exception):
         self.code = code
         self.message = message
         self.status_code = status_code
+
+
+def _appointment_not_deleted():
+    """Match active rows whether ``is_deleted`` is BOOLEAN or a legacy INTEGER."""
+    normalized = func.lower(func.trim(cast(Appointment.is_deleted, String)))
+    return or_(Appointment.is_deleted.is_(None), normalized.in_(("0", "false", "f", "no", "off", "")))
 
 
 def _sha256(value):
@@ -173,7 +180,7 @@ def _slot_count(doctor, location, target_date, slot_time, exclude_appointment_id
     filters = [
         Appointment.appointment_date == target_date,
         Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
-        or_(Appointment.is_deleted.is_(False), Appointment.is_deleted.is_(None)),
+        _appointment_not_deleted(),
         or_(
             Appointment.clinician_id == doctor.id,
             and_(Appointment.clinician_id.is_(None), Appointment.doctor_name == doctor.display_name),
@@ -383,6 +390,11 @@ def book_appointment(
         created_by="AI_CALL",
         is_deleted=False,
     )
+    # The app's helper also handles deployments where appointment.is_deleted
+    # is still a legacy INTEGER column.
+    stage_new_appointment = current_app.extensions.get("stage_new_appointment")
+    if stage_new_appointment:
+        return stage_new_appointment(appointment)
     db_session.add(appointment)
     db_session.flush()
     return appointment
@@ -463,7 +475,7 @@ def book_appointment_with_contact(
 def patient_appointments(patient_session, *, appointment_no=None, limit=20, offset=0):
     query = Appointment.query.filter(
         Appointment.patient_id == patient_session.patient_id,
-        or_(Appointment.is_deleted.is_(False), Appointment.is_deleted.is_(None)),
+        _appointment_not_deleted(),
     )
     if appointment_no:
         query = query.filter(Appointment.appointment_no == str(appointment_no).strip())
