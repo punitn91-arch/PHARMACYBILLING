@@ -382,18 +382,26 @@
         .poster-stage .poster-mobile-image {
             display: none;
         }
-        .poster-booking-link {
+        .poster-action-link {
             position: absolute;
             z-index: 3;
-            left: 30.4%;
-            top: 53.6%;
-            width: 20.4%;
-            height: 5.9%;
             border-radius: 999px;
             text-indent: -9999px;
             overflow: hidden;
         }
-        .poster-booking-link:focus-visible {
+        .poster-booking-link {
+            left: 30.4%;
+            top: 53.6%;
+            width: 20.4%;
+            height: 5.9%;
+        }
+        .poster-call-link {
+            left: 2.7%;
+            top: 53.5%;
+            width: 25.7%;
+            height: 6%;
+        }
+        .poster-action-link:focus-visible {
             outline: 4px solid rgba(15, 118, 110, .45);
             outline-offset: 4px;
         }
@@ -469,6 +477,12 @@
                 width: 84.8%;
                 height: 5.55%;
             }
+            .poster-call-link {
+                left: 7.8%;
+                top: 55.95%;
+                width: 84.4%;
+                height: 4.85%;
+            }
         }
 
         @media (max-width: 430px) {
@@ -499,7 +513,8 @@
         <figure class="poster-stage" style="--poster-image: url('{{ appointment_identity.landing_image_path }}');" aria-label="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}">
             <img class="poster-desktop-image" src="{{ appointment_identity.landing_image_path }}" alt="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}" width="{{ appointment_identity.landing_image_width|default(2400, true) }}" height="{{ appointment_identity.landing_image_height|default(1350, true) }}" fetchpriority="high" decoding="async">
             <img class="poster-mobile-image" src="{{ appointment_identity.landing_mobile_image_path|default(appointment_identity.landing_image_path, true) }}" alt="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}" width="{{ appointment_identity.landing_mobile_image_width|default(appointment_identity.landing_image_width|default(2400, true), true) }}" height="{{ appointment_identity.landing_mobile_image_height|default(appointment_identity.landing_image_height|default(1350, true), true) }}" fetchpriority="high" decoding="async">
-            <a class="poster-booking-link" href="{{ booking_href }}">Book an Appointment</a>
+            <a class="poster-action-link poster-call-link" href="tel:+919610026600" aria-label="Call +91 96100 26600">Call +91 96100 26600</a>
+            <a class="poster-action-link poster-booking-link" href="{{ booking_href }}">Book an Appointment</a>
         </figure>
     </main>
 {% else %}
