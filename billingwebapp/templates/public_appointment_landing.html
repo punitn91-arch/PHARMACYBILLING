@@ -369,7 +369,7 @@
             position: relative;
             width: 100vw;
             margin: 0;
-            overflow: visible;
+            overflow: hidden;
             background: #fff;
         }
         .poster-stage img {
@@ -379,8 +379,12 @@
             object-fit: contain;
             object-position: top center;
         }
+        .poster-mobile-composite {
+            display: none;
+        }
         .poster-booking-link {
             position: absolute;
+            z-index: 3;
             left: 30.4%;
             top: 53.6%;
             width: 20.4%;
@@ -396,6 +400,22 @@
         body:has(.poster-landing) {
             background: #eef7ff;
             overflow-x: hidden;
+        }
+
+        @media (min-width: 681px) {
+            .poster-landing {
+                display: flex;
+                align-items: flex-start;
+                justify-content: center;
+            }
+            .poster-stage {
+                aspect-ratio: 16 / 9;
+                max-height: 100svh;
+            }
+            .poster-stage img {
+                height: 100%;
+                object-fit: contain;
+            }
         }
 
         @media (max-width: 900px) {
@@ -424,6 +444,292 @@
             .condition-grid { gap: 12px; }
             .condition-card { min-height: 0; padding: 18px; }
             .contact-panel { border-radius: 22px; }
+            .poster-landing {
+                min-height: 100svh;
+                background: #dff1fb;
+            }
+            .poster-stage {
+                min-height: 100svh;
+                padding: max(18px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom));
+                isolation: isolate;
+                background:
+                    linear-gradient(135deg, rgba(255,255,255,.98), rgba(230,244,255,.96) 60%, rgba(255,255,255,.98)),
+                    #eef7ff;
+            }
+            .poster-stage img {
+                display: none;
+            }
+            .poster-mobile-composite {
+                position: relative;
+                z-index: 1;
+                display: grid;
+                gap: 14px;
+                min-width: 0;
+                min-height: calc(100svh - 36px);
+                overflow: hidden;
+                color: #061d43;
+            }
+            .poster-mobile-logo {
+                color: #061d43;
+                font-size: 19px;
+                font-weight: 950;
+                letter-spacing: 0;
+                line-height: 1;
+            }
+            .poster-mobile-logo span {
+                color: #ff5f13;
+            }
+            .poster-mobile-hero {
+                position: relative;
+                min-height: 248px;
+                padding-top: 6px;
+            }
+            .poster-mobile-hero::after {
+                position: absolute;
+                z-index: -1;
+                top: 2px;
+                right: -10px;
+                width: 48%;
+                height: 236px;
+                background-image: var(--poster-image);
+                background-position: 76% 3%;
+                background-repeat: no-repeat;
+                background-size: auto 520px;
+                content: "";
+            }
+            .poster-mobile-kicker {
+                max-width: 58%;
+                margin: 0 0 8px;
+                color: #0b2b5e;
+                font-size: 10px;
+                font-weight: 850;
+                letter-spacing: .18em;
+                line-height: 1.35;
+                text-transform: uppercase;
+            }
+            .poster-mobile-kicker::before {
+                display: inline-block;
+                width: 32px;
+                height: 3px;
+                margin-right: 8px;
+                border-radius: 999px;
+                background: #ff5f13;
+                vertical-align: middle;
+                content: "";
+            }
+            .poster-mobile-title {
+                max-width: 52%;
+                margin: 0;
+                font-size: clamp(34px, 10vw, 46px);
+                font-weight: 900;
+                letter-spacing: 0;
+                line-height: .94;
+            }
+            .poster-mobile-title span,
+            .poster-mobile-title strong {
+                display: block;
+            }
+            .poster-mobile-title strong {
+                color: #ff5f13;
+            }
+            .poster-mobile-subtitle {
+                max-width: 61%;
+                margin: 8px 0 0;
+                color: #09265a;
+                font-size: 14px;
+                font-weight: 850;
+                line-height: 1.15;
+            }
+            .poster-mobile-points {
+                display: grid;
+                max-width: 58%;
+                gap: 4px;
+                margin: 10px 0 0;
+                padding: 0;
+                color: #0c2d63;
+                font-size: 11px;
+                font-weight: 750;
+                line-height: 1.25;
+                list-style: none;
+            }
+            .poster-mobile-points li::before {
+                display: inline-block;
+                width: 6px;
+                height: 6px;
+                margin-right: 6px;
+                border-radius: 999px;
+                background: #ff5f13;
+                content: "";
+                vertical-align: 1px;
+            }
+            .poster-mobile-services {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 7px;
+            }
+            .poster-mobile-service {
+                min-width: 0;
+                min-height: 72px;
+                border: 1px solid rgba(8, 45, 99, .12);
+                border-radius: 13px;
+                background: rgba(255, 255, 255, .82);
+                padding: 8px 5px;
+                color: #09265a;
+                font-size: 9px;
+                font-weight: 850;
+                line-height: 1.15;
+                text-align: center;
+                overflow-wrap: anywhere;
+                box-shadow: 0 8px 18px rgba(8, 45, 99, .08);
+            }
+            .poster-mobile-service span {
+                display: grid;
+                width: 27px;
+                height: 27px;
+                place-items: center;
+                margin: 0 auto 5px;
+                border-radius: 999px;
+                background: #fff3ea;
+                color: #ff5f13;
+                font-size: 15px;
+            }
+            .poster-mobile-phone,
+            .poster-mobile-hours,
+            .poster-mobile-specialties {
+                border: 1px solid rgba(8, 45, 99, .12);
+                border-radius: 14px;
+                background: rgba(255, 255, 255, .86);
+                box-shadow: 0 10px 22px rgba(8, 45, 99, .08);
+            }
+            .poster-mobile-phone {
+                padding: 13px 15px;
+                color: #072558;
+                font-size: clamp(22px, 6.4vw, 30px);
+                font-weight: 900;
+                line-height: 1;
+            }
+            .poster-mobile-hours {
+                display: grid;
+                grid-template-columns: auto 1fr;
+                gap: 12px;
+                align-items: center;
+                padding: 13px 14px;
+            }
+            .poster-mobile-hours-icon {
+                display: grid;
+                width: 42px;
+                height: 42px;
+                place-items: center;
+                border: 3px solid #ff5f13;
+                border-radius: 999px;
+                color: #ff5f13;
+                font-size: 24px;
+            }
+            .poster-mobile-hours strong {
+                display: block;
+                font-size: 18px;
+                line-height: 1.1;
+            }
+            .poster-mobile-hours span {
+                display: block;
+                margin-top: 2px;
+                color: #0b2b5e;
+                font-size: 12px;
+                font-weight: 800;
+            }
+            .poster-mobile-specialties {
+                padding: 13px 14px;
+            }
+            .poster-mobile-specialties small {
+                display: block;
+                color: #637794;
+                font-size: 9px;
+                font-weight: 900;
+                letter-spacing: .2em;
+                text-transform: uppercase;
+            }
+            .poster-mobile-specialties h2 {
+                margin-top: 3px;
+                color: #061d43;
+                font-size: 21px;
+                letter-spacing: 0;
+            }
+            .poster-mobile-specialties p {
+                margin: 2px 0 0;
+                color: #62738c;
+                font-size: 12px;
+                line-height: 1.35;
+            }
+            .poster-mobile-condition-list {
+                display: grid;
+                gap: 8px;
+                margin-top: 10px;
+            }
+            .poster-mobile-condition {
+                display: grid;
+                grid-template-columns: 48px 1fr auto;
+                gap: 10px;
+                align-items: center;
+                border-radius: 12px;
+                background: rgba(238, 247, 255, .88);
+                padding: 7px;
+            }
+            .poster-mobile-condition i {
+                display: block;
+                width: 48px;
+                height: 42px;
+                border-radius: 9px;
+                background-image: var(--poster-image);
+                background-repeat: no-repeat;
+                background-size: 900px auto;
+            }
+            .poster-mobile-condition:nth-child(1) i { background-position: 5% 91%; }
+            .poster-mobile-condition:nth-child(2) i { background-position: 28% 91%; }
+            .poster-mobile-condition:nth-child(3) i { background-position: 52% 91%; }
+            .poster-mobile-condition:nth-child(4) i { background-position: 78% 91%; }
+            .poster-mobile-condition strong {
+                display: block;
+                color: #09265a;
+                font-size: 12px;
+                line-height: 1.2;
+            }
+            .poster-mobile-condition span {
+                display: block;
+                margin-top: 2px;
+                color: #667991;
+                font-size: 10px;
+                font-weight: 700;
+                line-height: 1.2;
+            }
+            .poster-mobile-condition em {
+                display: grid;
+                width: 28px;
+                height: 28px;
+                place-items: center;
+                border-radius: 999px;
+                background: #fff3ea;
+                color: #ff5f13;
+                font-style: normal;
+                font-weight: 900;
+            }
+            .poster-booking-link {
+                position: relative;
+                left: auto;
+                top: auto;
+                display: flex;
+                width: calc(100% - 28px);
+                height: 48px;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto;
+                background: linear-gradient(180deg, #ff7a22, #ff4f08);
+                color: #fff;
+                font-size: 14px;
+                font-weight: 900;
+                text-decoration: none;
+                text-indent: 0;
+                box-shadow: 0 10px 20px rgba(255, 95, 19, .28);
+            }
         }
 
         @media (max-width: 430px) {
@@ -434,6 +740,9 @@
             .doctor-caption { right: 14px; bottom: 14px; left: 14px; padding: 14px; }
             .doctor-caption strong { font-size: 18px; }
             .condition-grid { grid-template-columns: 1fr; }
+            .poster-mobile-hero::after { right: -16px; width: 51%; }
+            .poster-mobile-services { gap: 6px; }
+            .poster-mobile-service { padding-right: 3px; padding-left: 3px; font-size: 8px; }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -451,8 +760,46 @@
 {% set clinic_hours_end = arrival_window_end|default('7:45 PM') %}
 {% if appointment_identity.landing_image_path %}
     <main class="poster-landing" id="main-content">
-        <figure class="poster-stage" aria-label="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}">
+        <figure class="poster-stage" style="--poster-image: url('{{ appointment_identity.landing_image_path }}');" aria-label="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}">
             <img src="{{ appointment_identity.landing_image_path }}" alt="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}" width="{{ appointment_identity.landing_image_width|default(2400, true) }}" height="{{ appointment_identity.landing_image_height|default(1350, true) }}" fetchpriority="high" decoding="async">
+            <div class="poster-mobile-composite" aria-hidden="true">
+                <div class="poster-mobile-logo">ARTHROGENI<span>X</span></div>
+                <section class="poster-mobile-hero">
+                    <p class="poster-mobile-kicker">Expert care for an active tomorrow</p>
+                    <h1 class="poster-mobile-title"><span>Dr.</span><span>Abhishek</span><strong>Saxena</strong></h1>
+                    <p class="poster-mobile-subtitle">Sports Orthopedic Surgeon</p>
+                    <ul class="poster-mobile-points">
+                        <li>MBBS, MS (Ortho)</li>
+                        <li>Fellowship in Arthroscopy &amp; Sports Medicine</li>
+                        <li>Fellowship in Joint Replacement</li>
+                    </ul>
+                </section>
+                <div class="poster-mobile-services">
+                    <div class="poster-mobile-service"><span>SI</span>Sports Injuries Treatment</div>
+                    <div class="poster-mobile-service"><span>AK</span>Arthroscopy &amp; Keyhole Surgery</div>
+                    <div class="poster-mobile-service"><span>JR</span>Joint Replacement</div>
+                    <div class="poster-mobile-service"><span>OC</span>Orthopedic Care</div>
+                </div>
+                <div class="poster-mobile-phone">Call +919610026600</div>
+                <div class="poster-mobile-hours">
+                    <div class="poster-mobile-hours-icon">HR</div>
+                    <div>
+                        <strong>Clinic Timing</strong>
+                        <span>Mon - Sat: 05:00 PM - 08:00 PM</span>
+                    </div>
+                </div>
+                <section class="poster-mobile-specialties">
+                    <small>Our Specialties</small>
+                    <h2>Comprehensive Orthopedic Care</h2>
+                    <p>From sports injuries to joint replacement, expert care for every stage of life.</p>
+                    <div class="poster-mobile-condition-list">
+                        <div class="poster-mobile-condition"><i></i><div><strong>Knee Injuries</strong><span>Arthroscopy, ligament repair &amp; sports injury care</span></div><em>&gt;</em></div>
+                        <div class="poster-mobile-condition"><i></i><div><strong>Shoulder Injuries</strong><span>Arthroscopic &amp; reconstructive treatment</span></div><em>&gt;</em></div>
+                        <div class="poster-mobile-condition"><i></i><div><strong>Joint Replacement</strong><span>Knee, hip &amp; other joint replacement surgery</span></div><em>&gt;</em></div>
+                        <div class="poster-mobile-condition"><i></i><div><strong>Sports Medicine</strong><span>Injury prevention, treatment &amp; performance care</span></div><em>&gt;</em></div>
+                    </div>
+                </section>
+            </div>
             <a class="poster-booking-link" href="{{ booking_href }}">Book an Appointment</a>
         </figure>
     </main>
