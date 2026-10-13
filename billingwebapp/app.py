@@ -16435,6 +16435,9 @@ TENANT_APPOINTMENT_OVERRIDES = (
         "landing_image_alt": "Arthrogenix appointment page for Dr. Abhishek Saxena",
         "landing_image_width": 2400,
         "landing_image_height": 1350,
+        "landing_mobile_image_path": "/static/arthrogenix-appointment-landing-mobile.png",
+        "landing_mobile_image_width": 941,
+        "landing_mobile_image_height": 1672,
     },
     {
         "match_terms": ("the endo", "endo pharmacy", "endo clinic", "endopharmacy"),
