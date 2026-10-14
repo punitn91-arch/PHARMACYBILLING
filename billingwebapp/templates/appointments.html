@@ -476,6 +476,7 @@
                                 data-wa-token-assigned="{{ 'true' if public_token_assigned else 'false' }}"
                                 data-wa-arrival-start="{{ public_arrival_window_start if is_public_fcfs else '' }}"
                                 data-wa-arrival-end="{{ public_arrival_window_end if is_public_fcfs else '' }}"
+                                data-wa-clinic="{{ clinic_name or 'Clinic' }}"
                                 onclick="openAppointmentWhatsapp(this)"
                                 title="{{ 'Send WhatsApp message' if has_mobile else 'Mobile number not available' }}"
                                 {% if not has_mobile %}disabled{% endif %}
@@ -657,6 +658,7 @@ function openAppointmentWhatsapp(button) {
     const receptionTokenAssigned = button.dataset.waTokenAssigned === 'true';
     const arrivalStart = (button.dataset.waArrivalStart || '5:30 PM').trim();
     const arrivalEnd = (button.dataset.waArrivalEnd || '7:45 PM').trim();
+    const clinicName = (button.dataset.waClinic || 'Clinic').trim();
 
     const lines = [
         `Hello ${patient},`,
@@ -670,7 +672,7 @@ function openAppointmentWhatsapp(button) {
             receptionTokenAssigned
                 ? `Token No: ${token}`
                 : 'Token: Issued at the reception counter on arrival.',
-            'Clinic: THE ENDO CLINIC',
+            `Clinic: ${clinicName}`,
             '',
             'Consultation is first-come, first-served. Thank you.'
         );
@@ -678,7 +680,7 @@ function openAppointmentWhatsapp(button) {
         lines.push(
             `Token No: ${token}`,
             `Time: ${apptTime}`,
-            'Clinic: THE ENDO CLINIC',
+            `Clinic: ${clinicName}`,
             '',
             'Please arrive at the clinic on time. Thank you.'
         );

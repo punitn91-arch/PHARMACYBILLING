@@ -15230,6 +15230,7 @@ def audit_logs():
 def appointments():
     public_settings = get_public_appointment_booking_settings()
     arrival_window = public_appointment_arrival_window_context(public_settings)
+    clinic_name = tenant_business_identity(current_tenant()).get("pharmacy_name") or "Clinic"
     return render_appointments_page(
         request.args,
         all_statuses=APPOINTMENT_STATUSES,
@@ -15240,6 +15241,7 @@ def appointments():
         clinic_now=clinic_now,
         arrival_window_start=arrival_window["arrival_window_start"],
         arrival_window_end=arrival_window["arrival_window_end"],
+        clinic_name=clinic_name,
     )
 
 @app.route("/appointments/queue/live")

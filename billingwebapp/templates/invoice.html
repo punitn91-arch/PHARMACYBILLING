@@ -666,6 +666,7 @@ body {
         data-wa-date="{{ date }}{% if bill_time %} {{ bill_time }}{% endif %}"
         data-wa-total="{{ '%.2f'|format((rounded_total or total)|float) }}"
         data-wa-link="{{ share_url or request.url }}"
+        data-wa-business="{{ print_profile.pharmacy_name or print_profile.legal_business_name or 'Clinic' }}"
         {% if not has_whatsapp_mobile %}disabled{% endif %}
     >WHATSAPP</button>
     {% endif %}
@@ -699,10 +700,11 @@ function openInvoiceWhatsapp(button) {
     const billDate = (button.dataset.waDate || '-').trim();
     const total = (button.dataset.waTotal || '0.00').trim();
     const invoiceLink = (button.dataset.waLink || window.location.href).trim();
+    const businessName = (button.dataset.waBusiness || 'Clinic').trim();
 
     const message = [
         `Hello ${customer},`,
-        'Your invoice from THE ENDO PHARMACY is ready.',
+        `Your invoice from ${businessName} is ready.`,
         `Invoice No: ${invoiceNo}`,
         `Date: ${billDate}`,
         `Amount: Rs ${total}`,

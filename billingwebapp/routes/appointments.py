@@ -23,6 +23,7 @@ def render_appointments_page(
     clinic_now,
     arrival_window_start=None,
     arrival_window_end=None,
+    clinic_name="Clinic",
 ):
     context = build_appointments_page_context(
         request_args,
@@ -37,6 +38,7 @@ def render_appointments_page(
     # ``5:30 PM``), not the legacy compatibility time stored on the row.
     context["arrival_window_start"] = arrival_window_start
     context["arrival_window_end"] = arrival_window_end
+    context["clinic_name"] = clinic_name or "Clinic"
     return render_template("appointments.html", **context)
 
 
