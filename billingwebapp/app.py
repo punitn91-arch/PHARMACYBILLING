@@ -9617,6 +9617,74 @@ def build_profit_report_summary(from_date_raw, to_date_raw):
         "gross_profit_percentage": round(gross_profit_percentage, 2)
     }, None
 
+
+def build_net_profit_breakdown(invoices, invoice_items, returns, return_items):
+    """Month-wise net profit from already-loaded rows.
+
+    Uses the same basis as build_profit_report_summary: net sales (ex GST,
+    less returns) minus net COGS, ignoring cancelled invoices and returns.
+    Returns (month_rows, total_row).
+    """
+    def is_cancelled(row):
+        flag = str(getattr(row, "is_cancelled", None) or "").strip().lower()
+        return flag not in {"", "0", "false", "f", "no", "off", "none"}
+
+    def month_key(value):
+        local_date = storage_datetime_to_local_date(value)
+        return local_date.strftime("%Y-%m") if local_date else "Unknown"
+
+    months = {}
+
+    def bucket(key):
+        return months.setdefault(key, {"sales": 0.0, "returns": 0.0, "cogs": 0.0, "return_cogs": 0.0})
+
+    invoice_months = {}
+    for invoice in invoices:
+        if is_cancelled(invoice):
+            continue
+        key = month_key(invoice.created_at)
+        invoice_months[invoice.id] = key
+        bucket(key)["sales"] += to_float_safe(invoice.subtotal, 0)
+    for item in invoice_items:
+        key = invoice_months.get(item.invoice_id)
+        if key:
+            bucket(key)["cogs"] += to_float_safe(item.cost_amount, 0)
+
+    return_months = {
+        ret.id: month_key(ret.created_at)
+        for ret in returns
+        if not is_cancelled(ret)
+    }
+    for item in return_items:
+        key = return_months.get(item.return_id)
+        if key:
+            values = bucket(key)
+            values["returns"] += to_float_safe(item.net_amount, 0)
+            values["return_cogs"] += to_float_safe(item.cost_amount, 0)
+
+    def summarize(label, values):
+        net_sales = values["sales"] - values["returns"]
+        net_cogs = values["cogs"] - values["return_cogs"]
+        net_profit = net_sales - net_cogs
+        return {
+            "Month": label,
+            "Sales (ex GST)": round(values["sales"], 2),
+            "Returns (ex GST)": round(values["returns"], 2),
+            "Net Sales": round(net_sales, 2),
+            "COGS": round(values["cogs"], 2),
+            "Return COGS": round(values["return_cogs"], 2),
+            "Net COGS": round(net_cogs, 2),
+            "Net Profit": round(net_profit, 2),
+            "Net Profit %": round(net_profit / net_sales * 100, 2) if net_sales else 0.0,
+        }
+
+    month_rows = [summarize(key, months[key]) for key in sorted(months, reverse=True)]
+    totals = {
+        field: sum(values[field] for values in months.values())
+        for field in ("sales", "returns", "cogs", "return_cogs")
+    }
+    return month_rows, summarize("Total", totals)
+
 def build_medicine_report_data(from_date_raw="", to_date_raw="", medicine_query="", top_n=10):
     from_date_raw = (from_date_raw or "").strip()
     to_date_raw = (to_date_raw or "").strip()
@@ -18736,6 +18804,10 @@ def export_excel():
         "Cost Amount": ri.cost_amount
     } for ri in return_items]
 
+    net_profit_rows, net_profit_total = build_net_profit_breakdown(
+        invoices, invoice_items, returns, return_items
+    )
+
     meta_rows = [
         {"Metric": "Report Date", "Value": now.strftime("%d-%m-%Y")},
         {"Metric": "Generated At", "Value": now.strftime("%d-%m-%Y %I:%M:%S %p")},
@@ -18747,12 +18819,17 @@ def export_excel():
         {"Metric": "Patients", "Value": len(patients)},
         {"Metric": "Medicines", "Value": len(medicines)},
         {"Metric": "Returns", "Value": len(returns)},
-        {"Metric": "Return Items", "Value": len(return_items)}
+        {"Metric": "Return Items", "Value": len(return_items)},
+        {"Metric": "Net Sales (ex GST)", "Value": net_profit_total["Net Sales"]},
+        {"Metric": "Net COGS", "Value": net_profit_total["Net COGS"]},
+        {"Metric": "Net Profit", "Value": net_profit_total["Net Profit"]},
+        {"Metric": "Net Profit %", "Value": net_profit_total["Net Profit %"]}
     ]
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(meta_rows).to_excel(writer, sheet_name="Meta", index=False)
+        pd.DataFrame(net_profit_rows + [net_profit_total]).to_excel(writer, sheet_name="NetProfit", index=False)
         pd.DataFrame(build_invoice_rows(invoices)).to_excel(writer, sheet_name="Invoices", index=False)
         pd.DataFrame(build_invoice_item_rows(invoice_items)).to_excel(writer, sheet_name="InvoiceItems", index=False)
         pd.DataFrame(appointment_rows).to_excel(writer, sheet_name="Appointments", index=False)
