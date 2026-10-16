@@ -9618,17 +9618,64 @@ def build_profit_report_summary(from_date_raw, to_date_raw):
     }, None
 
 
+def is_cancelled_row(row):
+    """Python mirror of falsey_or_null_column_expr for loaded invoice/return rows."""
+    flag = str(getattr(row, "is_cancelled", None) or "").strip().lower()
+    return flag not in {"", "0", "false", "f", "no", "off", "none"}
+
+
+def build_invoice_profit_lookup(invoices, invoice_items, returns, return_items):
+    """Per-invoice profit from already-loaded rows: {invoice_id: values}.
+
+    Profit = subtotal - returned value - purchase cost, where returned value
+    and purchase cost are net of active returns against that invoice.
+    Cancelled invoices report zero so the column totals stay meaningful.
+    """
+    cost_by_invoice = {}
+    for item in invoice_items:
+        cost_by_invoice[item.invoice_id] = (
+            cost_by_invoice.get(item.invoice_id, 0.0) + to_float_safe(item.cost_amount, 0)
+        )
+
+    invoice_by_return = {ret.id: ret.invoice_id for ret in returns if not is_cancelled_row(ret)}
+    returned_value_by_invoice = {}
+    returned_cost_by_invoice = {}
+    for item in return_items:
+        invoice_id = invoice_by_return.get(item.return_id)
+        if invoice_id is None:
+            continue
+        returned_value_by_invoice[invoice_id] = (
+            returned_value_by_invoice.get(invoice_id, 0.0) + to_float_safe(item.net_amount, 0)
+        )
+        returned_cost_by_invoice[invoice_id] = (
+            returned_cost_by_invoice.get(invoice_id, 0.0) + to_float_safe(item.cost_amount, 0)
+        )
+
+    lookup = {}
+    for invoice in invoices:
+        if is_cancelled_row(invoice):
+            lookup[invoice.id] = {"purchase_cost": 0.0, "returned_value": 0.0, "profit": 0.0, "profit_percent": 0.0}
+            continue
+        returned_value = returned_value_by_invoice.get(invoice.id, 0.0)
+        purchase_cost = cost_by_invoice.get(invoice.id, 0.0) - returned_cost_by_invoice.get(invoice.id, 0.0)
+        net_sale = to_float_safe(invoice.subtotal, 0) - returned_value
+        profit = net_sale - purchase_cost
+        lookup[invoice.id] = {
+            "purchase_cost": round(purchase_cost, 2),
+            "returned_value": round(returned_value, 2),
+            "profit": round(profit, 2),
+            "profit_percent": round(profit / net_sale * 100, 2) if net_sale else 0.0,
+        }
+    return lookup
+
+
 def build_net_profit_breakdown(invoices, invoice_items, returns, return_items):
     """Month-wise net profit from already-loaded rows.
 
-    Uses the same basis as build_profit_report_summary: net sales (ex GST,
-    less returns) minus net COGS, ignoring cancelled invoices and returns.
+    Uses the same basis as build_profit_report_summary: net sales (less
+    returns) minus net COGS, ignoring cancelled invoices and returns.
     Returns (month_rows, total_row).
     """
-    def is_cancelled(row):
-        flag = str(getattr(row, "is_cancelled", None) or "").strip().lower()
-        return flag not in {"", "0", "false", "f", "no", "off", "none"}
-
     def month_key(value):
         local_date = storage_datetime_to_local_date(value)
         return local_date.strftime("%Y-%m") if local_date else "Unknown"
@@ -9640,7 +9687,7 @@ def build_net_profit_breakdown(invoices, invoice_items, returns, return_items):
 
     invoice_months = {}
     for invoice in invoices:
-        if is_cancelled(invoice):
+        if is_cancelled_row(invoice):
             continue
         key = month_key(invoice.created_at)
         invoice_months[invoice.id] = key
@@ -9653,7 +9700,7 @@ def build_net_profit_breakdown(invoices, invoice_items, returns, return_items):
     return_months = {
         ret.id: month_key(ret.created_at)
         for ret in returns
-        if not is_cancelled(ret)
+        if not is_cancelled_row(ret)
     }
     for item in return_items:
         key = return_months.get(item.return_id)
@@ -9668,8 +9715,8 @@ def build_net_profit_breakdown(invoices, invoice_items, returns, return_items):
         net_profit = net_sales - net_cogs
         return {
             "Month": label,
-            "Sales (ex GST)": round(values["sales"], 2),
-            "Returns (ex GST)": round(values["returns"], 2),
+            "Sales": round(values["sales"], 2),
+            "Returns": round(values["returns"], 2),
             "Net Sales": round(net_sales, 2),
             "COGS": round(values["cogs"], 2),
             "Return COGS": round(values["return_cogs"], 2),
@@ -18244,10 +18291,11 @@ def export_excel():
     if scope not in ("filtered", "all"):
         scope = "filtered"
 
-    def build_invoice_rows(rows):
+    def build_invoice_rows(rows, profit_lookup):
         result = []
         for i in rows:
             payment_breakdown = build_invoice_payment_breakdown(i)
+            profit = profit_lookup.get(i.id) or {}
             result.append({
                 "Invoice ID": i.id,
                 "Invoice No": i.invoice_no,
@@ -18260,6 +18308,10 @@ def export_excel():
                 "CGST": i.cgst,
                 "SGST": i.sgst,
                 "Total": i.total,
+                "Purchase Cost": profit.get("purchase_cost", 0.0),
+                "Returned Value": profit.get("returned_value", 0.0),
+                "Profit": profit.get("profit", 0.0),
+                "Profit %": profit.get("profit_percent", 0.0),
                 "Rounded Amount": payment_breakdown["rounded_amount"],
                 "Payment Mode": payment_breakdown["display_mode"],
                 "Payment Type": payment_breakdown["payment_type"],
@@ -18807,6 +18859,9 @@ def export_excel():
     net_profit_rows, net_profit_total = build_net_profit_breakdown(
         invoices, invoice_items, returns, return_items
     )
+    invoice_profit_lookup = build_invoice_profit_lookup(
+        invoices, invoice_items, returns, return_items
+    )
 
     meta_rows = [
         {"Metric": "Report Date", "Value": now.strftime("%d-%m-%Y")},
@@ -18820,7 +18875,7 @@ def export_excel():
         {"Metric": "Medicines", "Value": len(medicines)},
         {"Metric": "Returns", "Value": len(returns)},
         {"Metric": "Return Items", "Value": len(return_items)},
-        {"Metric": "Net Sales (ex GST)", "Value": net_profit_total["Net Sales"]},
+        {"Metric": "Net Sales", "Value": net_profit_total["Net Sales"]},
         {"Metric": "Net COGS", "Value": net_profit_total["Net COGS"]},
         {"Metric": "Net Profit", "Value": net_profit_total["Net Profit"]},
         {"Metric": "Net Profit %", "Value": net_profit_total["Net Profit %"]}
@@ -18830,7 +18885,7 @@ def export_excel():
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(meta_rows).to_excel(writer, sheet_name="Meta", index=False)
         pd.DataFrame(net_profit_rows + [net_profit_total]).to_excel(writer, sheet_name="NetProfit", index=False)
-        pd.DataFrame(build_invoice_rows(invoices)).to_excel(writer, sheet_name="Invoices", index=False)
+        pd.DataFrame(build_invoice_rows(invoices, invoice_profit_lookup)).to_excel(writer, sheet_name="Invoices", index=False)
         pd.DataFrame(build_invoice_item_rows(invoice_items)).to_excel(writer, sheet_name="InvoiceItems", index=False)
         pd.DataFrame(appointment_rows).to_excel(writer, sheet_name="Appointments", index=False)
         pd.DataFrame(patient_rows).to_excel(writer, sheet_name="Patients", index=False)
