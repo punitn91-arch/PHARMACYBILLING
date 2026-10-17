@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 
 class PublicPatientPortalTests(unittest.TestCase):
-    """Regression coverage for OTP-protected public patient portals."""
+    """Regression coverage for public booking and OTP-protected patient reports."""
 
     ENV_KEYS = (
         "DATABASE_URL",
@@ -175,7 +175,7 @@ class PublicPatientPortalTests(unittest.TestCase):
         self.assertEqual(verify_response.status_code, 302)
         self.assertIn("/my-lab-reports/list", verify_response.headers["Location"])
 
-    def test_normal_qr_booking_requires_otp_creates_appointment_and_stops_at_15(self):
+    def test_normal_qr_booking_without_otp_creates_appointment_and_stops_at_15(self):
         target_date = self.app_module.clinic_now().date() + timedelta(days=1)
         first_slot = datetime.combine(target_date, time(10, 0))
 
@@ -227,6 +227,9 @@ class PublicPatientPortalTests(unittest.TestCase):
         self.assertIn(b"sticky-clinic-intro", page_response.data)
         self.assertIn(b"position: sticky", page_response.data)
         self.assertNotIn(b'name="appointment_time"', page_response.data)
+        self.assertNotIn(b"OTP", page_response.data)
+        self.assertNotIn(b"mobile verification", page_response.data)
+        self.assertIn(b">Book Appointment</button>", page_response.data)
 
         booking_payload = {
             "patient_name": "Asha Sharma",
@@ -240,23 +243,25 @@ class PublicPatientPortalTests(unittest.TestCase):
             "symptoms": "Routine consultation",
         }
         with patch.object(self.app_module, "send_portal_otp") as send_otp:
-            send_otp.side_effect = lambda **kwargs: (True, kwargs["code"], "")
+            send_otp.side_effect = AssertionError("Appointment booking must not send OTP")
             start_response = self.client.post(
                 "/book-appointment",
                 data=booking_payload,
                 follow_redirects=False,
             )
-            otp = send_otp.call_args.kwargs["code"]
+            send_otp.assert_not_called()
         self.assertEqual(start_response.status_code, 302)
-        self.assertIn("/book-appointment/verify", start_response.headers["Location"])
-
-        verify_response = self.client.post(
-            "/book-appointment/verify",
-            data={"otp_code": otp},
-            follow_redirects=False,
-        )
-        self.assertEqual(verify_response.status_code, 200)
-        self.assertIn(b"Appointment confirmed", verify_response.data)
+        self.assertIn("/book-appointment/confirmation", start_response.headers["Location"])
+        confirmation = self.client.get(start_response.headers["Location"])
+        self.assertEqual(confirmation.status_code, 200)
+        self.assertIn(b"Appointment confirmed", confirmation.data)
+        # Refreshing confirmation or using an old verification link cannot
+        # create a second appointment or ask for an OTP.
+        self.assertEqual(self.client.get(start_response.headers["Location"]).status_code, 200)
+        for method in (self.client.get, self.client.post):
+            legacy_response = method("/book-appointment/verify")
+            self.assertEqual(legacy_response.status_code, 302)
+            self.assertIn("/book-appointment/confirmation", legacy_response.headers["Location"])
 
         with self.app.app_context():
             booking = self.app_module.PublicAppointmentBooking.query.filter_by(
@@ -264,7 +269,8 @@ class PublicPatientPortalTests(unittest.TestCase):
             ).one()
             appointment = self.db.session.get(self.app_module.Appointment, booking.appointment_id)
             self.assertEqual(booking.status, "BOOKED")
-            self.assertIsNotNone(booking.otp_verified_at)
+            self.assertIsNone(booking.otp_verified_at)
+            self.assertEqual(self.app_module.PortalOtpChallenge.query.count(), 0)
             self.assertIsNotNone(appointment)
             self.assertEqual(appointment.created_by, "PUBLIC_QR")
             self.assertIsNone(appointment.token_no)
@@ -289,7 +295,7 @@ class PublicPatientPortalTests(unittest.TestCase):
             )
 
         # The queue token belongs to reception, so it is issued only when the
-        # patient is marked as arrived—not when OTP confirmation succeeds.
+        # patient is marked as arrived, after the online booking is confirmed.
         self._login_admin()
         check_in_response = self.client.post(
             f"/appointments/{appointment_id}/status",
@@ -326,6 +332,31 @@ class PublicPatientPortalTests(unittest.TestCase):
                 self.app_module.PublicAppointmentBooking.query.filter_by(mobile="9876543211").count(),
                 0,
             )
+
+    def test_direct_booking_still_validates_details_and_booking_enabled_setting(self):
+        payload = {
+            "patient_name": "New Patient",
+            "mobile": "9876543210",
+            "gender": "OTHER",
+            "appointment_date": (self.app_module.clinic_now().date() + timedelta(days=1)).isoformat(),
+            "booking_type": "NORMAL",
+        }
+        with patch.object(self.app_module, "send_portal_otp") as send_otp:
+            for invalid_fields in ({"mobile": "123"}, {"patient_name": ""}, {"appointment_date": "invalid"}):
+                with self.subTest(invalid_fields=invalid_fields):
+                    response = self.client.post("/book-appointment", data={**payload, **invalid_fields})
+                    self.assertEqual(response.status_code, 400)
+            with self.app.app_context():
+                settings = self.app_module.AppointmentBookingSettings.query.one()
+                settings.booking_enabled = False
+                self.db.session.commit()
+            response = self.client.post("/book-appointment", data=payload)
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(b"Online appointment booking is currently unavailable", response.data)
+            send_otp.assert_not_called()
+        with self.app.app_context():
+            self.assertEqual(self.app_module.PublicAppointmentBooking.query.count(), 0)
+            self.assertEqual(self.app_module.Appointment.query.count(), 0)
 
     def test_priority_request_needs_staff_verified_payment_before_confirmation(self):
         target_date = self.app_module.clinic_now().date() + timedelta(days=1)
@@ -379,17 +410,20 @@ class PublicPatientPortalTests(unittest.TestCase):
             "symptoms": "Needs same-day review",
         }
         with patch.object(self.app_module, "send_portal_otp") as send_otp:
-            send_otp.side_effect = lambda **kwargs: (True, kwargs["code"], "")
+            send_otp.side_effect = AssertionError("Priority booking must not send OTP")
             start_response = self.client.post("/book-appointment", data=priority_payload, follow_redirects=False)
-            otp = send_otp.call_args.kwargs["code"]
+            send_otp.assert_not_called()
         self.assertEqual(start_response.status_code, 302)
-        verify_response = self.client.post("/book-appointment/verify", data={"otp_code": otp})
-        self.assertEqual(verify_response.status_code, 200)
-        self.assertIn(b"Awaiting final confirmation", verify_response.data)
+        self.assertIn("/book-appointment/confirmation", start_response.headers["Location"])
+        confirmation = self.client.get(start_response.headers["Location"])
+        self.assertEqual(confirmation.status_code, 200)
+        self.assertIn(b"Awaiting final confirmation", confirmation.data)
 
         with self.app.app_context():
             booking = self.app_module.PublicAppointmentBooking.query.filter_by(mobile="9876543212").one()
             self.assertEqual(booking.status, "PAYMENT_PENDING")
+            self.assertIsNone(booking.otp_verified_at)
+            self.assertEqual(self.app_module.PortalOtpChallenge.query.count(), 0)
             booking_id = booking.id
             self.assertIsNone(booking.appointment_id)
 

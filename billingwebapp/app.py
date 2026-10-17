@@ -16575,8 +16575,8 @@ def get_patient_suggestions(limit=200):
 
 # ---------------- PUBLIC QR APPOINTMENT BOOKING ----------------
 # This public flow deliberately sits alongside (rather than inside) the
-# staff appointment screen.  It reserves capacity while an OTP is pending,
-# then creates the same Appointment record the reception team already uses.
+# staff appointment screen. It reserves capacity during submission, then
+# creates the same Appointment record the reception team already uses.
 PUBLIC_APPOINTMENT_SESSION_KEY = "public_appointment_booking_ref"
 PUBLIC_APPOINTMENT_TENANT_SESSION_KEY = "public_appointment_tenant"
 PUBLIC_APPOINTMENT_RESERVATION_MINUTES = max(
@@ -17102,7 +17102,7 @@ def lock_public_appointment_capacity(appointment_date):
 
 
 def create_public_appointment_reservation(payload, settings=None):
-    """Reserve one FCFS capacity place while OTP verification is pending."""
+    """Reserve one FCFS capacity place before completing the booking."""
     settings = settings or get_public_appointment_booking_settings()
     if not lock_public_appointment_capacity(payload.get("appointment_date")):
         return None, "Unable to reserve an appointment right now. Please try again."
@@ -17130,6 +17130,7 @@ def create_public_appointment_reservation(payload, settings=None):
         symptoms=payload["symptoms"],
         booking_type=payload["booking_type"],
         amount=payload["amount"],
+        # Retain the legacy pending status while the submission completes.
         status="OTP_PENDING",
         reservation_expires_at=datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES),
         source_ip=portal_request_ip(),
@@ -17146,7 +17147,7 @@ def create_public_appointment_reservation(payload, settings=None):
         app.logger.exception("Unable to create public appointment reservation")
         return None, "Unable to start the appointment request right now. Please try again."
 def confirm_public_normal_appointment(booking, settings):
-    """Create the clinic's real Appointment record after OTP, never before."""
+    """Create the clinic's real Appointment record after checking capacity."""
     if not lock_public_appointment_capacity(booking.appointment_date):
         return None, "Unable to confirm the appointment right now. Please try again."
     availability = get_public_appointment_availability(
@@ -17203,7 +17204,6 @@ def confirm_public_normal_appointment(booking, settings):
         appointment = stage_new_appointment(appointment)
         booking.appointment_id = appointment.id
         booking.patient_id = patient.id
-        booking.otp_verified_at = booking.otp_verified_at or datetime.utcnow()
         booking.status = "BOOKED"
         booking.reservation_expires_at = None
         db.session.commit()
@@ -17394,27 +17394,9 @@ def public_appointment_booking():
                 selected_date=form_data.get("appointment_date"),
                 status_code=409,
             )
-        challenge, _development_code, error = create_portal_otp_challenge(
-            mobile=booking.mobile,
-            purpose="PUBLIC_APPOINTMENT",
-            context_ref=booking.booking_ref,
-        )
-        if not challenge:
-            try:
-                db.session.delete(booking)
-                db.session.commit()
-            except SQLAlchemyError:
-                db.session.rollback()
-            flash(error or "Unable to send the verification code. Please try again.", "danger")
-            return render_public_appointment_booking_form(
-                form_data=form_data,
-                selected_date=form_data.get("appointment_date"),
-                status_code=503,
-            )
-
         session[PUBLIC_APPOINTMENT_SESSION_KEY] = booking.booking_ref
         session.modified = True
-        return redirect(url_for("public_appointment_verify"))
+        return complete_public_appointment_request(booking, settings)
 
 
 def get_public_appointment_session_booking():
@@ -17426,103 +17408,64 @@ def get_public_appointment_session_booking():
 
 @app.route("/book-appointment/verify", methods=["GET", "POST"])
 def public_appointment_verify():
+    """Keep old verification links usable without requesting an OTP."""
     with public_appointment_request_scope():
         booking = get_public_appointment_session_booking()
-        if not booking:
-            flash("Please start a new appointment request.", "warning")
-            return redirect(url_for("public_appointment_booking"))
-        if (booking.status or "").upper() != "OTP_PENDING" or not public_appointment_booking_is_active(booking):
-            if (booking.status or "").upper() == "OTP_PENDING":
-                booking.status = "EXPIRED"
-                db.session.commit()
-            flash("This appointment request has expired. Please start a new booking request.", "warning")
-            return redirect(url_for("public_appointment_booking"))
+        if booking and (booking.status or "").upper() in {"BOOKED", "PAYMENT_PENDING"}:
+            return redirect(url_for("public_appointment_confirmation"))
+        return redirect(url_for("public_appointment_booking"))
 
-        if request.method == "GET":
-            settings = get_public_appointment_booking_settings()
-            return render_template(
-                "public_appointment_verify.html",
-                booking=booking,
-                masked_mobile=mask_mobile(booking.mobile),
-                **public_appointment_arrival_window_context(settings),
-            )
 
-        challenge, error = verify_portal_otp_challenge(
-            mobile=booking.mobile,
-            purpose="PUBLIC_APPOINTMENT",
-            context_ref=booking.booking_ref,
-            otp_code=request.form.get("otp_code"),
-        )
+def complete_public_appointment_request(booking, settings):
+    """Complete a validated public request without mobile OTP verification."""
+    booking_type = (booking.booking_type or "NORMAL").upper()
+    if booking_type == "NORMAL":
+        appointment, error = confirm_public_normal_appointment(booking, settings)
         if error:
+            fresh_booking = PublicAppointmentBooking.query.get(booking.id)
+            if fresh_booking and fresh_booking.status == "OTP_PENDING":
+                fresh_booking.status = "EXPIRED"
+                db.session.commit()
             flash(error, "danger")
-            settings = get_public_appointment_booking_settings()
-            return render_template(
-                "public_appointment_verify.html",
-                booking=booking,
-                masked_mobile=mask_mobile(booking.mobile),
-                **public_appointment_arrival_window_context(settings),
-            ), 400
-
-        settings = get_public_appointment_booking_settings()
-        booking_type = (booking.booking_type or "NORMAL").upper()
-        if booking_type == "NORMAL":
-            appointment, error = confirm_public_normal_appointment(booking, settings)
-            if error:
-                fresh_booking = PublicAppointmentBooking.query.get(booking.id)
-                if fresh_booking and fresh_booking.status == "OTP_PENDING":
-                    fresh_booking.status = "EXPIRED"
-                    db.session.commit()
-                flash(error, "danger")
-                return redirect(url_for("public_appointment_booking"))
-            return render_template(
-                "public_appointment_confirmation.html",
-                booking=booking,
-                appointment=appointment,
-                **public_appointment_arrival_window_context(settings),
-            )
-
-        if not lock_public_appointment_capacity(booking.appointment_date):
-            flash("Unable to confirm the priority request right now. Please try again.", "danger")
             return redirect(url_for("public_appointment_booking"))
-        availability = get_public_appointment_availability(
-            booking.appointment_date,
-            settings,
-            exclude_booking_id=booking.id,
-        )
-        capacity_error = public_appointment_capacity_error("PRIORITY", availability)
-        if availability.get("same_day_booking_closed") or capacity_error:
-            booking.status = "EXPIRED"
-            db.session.commit()
-            flash(capacity_error or "Online booking for today is closed. Please choose another date.", "warning")
-            return redirect(url_for("public_appointment_booking"))
+        return redirect(url_for("public_appointment_confirmation"))
 
-        # A browser callback must never be treated as payment proof.  Until a
-        # signed gateway webhook is configured, keep this as a visible staff
-        # review/payment-pending request instead of creating a paid appointment.
-        booking.otp_verified_at = challenge.verified_at or datetime.utcnow()
-        booking.status = "PAYMENT_PENDING"
-        booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES)
+    if not lock_public_appointment_capacity(booking.appointment_date):
+        flash("Unable to confirm the priority request right now. Please try again.", "danger")
+        return redirect(url_for("public_appointment_booking"))
+    availability = get_public_appointment_availability(
+        booking.appointment_date,
+        settings,
+        exclude_booking_id=booking.id,
+    )
+    capacity_error = public_appointment_capacity_error("PRIORITY", availability)
+    if availability.get("same_day_booking_closed") or capacity_error:
+        booking.status = "EXPIRED"
         db.session.commit()
-        record_audit_event(
-            action="Created priority appointment payment request",
-            entity_type="PUBLIC_APPOINTMENT_BOOKING",
-            entity_id=booking.id,
-            ref_code=booking.booking_ref,
-            before=None,
-            after={
-                "booking_type": "PRIORITY",
-                "status": booking.status,
-                "amount": booking.amount,
-                "appointment_date": booking.appointment_date.isoformat(),
-            },
-            extra={"source": "PUBLIC_QR", "payment_provider": "NOT_CONFIGURED"},
-        )
-        return render_template(
-            "public_appointment_confirmation.html",
-            booking=booking,
-            appointment=None,
-            **public_appointment_arrival_window_context(settings),
-        )
+        flash(capacity_error or "Online booking for today is closed. Please choose another date.", "warning")
+        return redirect(url_for("public_appointment_booking"))
+
+    # A browser callback must never be treated as payment proof.  Until a
+    # signed gateway webhook is configured, keep this as a visible staff
+    # review/payment-pending request instead of creating a paid appointment.
+    booking.status = "PAYMENT_PENDING"
+    booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=PUBLIC_APPOINTMENT_RESERVATION_MINUTES)
+    db.session.commit()
+    record_audit_event(
+        action="Created priority appointment payment request",
+        entity_type="PUBLIC_APPOINTMENT_BOOKING",
+        entity_id=booking.id,
+        ref_code=booking.booking_ref,
+        before=None,
+        after={
+            "booking_type": "PRIORITY",
+            "status": booking.status,
+            "amount": booking.amount,
+            "appointment_date": booking.appointment_date.isoformat(),
+        },
+        extra={"source": "PUBLIC_QR", "payment_provider": "NOT_CONFIGURED"},
+    )
+    return redirect(url_for("public_appointment_confirmation"))
 
 
 @app.route("/book-appointment/confirmation")

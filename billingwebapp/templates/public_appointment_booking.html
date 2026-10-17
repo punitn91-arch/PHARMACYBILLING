@@ -247,7 +247,7 @@
                     <div class="field">
                         <label for="mobile">Mobile number</label>
                         <input id="mobile" name="mobile" type="tel" inputmode="numeric" autocomplete="tel" maxlength="15" pattern="[0-9+ -]{10,15}" required value="{{ form_data.mobile|default('') if form_data else '' }}" placeholder="10-digit mobile number">
-                        <p class="hint">An OTP will be sent to this number.</p>
+                        <p class="hint">Enter your mobile number for clinic communication.</p>
                     </div>
                     <div class="field">
                         <label for="gender">Gender</label>
@@ -339,8 +339,8 @@
             </section>
 
             <div class="actions">
-                <span class="secure">Your details are used only for appointment booking and verification.</span>
-                <button class="submit" type="submit" {% if not booking_is_enabled %}disabled aria-disabled="true"{% endif %}>Continue to mobile verification</button>
+                <span class="secure">Your details are used only for appointment booking.</span>
+                <button class="submit" type="submit" {% if not booking_is_enabled %}disabled aria-disabled="true"{% endif %}>Book Appointment</button>
             </div>
         </form>
     </section>
