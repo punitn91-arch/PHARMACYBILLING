@@ -316,7 +316,7 @@
                             {% if normal_full %}
                             <p>Appointments are full for this date. Please choose another available date.</p>
                             {% else %}
-                            <p>Book your online consultation for ₹{{ online_consultation_fee|default(1000) }}. The clinic will contact you on WhatsApp.</p>
+                            <p>Reserve one place in today’s online consultation queue for ₹{{ online_consultation_fee|default(1000) }}. Consultation window: {{ arrival_window_start_display }} to {{ arrival_window_end_display }}; consultations are first-come, first-served.</p>
                             {% endif %}
                         </label>
                     </div>

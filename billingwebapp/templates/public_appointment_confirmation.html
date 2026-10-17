@@ -70,7 +70,7 @@
             {% if has_appointment %}
             <div class="status">● Your appointment is confirmed</div>
             {% if is_online %}
-            <p class="notice">Your online consultation is booked. The clinic will contact you on WhatsApp for consultation and payment details.</p>
+            <p class="notice">Your online consultation is booked for ₹{{ booking_amount }}. Consultation window: <strong>{{ arrival_window_start_display }}</strong> to <strong>{{ arrival_window_end_display }}</strong>. Consultations are first-come, first-served.</p>
             {% else %}
             <p class="notice">Please arrive between <strong>{{ arrival_window_start_display }}</strong> and <strong>{{ arrival_window_end_display }}</strong>. Consultation is first-come, first-served; your token will be issued at the reception counter based on arrival.</p>
             {% endif %}
