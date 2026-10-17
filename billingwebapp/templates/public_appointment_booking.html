@@ -207,10 +207,8 @@
     {% endif %}
     {% endwith %}
 
-    <section class="booking-card" aria-labelledby="booking-title">
+    <section class="booking-card" aria-label="Appointment booking">
         <div class="card-head">
-            <h2 id="booking-title">Request an appointment</h2>
-            <p>All fields marked required are needed to reserve one place in the clinic’s daily queue.</p>
             <form class="date-picker" method="get" action="{{ booking_form_url }}">
                 {% if public_tenant_code %}<input type="hidden" name="tenant" value="{{ public_tenant_code }}">{% endif %}
                 <div>
