@@ -144,8 +144,6 @@
         .tag { flex: 0 0 auto; border-radius: 999px; background: #dff5f1; color: #0f766e; padding: 3px 7px; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
         .tag.priority { background: #ffecd0; color: #a75508; }
         .type-option p { margin: 8px 0 0; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.45; }
-        .medical-note { margin-top: 14px; border-left: 4px solid #dc2626; border-radius: 0 10px 10px 0; background: #fff4f4; color: #7f1d1d; padding: 11px 13px; font-size: 12px; }
-        .medical-note strong { font-weight: 800; }
         .actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 28px; padding-top: 19px; border-top: 1px solid var(--line); }
         .secure { color: var(--muted); font-size: 11px; }
         .submit { min-height: 46px; border: 0; border-radius: 11px; background: var(--brand); color: #fff; padding: 0 19px; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; box-shadow: 0 7px 14px rgba(15,118,110,.20); transition: background .15s ease, transform .15s ease; }
@@ -279,9 +277,9 @@
 
                 <div class="availability" aria-label="Selected date availability">
                     <div class="meter {% if normal_full %}full{% endif %}">
-                        <span class="meter-label">Regular appointments</span>
+                        <span class="meter-label">Total Appointments</span>
                         <strong>{% if normal_full %}Full{% else %}{{ normal_remaining }} left{% endif %}</strong>
-                        <small>{{ normal_capacity }} regular appointments per day</small>
+                        <small>{{ normal_capacity }} appointments per day</small>
                     </div>
                     <div class="meter priority {% if priority_full %}full{% endif %}">
                         <span class="meter-label">Priority appointments</span>
@@ -301,7 +299,7 @@
                     <div class="type-option {% if normal_full %}disabled{% endif %}">
                         <input id="type-normal" name="booking_type" type="radio" value="NORMAL" {% if not normal_full and saved_type != 'ONLINE' %}checked{% endif %} {% if normal_full %}disabled{% endif %} required>
                         <label for="type-normal">
-                            <span class="type-heading">Regular appointment <span class="tag">Regular queue</span></span>
+                            <span class="type-heading">Regular Clinic Appointment <span class="tag">Regular queue</span></span>
                             {% if normal_full %}
                             <p>Today's regular appointment capacity is full. Please choose another date or, if available, the priority option.</p>
                             {% else %}
@@ -334,7 +332,6 @@
                         </label>
                     </div>
                 </div>
-                <p class="medical-note"><strong>For a medical emergency:</strong> do not wait for an online appointment or payment. Please contact local emergency services or go to the nearest emergency hospital immediately.</p>
             </section>
 
             <section class="section" aria-labelledby="reason-title">
