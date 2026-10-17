@@ -45,6 +45,7 @@
 {% set booking_no = confirmed.appointment_no|default(confirmed.booking_no|default(confirmed.booking_ref|default(pending.appointment_no|default(pending.booking_no|default(pending.booking_ref|default(pending.reference_no|default(''))))))) %}
 {% set appointment_date = confirmed.appointment_date|default(pending.appointment_date|default('')) %}
 {% set appointment_type = confirmed.booking_type|default(confirmed.appointment_type|default(pending.booking_type|default(pending.appointment_type|default('NORMAL')))) %}
+{% set is_online = appointment_type|upper == 'ONLINE' %}
 {% set booking_amount = confirmed.amount|default(pending.amount|default(none)) %}
 {% set arrival_window_start_display = arrival_window_start|default(appointment_arrival_window_start|default(pending.arrival_window_start_display|default(pending.arrival_window_start|default(pending.arrival_start|default('5:30 PM', true), true), true), true), true) %}
 {% set arrival_window_end_display = arrival_window_end|default(appointment_arrival_window_end|default(pending.arrival_window_end_display|default(pending.arrival_window_end|default(pending.arrival_end|default('7:45 PM', true), true), true), true), true) %}
@@ -59,7 +60,7 @@
             {% if booking_no %}<p class="reference">Booking reference<strong>{{ booking_no }}</strong></p>{% endif %}
             <dl class="details">
                 <div class="detail"><dt>Patient</dt><dd>{{ patient_name }}</dd></div>
-                <div class="detail"><dt>Booking type</dt><dd>{% if appointment_type|upper == 'PRIORITY' %}Priority same-day{% else %}Regular appointment{% endif %}</dd></div>
+                <div class="detail"><dt>Booking type</dt><dd>{% if is_online %}Online Consultation{% elif appointment_type|upper == 'PRIORITY' %}Priority same-day{% else %}Regular appointment{% endif %}</dd></div>
                 <div class="detail"><dt>Date</dt><dd>{{ appointment_date or 'To be confirmed' }}</dd></div>
                 <div class="detail"><dt>Clinic visit window</dt><dd>{{ arrival_window_start_display }} – {{ arrival_window_end_display }}</dd></div>
                 {% if booking_amount is not none and booking_amount != '' %}<div class="detail"><dt>Amount</dt><dd>₹{{ booking_amount }}</dd></div>{% endif %}
@@ -68,7 +69,11 @@
 
             {% if has_appointment %}
             <div class="status">● Your appointment is confirmed</div>
+            {% if is_online %}
+            <p class="notice">Your online consultation is booked. The clinic will contact you on WhatsApp for consultation and payment details.</p>
+            {% else %}
             <p class="notice">Please arrive between <strong>{{ arrival_window_start_display }}</strong> and <strong>{{ arrival_window_end_display }}</strong>. Consultation is first-come, first-served; your token will be issued at the reception counter based on arrival.</p>
+            {% endif %}
             {% else %}
             <div class="status pending">● Awaiting final confirmation</div>
             <p class="notice">Please plan to arrive between <strong>{{ arrival_window_start_display }}</strong> and <strong>{{ arrival_window_end_display }}</strong>. If this is a priority appointment, its payment must be verified before it is confirmed. For a medical emergency, please contact emergency services or visit the nearest emergency hospital.</p>

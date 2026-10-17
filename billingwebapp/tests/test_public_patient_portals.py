@@ -333,6 +333,62 @@ class PublicPatientPortalTests(unittest.TestCase):
                 0,
             )
 
+    def test_online_consultation_confirms_directly_at_fixed_fee_and_uses_existing_capacity(self):
+        target_date = self.app_module.clinic_now().date() + timedelta(days=1)
+        with self.app.app_context():
+            settings = self.app_module.get_public_appointment_booking_settings()
+            settings.normal_daily_limit = 1
+            settings.normal_fee = 600
+            self.db.session.commit()
+        page = self.client.get(f"/book-appointment?date={target_date.isoformat()}")
+        self.assertIn(b'value="ONLINE"', page.data)
+        self.assertIn(b"Online Consultation", page.data)
+        payload = {
+            "patient_name": "Online Patient",
+            "mobile": "9876543219",
+            "gender": "OTHER",
+            "appointment_date": target_date.isoformat(),
+            "booking_type": "ONLINE",
+            "amount": "1",
+            "consultation_fee": "1",
+        }
+        with patch.object(self.app_module, "send_portal_otp") as send_otp:
+            response = self.client.post("/book-appointment", data=payload)
+            send_otp.assert_not_called()
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/book-appointment/confirmation", response.headers["Location"])
+        receipt = self.client.get(response.headers["Location"])
+        self.assertEqual(receipt.status_code, 200)
+        self.assertIn(b"Appointment confirmed", receipt.data)
+        self.assertIn(b"Online Consultation", receipt.data)
+        self.assertIn("₹1000".encode(), receipt.data)
+        self.assertNotIn(b'name="payment_reference"', receipt.data)
+        self.assertNotIn(b"Awaiting final confirmation", receipt.data)
+        with self.app.app_context():
+            booking = self.app_module.PublicAppointmentBooking.query.filter_by(mobile=payload["mobile"]).one()
+            appointment = self.db.session.get(self.app_module.Appointment, booking.appointment_id)
+            self.assertEqual(booking.status, "BOOKED")
+            self.assertEqual(booking.booking_type, "ONLINE")
+            self.assertEqual(booking.amount, 1000)
+            self.assertEqual(appointment.consultation_fee, 1000)
+            self.assertEqual(appointment.status, "BOOKED")
+            self.assertEqual(appointment.payment_status, "UNPAID")
+            self.assertEqual(appointment.source, "PUBLIC_ONLINE")
+            self.assertIsNone(appointment.token_no)
+            self.assertIsNone(booking.otp_verified_at)
+            self.assertIsNone(booking.payment_verified_at)
+            self.assertEqual(self.app_module.PortalOtpChallenge.query.count(), 0)
+            availability = self.app_module.get_public_appointment_availability(target_date)
+            self.assertEqual(availability["normal_remaining"], 0)
+        for booking_type in ("ONLINE", "NORMAL"):
+            rejected = self.client.post("/book-appointment", data={**payload, "booking_type": booking_type})
+            self.assertEqual(rejected.status_code, 400)
+        self._login_admin()
+        staff_page = self.client.get(f"/appointments?date={target_date.isoformat()}&view=list")
+        self.assertEqual(staff_page.status_code, 200)
+        self.assertIn(b"Online Consultation", staff_page.data)
+        self.assertIn(b"Online Patient", staff_page.data)
+
     def test_direct_booking_still_validates_details_and_booking_enabled_setting(self):
         payload = {
             "patient_name": "New Patient",

@@ -429,6 +429,9 @@
                 <tr class="transition duration-150 appointment-row" data-appointment-id="{{ a.id }}" data-search-name="{{ a.patient_name or '' }}" data-search-no="{{ a.appointment_no or '' }}" data-search-mobile="{{ a.mobile or '' }}">
                     <td class="px-4 py-4 text-sm font-semibold text-slate-900">
                         {{ a.appointment_no }}
+                        {% if a.source == 'PUBLIC_ONLINE' %}
+                        <span class="block text-xs font-semibold text-blue-700">Online Consultation</span>
+                        {% endif %}
                         {% if is_public_fcfs and not public_token_assigned %}
                         <p class="mt-1 text-xs font-medium text-teal-700">Arrival window · Token at counter | {{ a.appointment_date.strftime('%d-%m-%Y') if a.appointment_date else '-' }}</p>
                         {% else %}

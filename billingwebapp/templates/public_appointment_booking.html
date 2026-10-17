@@ -299,13 +299,24 @@
                 <h3 class="section-title" id="type-title"><span class="step">3</span> Choose booking type</h3>
                 <div class="type-options">
                     <div class="type-option {% if normal_full %}disabled{% endif %}">
-                        <input id="type-normal" name="booking_type" type="radio" value="NORMAL" {% if not normal_full %}checked{% endif %} {% if normal_full %}disabled{% endif %} required>
+                        <input id="type-normal" name="booking_type" type="radio" value="NORMAL" {% if not normal_full and saved_type != 'ONLINE' %}checked{% endif %} {% if normal_full %}disabled{% endif %} required>
                         <label for="type-normal">
                             <span class="type-heading">Regular appointment <span class="tag">Regular queue</span></span>
                             {% if normal_full %}
                             <p>Today's regular appointment capacity is full. Please choose another date or, if available, the priority option.</p>
                             {% else %}
                             <p>Reserve one place in today’s regular queue{% if normal_fee|float > 0 %} for ₹{{ normal_fee }}{% endif %}. Arrive between {{ arrival_window_start_display }} and {{ arrival_window_end_display }}; the token is issued at reception.</p>
+                            {% endif %}
+                        </label>
+                    </div>
+                    <div class="type-option {% if normal_full %}disabled{% endif %}">
+                        <input id="type-online" name="booking_type" type="radio" value="ONLINE" {% if saved_type == 'ONLINE' and not normal_full %}checked{% endif %} {% if normal_full %}disabled{% endif %} required>
+                        <label for="type-online">
+                            <span class="type-heading">Online Consultation <span class="tag">₹{{ online_consultation_fee|default(1000) }}</span></span>
+                            {% if normal_full %}
+                            <p>Appointments are full for this date. Please choose another available date.</p>
+                            {% else %}
+                            <p>Book your online consultation for ₹{{ online_consultation_fee|default(1000) }}. The clinic will contact you on WhatsApp.</p>
                             {% endif %}
                         </label>
                     </div>

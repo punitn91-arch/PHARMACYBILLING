@@ -16586,6 +16586,7 @@ PUBLIC_APPOINTMENT_RESERVATION_MINUTES = max(
 PUBLIC_APPOINTMENT_ACTIVE_STATUSES = {"OTP_PENDING", "PAYMENT_PENDING", "BOOKED"}
 PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START = "17:30"
 PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END = "19:45"
+PUBLIC_ONLINE_CONSULTATION_FEE = 1000
 TENANT_APPOINTMENT_OVERRIDES = (
     {
         "match_terms": ("arthrogenix", "arthro", "artho"),
@@ -16945,7 +16946,7 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
     )
     normal_pending_count = sum(
         1 for booking in active_public_bookings
-        if (booking.booking_type or "").upper() == "NORMAL"
+        if (booking.booking_type or "").upper() in {"NORMAL", "ONLINE"}
         and (booking.status or "").upper() == "OTP_PENDING"
     )
     priority_count = sum(
@@ -17026,7 +17027,7 @@ def validate_public_appointment_request(form_data, settings, availability):
         return None, "Please select a valid gender."
     if not appointment_date or appointment_date < today or appointment_date > today + timedelta(days=max_days_ahead):
         return None, "Please choose an available appointment date."
-    if booking_type not in {"NORMAL", "PRIORITY"}:
+    if booking_type not in {"NORMAL", "PRIORITY", "ONLINE"}:
         return None, "Please choose a valid booking type."
     if availability.get("same_day_booking_closed"):
         return None, "Online booking for today is closed. Please choose another date."
@@ -17042,7 +17043,7 @@ def validate_public_appointment_request(form_data, settings, availability):
         "appointment_time": public_appointment_server_time_marker(settings),
         "booking_type": booking_type,
         "symptoms": form_data["symptoms"],
-        "amount": round(
+        "amount": PUBLIC_ONLINE_CONSULTATION_FEE if booking_type == "ONLINE" else round(
             to_float_safe(
                 getattr(settings, "priority_fee" if booking_type == "PRIORITY" else "normal_fee", 0),
                 0,
@@ -17054,7 +17055,7 @@ def validate_public_appointment_request(form_data, settings, availability):
 
 def public_appointment_capacity_error(booking_type, availability):
     """Return a patient-safe capacity error for a public booking type."""
-    if booking_type == "NORMAL" and availability.get("normal_full"):
+    if booking_type in {"NORMAL", "ONLINE"} and availability.get("normal_full"):
         return "Regular appointments are full for this date. Please choose another date."
     if booking_type == "PRIORITY":
         if not availability.get("normal_full"):
@@ -17148,6 +17149,7 @@ def create_public_appointment_reservation(payload, settings=None):
         return None, "Unable to start the appointment request right now. Please try again."
 def confirm_public_normal_appointment(booking, settings):
     """Create the clinic's real Appointment record after checking capacity."""
+    is_online = (booking.booking_type or "").upper() == "ONLINE"
     if not lock_public_appointment_capacity(booking.appointment_date):
         return None, "Unable to confirm the appointment right now. Please try again."
     availability = get_public_appointment_availability(
@@ -17196,7 +17198,12 @@ def confirm_public_normal_appointment(booking, settings):
         consultation_fee=booking.amount,
         status="BOOKED",
         symptoms=booking.symptoms,
-        notes="Booked through public QR portal. Token will be issued at reception on arrival.",
+        notes=(
+            "Online consultation booked through public portal. Consultation fee: Rs 1000."
+            if is_online else
+            "Booked through public QR portal. Token will be issued at reception on arrival."
+        ),
+        source="PUBLIC_ONLINE" if is_online else "ADMIN",
         created_by="PUBLIC_QR",
         is_deleted=False,
     )
@@ -17222,7 +17229,11 @@ def confirm_public_normal_appointment(booking, settings):
         ref_code=appointment.appointment_no,
         before=None,
         after=build_appointment_audit_snapshot(appointment),
-        extra={"booking_ref": booking.booking_ref, "booking_type": "NORMAL", "source": "PUBLIC_QR"},
+        extra={
+            "booking_ref": booking.booking_ref,
+            "booking_type": booking.booking_type,
+            "source": "PUBLIC_ONLINE" if is_online else "PUBLIC_QR",
+        },
     )
     return appointment, ""
 
@@ -17359,6 +17370,7 @@ def render_public_appointment_booking_form(*, form_data=None, selected_date=None
         selected_date=selected.isoformat(),
         available_dates=available_dates,
         form_data=form_data or {},
+        online_consultation_fee=PUBLIC_ONLINE_CONSULTATION_FEE,
         appointment_identity=tenant_appointment_identity(tenant),
         public_tenant_code=tenant_identifier,
         booking_form_url=url_for("public_appointment_booking", tenant=tenant_identifier) if tenant_identifier else url_for("public_appointment_booking"),
@@ -17419,7 +17431,7 @@ def public_appointment_verify():
 def complete_public_appointment_request(booking, settings):
     """Complete a validated public request without mobile OTP verification."""
     booking_type = (booking.booking_type or "NORMAL").upper()
-    if booking_type == "NORMAL":
+    if booking_type in {"NORMAL", "ONLINE"}:
         appointment, error = confirm_public_normal_appointment(booking, settings)
         if error:
             fresh_booking = PublicAppointmentBooking.query.get(booking.id)
