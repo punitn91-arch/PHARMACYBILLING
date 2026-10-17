@@ -6,7 +6,9 @@
     <meta name="theme-color" content="#0d6570">
     <meta name="description" content="Expert hormone, diabetes and thyroid care in Sanganer with Dr. Abhishek Prakash. Book a clinic appointment online.">
     <title>Dr. Abhishek Prakash | Diabetes, Thyroid & Hormone Care in Sanganer</title>
+    {% if (appointment_identity|default({})).landing_layout != 'endo' %}
     <link rel="preload" as="image" href="{{ url_for('static', filename='lannding-image.jpg') }}">
+    {% endif %}
     <style>
         :root {
             color-scheme: light;
@@ -499,6 +501,39 @@
             html { scroll-behavior: auto; }
             *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
         }
+        /* Keep the complete Endoclinic poster and its links in the same coordinate space. */
+        .poster-endo .poster-stage {
+            container-type: inline-size;
+            width: min(100vw, 177.777778svh);
+            min-height: 0;
+            max-height: none;
+            aspect-ratio: 16 / 9;
+            margin: 0 auto;
+        }
+        .poster-endo .poster-booking-link { left: 28.4%; top: 51.7%; width: 27.5%; height: 8%; }
+        .poster-endo .poster-call-link {
+            left: 3.2%; top: 52.4%; width: 24.3%; height: 7%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: .65cqw;
+            background: #fff;
+            color: #103ca0;
+            text-indent: 0;
+            text-decoration: none;
+            font-size: 2.5cqw;
+            font-weight: 850;
+            letter-spacing: -.08cqw;
+            white-space: nowrap;
+        }
+        .poster-endo .poster-call-link svg { width: 2.5cqw; height: 2.5cqw; flex: 0 0 auto; }
+        .poster-endo .poster-contact-link { left: 74.6%; top: 68%; width: 21.7%; height: 7.8%; }
+        @media (max-width: 680px) {
+            .poster-endo .poster-stage { width: 100%; aspect-ratio: 941 / 1672; }
+            .poster-endo .poster-booking-link { left: 6.3%; top: 62.2%; width: 87.6%; height: 5.1%; }
+            .poster-endo .poster-call-link { display: none; }
+            .poster-endo .poster-contact-link { left: 6.3%; top: 56.7%; width: 87.6%; height: 4.5%; }
+        }
     </style>
 </head>
 <body>
@@ -509,12 +544,15 @@
 {% set clinic_hours_start = arrival_window_start|default('5:30 PM') %}
 {% set clinic_hours_end = arrival_window_end|default('7:45 PM') %}
 {% if appointment_identity.landing_image_path %}
-    <main class="poster-landing" id="main-content">
+    <main class="poster-landing{% if appointment_identity.landing_layout == 'endo' %} poster-endo{% endif %}" id="main-content">
         <figure class="poster-stage" style="--poster-image: url('{{ appointment_identity.landing_image_path }}');" aria-label="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}">
             <img class="poster-desktop-image" src="{{ appointment_identity.landing_image_path }}" alt="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}" width="{{ appointment_identity.landing_image_width|default(2400, true) }}" height="{{ appointment_identity.landing_image_height|default(1350, true) }}" fetchpriority="high" decoding="async">
             <img class="poster-mobile-image" src="{{ appointment_identity.landing_mobile_image_path|default(appointment_identity.landing_image_path, true) }}" alt="{{ appointment_identity.landing_image_alt|default(clinic_name ~ ' appointment page', true) }}" width="{{ appointment_identity.landing_mobile_image_width|default(appointment_identity.landing_image_width|default(2400, true), true) }}" height="{{ appointment_identity.landing_mobile_image_height|default(appointment_identity.landing_image_height|default(1350, true), true) }}" fetchpriority="high" decoding="async">
-            <a class="poster-action-link poster-call-link" href="tel:+919610026600" aria-label="Call +91 96100 26600">Call +91 96100 26600</a>
+            <a class="poster-action-link poster-call-link" href="tel:{{ appointment_identity.landing_phone }}" aria-label="Call {{ appointment_identity.landing_phone }}">{% if appointment_identity.landing_layout == 'endo' %}<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24c1.1.36 2.3.55 3.6.55a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.6 21 3 13.4 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.3.19 2.5.55 3.6a1 1 0 0 1-.24 1z"/></svg><span>{{ appointment_identity.landing_phone }}</span>{% else %}Call {{ appointment_identity.landing_phone }}{% endif %}</a>
             <a class="poster-action-link poster-booking-link" href="{{ booking_href }}">Book an Appointment</a>
+            {% if appointment_identity.landing_contact_phone %}
+            <a class="poster-action-link poster-contact-link" href="tel:{{ appointment_identity.landing_contact_phone }}" aria-label="Call {{ appointment_identity.landing_contact_phone }}">Call {{ appointment_identity.landing_contact_phone }}</a>
+            {% endif %}
         </figure>
     </main>
 {% else %}

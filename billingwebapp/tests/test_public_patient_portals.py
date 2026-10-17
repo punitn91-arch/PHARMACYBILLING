@@ -426,8 +426,38 @@ class PublicPatientPortalTests(unittest.TestCase):
     def test_public_appointment_landing_links_to_booking_form(self):
         response = self.client.get("/appointment")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Book Appointment", response.data)
+        self.assertIn(b"Book an Appointment", response.data)
         self.assertIn(b'href="/book-appointment?tenant=default"', response.data)
+
+    def test_endo_poster_actions_preserve_tenant_and_open_booking(self):
+        with self.app.app_context():
+            tenant = self.db.session.get(self.app_module.Tenant, self._tenant_id())
+            tenant.pharmacy_name = "The Endo Pharmacy"
+            self.db.session.commit()
+
+        response = self.client.get("/appointment?tenant=default")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"/static/endoclinic-appointment-landing.png", response.data)
+        self.assertIn(b'src="/static/endoclinic-appointment-landing-mobile.png"', response.data)
+        self.assertIn(b'poster-endo', response.data)
+        self.assertIn(b'<span>+919024648186</span>', response.data)
+        self.assertNotIn(b"9024648286", response.data)
+        self.assertIn(b'href="tel:+919024648186"', response.data)
+        self.assertIn(b'href="/book-appointment?tenant=default"', response.data)
+        self.assertNotIn(b"arthrogenix-appointment-landing", response.data)
+        self.assertEqual(self.client.get("/book-appointment?tenant=default").status_code, 200)
+
+    def test_arthrogenix_poster_keeps_its_own_image_and_phone(self):
+        with self.app.app_context():
+            tenant = self.db.session.get(self.app_module.Tenant, self._tenant_id())
+            tenant.pharmacy_name = "Arthrogenix"
+            self.db.session.commit()
+
+        response = self.client.get("/appointment?tenant=default")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"/static/arthrogenix-appointment-landing.png", response.data)
+        self.assertIn(b'href="tel:+919610026600"', response.data)
+        self.assertNotIn(b"endoclinic-appointment-landing", response.data)
 
     def test_admin_can_manage_public_booking_controls(self):
         self._login_admin()

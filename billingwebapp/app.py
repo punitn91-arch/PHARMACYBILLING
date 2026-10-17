@@ -16603,6 +16603,7 @@ TENANT_APPOINTMENT_OVERRIDES = (
         "landing_mobile_image_path": "/static/arthrogenix-appointment-landing-mobile.png",
         "landing_mobile_image_width": 941,
         "landing_mobile_image_height": 1672,
+        "landing_phone": "+919610026600",
     },
     {
         "match_terms": ("the endo", "endo pharmacy", "endo clinic", "endopharmacy"),
@@ -16613,6 +16614,16 @@ TENANT_APPOINTMENT_OVERRIDES = (
         "banner_alt": "Dr. Abhishek Prakash - Diabetologist and Endocrinologist",
         "banner_width": 1983,
         "banner_height": 793,
+        "landing_image_path": "/static/endoclinic-appointment-landing.png",
+        "landing_image_alt": "Endoclinic — Dr. Abhishek Prakash, Diabetologist and Endocrinologist",
+        "landing_image_width": 2400,
+        "landing_image_height": 1350,
+        "landing_layout": "endo",
+        "landing_mobile_image_path": "/static/endoclinic-appointment-landing-mobile.png",
+        "landing_mobile_image_width": 941,
+        "landing_mobile_image_height": 1672,
+        "landing_phone": "+919024648186",
+        "landing_contact_phone": "+919024648186",
     },
 )
 
