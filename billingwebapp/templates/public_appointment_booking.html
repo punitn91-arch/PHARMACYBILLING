@@ -231,6 +231,9 @@
             </form>
         </div>
 
+        {% if current_availability.sunday_closed|default(false) %}
+        <p class="empty" role="status" aria-live="polite" lang="hi">{{ current_availability.message }}</p>
+        {% else %}
         <form class="booking-form" method="post" action="{{ booking_form_url }}">
             {% if public_tenant_code %}<input type="hidden" name="tenant" value="{{ public_tenant_code }}">{% endif %}
             <section class="section" aria-labelledby="patient-details-title">
@@ -349,8 +352,14 @@
                 <button class="submit" type="submit" {% if not booking_is_enabled %}disabled aria-disabled="true"{% endif %}>Book Appointment</button>
             </div>
         </form>
+        {% endif %}
     </section>
     <p class="footer">Please arrive between {{ arrival_window_start_display }} and {{ arrival_window_end_display }}. Consultation order and token are decided at reception based on arrival.</p>
 </main>
+<script>
+    document.getElementById('availability_date').addEventListener('change', function () {
+        this.form.requestSubmit();
+    });
+</script>
 </body>
 </html>

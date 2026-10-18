@@ -16587,6 +16587,7 @@ PUBLIC_APPOINTMENT_ACTIVE_STATUSES = {"OTP_PENDING", "PAYMENT_PENDING", "BOOKED"
 PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_START = "17:30"
 PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END = "19:45"
 PUBLIC_ONLINE_CONSULTATION_FEE = 1000
+PUBLIC_APPOINTMENT_SUNDAY_MESSAGE = "रविवार को डॉक्टर साहब नहीं बैठते। कृपया कोई अन्य दिन चुनें।"
 TENANT_APPOINTMENT_OVERRIDES = (
     {
         "match_terms": ("arthrogenix", "arthro", "artho"),
@@ -16959,9 +16960,12 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
     normal_full = normal_remaining <= 0
     priority_full = priority_remaining <= 0
     priority_available = bool(normal_full and not priority_full)
+    sunday_closed = selected_date.weekday() == 6
     same_day_booking_closed = public_appointment_same_day_booking_closed(selected_date, settings)
     message = ""
-    if not getattr(settings, "booking_enabled", True):
+    if sunday_closed:
+        message = PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
+    elif not getattr(settings, "booking_enabled", True):
         message = "Online appointment booking is currently unavailable."
     elif same_day_booking_closed:
         message = "Online booking for today is closed. Please choose another date."
@@ -16981,8 +16985,10 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
         # are intentionally no longer generated or accepted.
         "slots": [],
         "same_day_booking_closed": same_day_booking_closed,
+        "sunday_closed": sunday_closed,
         "booking_open": bool(
             getattr(settings, "booking_enabled", True)
+            and not sunday_closed
             and not same_day_booking_closed
             and (normal_remaining > 0 or priority_available)
         ),
@@ -17027,6 +17033,8 @@ def validate_public_appointment_request(form_data, settings, availability):
         return None, "Please select a valid gender."
     if not appointment_date or appointment_date < today or appointment_date > today + timedelta(days=max_days_ahead):
         return None, "Please choose an available appointment date."
+    if appointment_date.weekday() == 6:
+        return None, PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
     if booking_type not in {"NORMAL", "PRIORITY", "ONLINE"}:
         return None, "Please choose a valid booking type."
     if availability.get("same_day_booking_closed"):
@@ -17055,6 +17063,8 @@ def validate_public_appointment_request(form_data, settings, availability):
 
 def public_appointment_capacity_error(booking_type, availability):
     """Return a patient-safe capacity error for a public booking type."""
+    if availability.get("sunday_closed"):
+        return PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
     if booking_type in {"NORMAL", "ONLINE"} and availability.get("normal_full"):
         return "Regular appointments are full for this date. Please choose another date."
     if booking_type == "PRIORITY":
@@ -17160,9 +17170,10 @@ def confirm_public_normal_appointment(booking, settings):
     if availability.get("same_day_booking_closed"):
         db.session.rollback()
         return None, "Online booking for today is closed. Please choose another date."
-    if public_appointment_capacity_error("NORMAL", availability):
+    capacity_error = public_appointment_capacity_error("NORMAL", availability)
+    if capacity_error:
         db.session.rollback()
-        return None, "Regular appointment capacity was just filled. Please choose another date."
+        return None, capacity_error
 
     patient = Patient.query.filter_by(mobile=booking.mobile).first()
     if not patient:
@@ -17267,9 +17278,10 @@ def confirm_public_priority_appointment(booking, settings, payment_mode, payment
     if availability.get("same_day_booking_closed"):
         db.session.rollback()
         return None, "Online booking for today is closed. Please choose another date."
-    if public_appointment_capacity_error("PRIORITY", availability):
+    capacity_error = public_appointment_capacity_error("PRIORITY", availability)
+    if capacity_error:
         db.session.rollback()
-        return None, "Priority capacity was just filled. Do not confirm this payment without a replacement booking."
+        return None, capacity_error
 
     patient = Patient.query.filter_by(mobile=booking.mobile).first()
     if not patient:
@@ -17361,7 +17373,8 @@ def render_public_appointment_booking_form(*, form_data=None, selected_date=None
         available_dates.append({
             "value": candidate.isoformat(),
             "label": candidate.strftime("%a, %d %b %Y"),
-            "available": can_book,
+            # Sundays remain selectable so choosing one explains the closure.
+            "available": can_book or candidate_availability.get("sunday_closed", False),
         })
     return render_template(
         "public_appointment_booking.html",

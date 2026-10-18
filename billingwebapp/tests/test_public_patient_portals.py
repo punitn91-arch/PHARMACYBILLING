@@ -121,6 +121,10 @@ class PublicPatientPortalTests(unittest.TestCase):
     def _tenant_id(self):
         return self.app_module.Tenant.query.order_by(self.app_module.Tenant.id.asc()).first().id
 
+    def _next_bookable_date(self):
+        target_date = self.app_module.clinic_now().date() + timedelta(days=1)
+        return target_date + timedelta(days=1) if target_date.weekday() == 6 else target_date
+
     def _login_admin(self):
         response = self.client.post(
             "/login",
@@ -175,8 +179,83 @@ class PublicPatientPortalTests(unittest.TestCase):
         self.assertEqual(verify_response.status_code, 302)
         self.assertIn("/my-lab-reports/list", verify_response.headers["Location"])
 
+    def test_sunday_selection_shows_doctor_message_and_rejects_all_booking_types(self):
+        sunday = "2026-10-18"
+        message = "रविवार को डॉक्टर साहब नहीं बैठते। कृपया कोई अन्य दिन चुनें।".encode("utf-8")
+        with patch.object(self.app_module, "clinic_now", return_value=datetime(2026, 10, 17, 10)):
+            # Both reception QR and shared link hand off to this same form.
+            landing = self.client.get("/appointment?tenant=default")
+            self.assertIn(b'href="/book-appointment?tenant=default"', landing.data)
+            page = self.client.get(f"/book-appointment?tenant=default&date={sunday}")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(message, page.data)
+            self.assertIn(b'value="2026-10-18" selected', page.data)
+            self.assertNotIn(b'class="booking-form"', page.data)
+
+            for booking_type in ("NORMAL", "ONLINE", "PRIORITY"):
+                with self.subTest(booking_type=booking_type):
+                    response = self.client.post("/book-appointment", data={
+                        "tenant": "default", "patient_name": "Sunday Test",
+                        "mobile": "9876543210", "gender": "OTHER",
+                        "appointment_date": sunday, "booking_type": booking_type,
+                    })
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIn(message, response.data)
+            with self.app.app_context():
+                self.assertEqual(self.app_module.Appointment.query.count(), 0)
+                self.assertEqual(self.app_module.PublicAppointmentBooking.query.count(), 0)
+
+    def test_sunday_capacity_guard_and_weekday_booking(self):
+        with patch.object(self.app_module, "clinic_now", return_value=datetime(2026, 10, 17, 10)):
+            self.client.get("/book-appointment?tenant=default&date=2026-10-18")
+            with self.app.app_context():
+                with self.app_module.tenant_context(self._tenant_id()):
+                    availability = self.app_module.get_public_appointment_availability(
+                        datetime(2026, 10, 18).date()
+                    )
+                    self.assertFalse(availability["booking_open"])
+                    for booking_type in ("NORMAL", "ONLINE", "PRIORITY"):
+                        self.assertEqual(
+                            self.app_module.public_appointment_capacity_error(booking_type, availability),
+                            self.app_module.PUBLIC_APPOINTMENT_SUNDAY_MESSAGE,
+                        )
+                        settings = self.app_module.get_public_appointment_booking_settings()
+                        reservation, error = self.app_module.create_public_appointment_reservation({
+                            "appointment_date": datetime(2026, 10, 18).date(),
+                            "booking_type": booking_type,
+                        }, settings)
+                        self.assertIsNone(reservation)
+                        self.assertEqual(error, self.app_module.PUBLIC_APPOINTMENT_SUNDAY_MESSAGE)
+                    # Pending bookings from before this rule cannot be confirmed either.
+                    booking = self.app_module.PublicAppointmentBooking(
+                        appointment_date=datetime(2026, 10, 18).date(),
+                        booking_type="NORMAL",
+                    )
+                    appointment, error = self.app_module.confirm_public_normal_appointment(booking, settings)
+                    self.assertIsNone(appointment)
+                    self.assertEqual(error, self.app_module.PUBLIC_APPOINTMENT_SUNDAY_MESSAGE)
+                    booking.booking_type = "PRIORITY"
+                    booking.status = "PAYMENT_PENDING"
+                    booking.reservation_expires_at = datetime.utcnow() + timedelta(minutes=10)
+                    appointment, error = self.app_module.confirm_public_priority_appointment(
+                        booking, settings, "UPI", "sunday-test-reference"
+                    )
+                    self.assertIsNone(appointment)
+                    self.assertEqual(error, self.app_module.PUBLIC_APPOINTMENT_SUNDAY_MESSAGE)
+            page = self.client.get("/book-appointment?tenant=default&date=2026-10-19")
+            self.assertIn(b'class="booking-form"', page.data)
+            response = self.client.post("/book-appointment", data={
+                "tenant": "default", "patient_name": "Monday Test",
+                "mobile": "9876543210", "gender": "OTHER",
+                "appointment_date": "2026-10-19", "booking_type": "NORMAL",
+            })
+            self.assertEqual(response.status_code, 302)
+            self.assertIn("/book-appointment/confirmation", response.headers["Location"])
+            with self.app.app_context():
+                self.assertEqual(self.app_module.Appointment.query.count(), 1)
+
     def test_normal_qr_booking_without_otp_creates_appointment_and_stops_at_15(self):
-        target_date = self.app_module.clinic_now().date() + timedelta(days=1)
+        target_date = self._next_bookable_date()
         first_slot = datetime.combine(target_date, time(10, 0))
 
         with self.app.app_context():
@@ -334,7 +413,7 @@ class PublicPatientPortalTests(unittest.TestCase):
             )
 
     def test_online_consultation_confirms_directly_at_fixed_fee_and_uses_existing_capacity(self):
-        target_date = self.app_module.clinic_now().date() + timedelta(days=1)
+        target_date = self._next_bookable_date()
         with self.app.app_context():
             settings = self.app_module.get_public_appointment_booking_settings()
             settings.normal_daily_limit = 1
@@ -394,7 +473,7 @@ class PublicPatientPortalTests(unittest.TestCase):
             "patient_name": "New Patient",
             "mobile": "9876543210",
             "gender": "OTHER",
-            "appointment_date": (self.app_module.clinic_now().date() + timedelta(days=1)).isoformat(),
+            "appointment_date": self._next_bookable_date().isoformat(),
             "booking_type": "NORMAL",
         }
         with patch.object(self.app_module, "send_portal_otp") as send_otp:
@@ -415,7 +494,7 @@ class PublicPatientPortalTests(unittest.TestCase):
             self.assertEqual(self.app_module.Appointment.query.count(), 0)
 
     def test_priority_request_needs_staff_verified_payment_before_confirmation(self):
-        target_date = self.app_module.clinic_now().date() + timedelta(days=1)
+        target_date = self._next_bookable_date()
         first_slot = datetime.combine(target_date, time(10, 0))
         with self.app.app_context():
             tenant_id = self._tenant_id()
