@@ -7680,6 +7680,7 @@ with app.app_context():
         # Public QR appointments are first-come, first-served.  These fields
         # are intentionally independent from the legacy per-slot settings so
         # existing staff-created appointments continue to keep their own time.
+        ensure_column("appointment_booking_settings", "booking_weekdays", "TEXT NOT NULL DEFAULT '0,1,2,3,4,5'")
         ensure_column("appointment_booking_settings", "arrival_window_start", "TEXT DEFAULT '17:30'")
         ensure_column("appointment_booking_settings", "arrival_window_end", "TEXT DEFAULT '19:45'")
         ensure_column("hold_bill", "customer", "TEXT")
@@ -15695,6 +15696,7 @@ def ensure_public_appointment_runtime_schema():
     return ensure_runtime_schema_requirements(
         {
             "appointment_booking_settings": [
+                ("booking_weekdays", "TEXT NOT NULL DEFAULT '0,1,2,3,4,5'"),
                 ("arrival_window_start", "TEXT DEFAULT '17:30'"),
                 ("arrival_window_end", "TEXT DEFAULT '19:45'"),
             ],
@@ -16782,6 +16784,27 @@ def public_appointment_settings_value(settings, field_name, default, *, minimum=
     return value
 
 
+PUBLIC_APPOINTMENT_WEEKDAYS = (
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+)
+
+
+def public_appointment_booking_weekdays(settings):
+    value = getattr(settings, "booking_weekdays", None)
+    if value is None:
+        value = "0,1,2,3,4,5"
+    return {int(day) for day in value.split(",") if day in ("0", "1", "2", "3", "4", "5", "6")}
+
+
+def public_appointment_weekday_closure_message(selected_date, settings):
+    if selected_date.weekday() in public_appointment_booking_weekdays(settings):
+        return ""
+    if selected_date.weekday() == 6:
+        return PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
+    day_name = PUBLIC_APPOINTMENT_WEEKDAYS[selected_date.weekday()]
+    return f"The doctor is unavailable on {day_name}. Please choose another day."
+
+
 def public_appointment_arrival_window(settings):
     """Return a validated, clinic-controlled FCFS arrival window.
 
@@ -16960,11 +16983,13 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
     normal_full = normal_remaining <= 0
     priority_full = priority_remaining <= 0
     priority_available = bool(normal_full and not priority_full)
-    sunday_closed = selected_date.weekday() == 6
+    weekday_message = public_appointment_weekday_closure_message(selected_date, settings)
+    weekday_closed = bool(weekday_message)
+    sunday_closed = weekday_closed and selected_date.weekday() == 6
     same_day_booking_closed = public_appointment_same_day_booking_closed(selected_date, settings)
     message = ""
-    if sunday_closed:
-        message = PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
+    if weekday_closed:
+        message = weekday_message
     elif not getattr(settings, "booking_enabled", True):
         message = "Online appointment booking is currently unavailable."
     elif same_day_booking_closed:
@@ -16986,9 +17011,10 @@ def get_public_appointment_availability(selected_date, settings=None, exclude_bo
         "slots": [],
         "same_day_booking_closed": same_day_booking_closed,
         "sunday_closed": sunday_closed,
+        "weekday_closed": weekday_closed,
         "booking_open": bool(
             getattr(settings, "booking_enabled", True)
-            and not sunday_closed
+            and not weekday_closed
             and not same_day_booking_closed
             and (normal_remaining > 0 or priority_available)
         ),
@@ -17033,8 +17059,9 @@ def validate_public_appointment_request(form_data, settings, availability):
         return None, "Please select a valid gender."
     if not appointment_date or appointment_date < today or appointment_date > today + timedelta(days=max_days_ahead):
         return None, "Please choose an available appointment date."
-    if appointment_date.weekday() == 6:
-        return None, PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
+    weekday_message = public_appointment_weekday_closure_message(appointment_date, settings)
+    if weekday_message:
+        return None, weekday_message
     if booking_type not in {"NORMAL", "PRIORITY", "ONLINE"}:
         return None, "Please choose a valid booking type."
     if availability.get("same_day_booking_closed"):
@@ -17063,6 +17090,8 @@ def validate_public_appointment_request(form_data, settings, availability):
 
 def public_appointment_capacity_error(booking_type, availability):
     """Return a patient-safe capacity error for a public booking type."""
+    if availability.get("weekday_closed"):
+        return availability["message"]
     if availability.get("sunday_closed"):
         return PUBLIC_APPOINTMENT_SUNDAY_MESSAGE
     if booking_type in {"NORMAL", "ONLINE"} and availability.get("normal_full"):
@@ -17373,8 +17402,8 @@ def render_public_appointment_booking_form(*, form_data=None, selected_date=None
         available_dates.append({
             "value": candidate.isoformat(),
             "label": candidate.strftime("%a, %d %b %Y"),
-            # Sundays remain selectable so choosing one explains the closure.
-            "available": can_book or candidate_availability.get("sunday_closed", False),
+            # Closed weekdays remain selectable to explain the doctor's absence.
+            "available": can_book or candidate_availability.get("weekday_closed", False),
         })
     return render_template(
         "public_appointment_booking.html",
@@ -17653,6 +17682,8 @@ def confirm_public_appointment_priority_request(booking_id):
 def public_appointment_booking_settings():
     settings = get_public_appointment_booking_settings()
     if request.method == "POST":
+        weekday_values = request.form.getlist("booking_weekdays")
+        weekdays_submitted = "booking_weekdays_present" in request.form or bool(weekday_values)
         normal_daily_limit = to_int_safe(request.form.get("normal_daily_limit"), 0)
         priority_daily_limit = to_int_safe(request.form.get("priority_daily_limit"), -1)
         # Slot settings are legacy-only. Keep their stored value when an
@@ -17676,7 +17707,9 @@ def public_appointment_booking_settings():
             or getattr(settings, "arrival_window_end", PUBLIC_APPOINTMENT_ARRIVAL_WINDOW_END)
         )
 
-        if not 1 <= normal_daily_limit <= 100:
+        if any(day not in {str(i) for i in range(7)} for day in weekday_values):
+            flash("Please select valid booking weekdays.", "danger")
+        elif not 1 <= normal_daily_limit <= 100:
             flash("Regular daily capacity must be between 1 and 100.", "danger")
         elif not 0 <= priority_daily_limit <= 20:
             flash("Priority daily capacity must be between 0 and 20.", "danger")
@@ -17692,6 +17725,7 @@ def public_appointment_booking_settings():
             flash("Arrival window end time must be after its start time.", "danger")
         else:
             before_snapshot = {
+                "booking_weekdays": settings.booking_weekdays,
                 "booking_enabled": bool(settings.booking_enabled),
                 "normal_daily_limit": settings.normal_daily_limit,
                 "priority_daily_limit": settings.priority_daily_limit,
@@ -17704,6 +17738,8 @@ def public_appointment_booking_settings():
                 "max_days_ahead": settings.max_days_ahead,
                 "booking_cutoff_minutes": settings.booking_cutoff_minutes,
             }
+            if weekdays_submitted:
+                settings.booking_weekdays = ",".join(sorted(set(weekday_values)))
             settings.booking_enabled = "booking_enabled" in request.form
             settings.normal_daily_limit = normal_daily_limit
             settings.priority_daily_limit = priority_daily_limit
@@ -17727,6 +17763,7 @@ def public_appointment_booking_settings():
                     ref_code="PUBLIC_QR",
                     before=before_snapshot,
                     after={
+                        "booking_weekdays": settings.booking_weekdays,
                         "booking_enabled": bool(settings.booking_enabled),
                         "normal_daily_limit": settings.normal_daily_limit,
                         "priority_daily_limit": settings.priority_daily_limit,
@@ -17750,6 +17787,8 @@ def public_appointment_booking_settings():
     return render_template(
         "appointment_booking_settings.html",
         settings=settings,
+        booking_weekday_names=PUBLIC_APPOINTMENT_WEEKDAYS,
+        selected_booking_weekdays=public_appointment_booking_weekdays(settings),
         pending_priority_count=len(get_active_priority_payment_requests()),
         **public_appointment_arrival_window_context(settings),
     )

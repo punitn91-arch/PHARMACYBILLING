@@ -231,8 +231,8 @@
             </form>
         </div>
 
-        {% if current_availability.sunday_closed|default(false) %}
-        <p class="empty" role="status" aria-live="polite" lang="hi">{{ current_availability.message }}</p>
+        {% if current_availability.weekday_closed|default(current_availability.sunday_closed|default(false)) %}
+        <p class="empty" role="status" aria-live="polite"{% if current_availability.sunday_closed|default(false) %} lang="hi"{% endif %}>{{ current_availability.message }}</p>
         {% else %}
         <form class="booking-form" method="post" action="{{ booking_form_url }}">
             {% if public_tenant_code %}<input type="hidden" name="tenant" value="{{ public_tenant_code }}">{% endif %}

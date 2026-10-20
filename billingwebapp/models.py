@@ -648,6 +648,7 @@ class AppointmentBookingSettings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     tenant_id = db.Column(db.Integer, db.ForeignKey("tenant.id"), index=True)
     booking_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    booking_weekdays = db.Column(db.String(13), nullable=False, default="0,1,2,3,4,5", server_default="0,1,2,3,4,5")
     normal_daily_limit = db.Column(db.Integer, nullable=False, default=15)
     priority_daily_limit = db.Column(db.Integer, nullable=False, default=2)
     normal_fee = db.Column(db.Float, nullable=False, default=600)

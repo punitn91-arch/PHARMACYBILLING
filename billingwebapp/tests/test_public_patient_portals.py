@@ -663,6 +663,84 @@ class PublicPatientPortalTests(unittest.TestCase):
         self.assertEqual(queue_response.status_code, 200)
         self.assertIn(b"Priority appointment requests", queue_response.data)
 
+    def test_weekday_controls_block_closed_days_and_can_enable_sunday(self):
+        self._login_admin()
+        settings_data = {
+            "booking_enabled": "on", "normal_daily_limit": "15",
+            "priority_daily_limit": "2", "normal_fee": "600",
+            "priority_fee": "1000", "arrival_window_start": "17:30",
+            "arrival_window_end": "19:45", "max_days_ahead": "14",
+            "booking_cutoff_minutes": "30", "booking_weekdays_present": "1",
+            "booking_weekdays": ["6"],
+        }
+        response = self.client.post("/appointment-booking/settings", data=settings_data)
+        self.assertEqual(response.status_code, 302)
+        page = self.client.get("/appointment-booking/settings")
+        self.assertIn(b'Doctor appointment days', page.data)
+        self.assertIn(b'value="6" checked', page.data)
+        self.assertNotIn(b'value="0" checked', page.data)
+        with patch.object(self.app_module, "clinic_now", return_value=datetime(2026, 10, 16, 9, 0)):
+            with self.app.app_context():
+                settings = self.app_module.get_public_appointment_booking_settings()
+                self.assertEqual(settings.booking_weekdays, "6")
+                monday = datetime(2026, 10, 19).date()
+                availability = self.app_module.get_public_appointment_availability(monday, settings)
+                self.assertFalse(availability["booking_open"])
+                self.assertTrue(availability["weekday_closed"])
+                self.assertIn("Monday", availability["message"])
+                # Reservation and confirmation must recheck even for an old pending booking.
+                for booking_type in ("NORMAL", "ONLINE", "PRIORITY"):
+                    reservation, error = self.app_module.create_public_appointment_reservation({
+                        "appointment_date": monday, "booking_type": booking_type,
+                    }, settings)
+                    self.assertIsNone(reservation)
+                    self.assertIn("Monday", error)
+                    booking = self.app_module.PublicAppointmentBooking(
+                        appointment_date=monday, booking_type=booking_type,
+                        status="PAYMENT_PENDING",
+                        reservation_expires_at=datetime.utcnow() + timedelta(minutes=10),
+                    )
+                    if booking_type == "PRIORITY":
+                        appointment, error = self.app_module.confirm_public_priority_appointment(
+                            booking, settings, "UPI", "weekday-test-reference"
+                        )
+                    else:
+                        appointment, error = self.app_module.confirm_public_normal_appointment(booking, settings)
+                    self.assertIsNone(appointment)
+                    self.assertIn("Monday", error)
+            closed_page = self.client.get("/book-appointment?tenant=default&date=2026-10-19")
+            self.assertIn(b"The doctor is unavailable on Monday", closed_page.data)
+            self.assertNotIn(b'class="booking-form"', closed_page.data)
+            for booking_type in ("NORMAL", "ONLINE", "PRIORITY"):
+                response = self.client.post("/book-appointment", data={
+                    "tenant": "default", "patient_name": "Weekday Test",
+                    "mobile": "9876543210", "gender": "OTHER",
+                    "appointment_date": "2026-10-19", "booking_type": booking_type,
+                })
+                self.assertEqual(response.status_code, 400)
+            sunday_page = self.client.get("/book-appointment?tenant=default&date=2026-10-18")
+            self.assertIn(b'class="booking-form"', sunday_page.data)
+            response = self.client.post("/book-appointment", data={
+                "tenant": "default", "patient_name": "Sunday Test",
+                "mobile": "9876543210", "gender": "OTHER",
+                "appointment_date": "2026-10-18", "booking_type": "NORMAL",
+            })
+            self.assertEqual(response.status_code, 302)
+            with self.app.app_context():
+                self.assertEqual(self.app_module.Appointment.query.count(), 1)
+        # No checkboxes selected intentionally closes every day.
+        settings_data.pop("booking_weekdays")
+        response = self.client.post("/appointment-booking/settings", data=settings_data)
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            settings = self.app_module.get_public_appointment_booking_settings()
+            self.assertEqual(settings.booking_weekdays, "")
+            for offset in range(7):
+                availability = self.app_module.get_public_appointment_availability(
+                    datetime(2026, 10, 19).date() + timedelta(days=offset), settings,
+                )
+                self.assertFalse(availability["booking_open"])
+
     def test_msg91_sms_otp_uses_the_approved_flow_template_without_a_live_request(self):
         """The real SMS mode must submit the DLT/MSG91 template payload, not WhatsApp."""
 
