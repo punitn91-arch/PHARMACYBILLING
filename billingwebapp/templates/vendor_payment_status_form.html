@@ -1,0 +1,14 @@
+<form method="POST" action="{{ url_for('update_vendor_purchase_payment_status', purchase_id=payment_purchase.id) }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <input type="hidden" name="_csrf_token" value="{{ app_csrf_token() }}">
+    <input type="hidden" name="return_to" value="{{ payment_return_to|default('bill') }}">
+    <input type="hidden" name="mode" value="{{ mode|default('view') }}">
+    <select name="payment_status" aria-label="Payment status for bill {{ payment_purchase.invoice_no or payment_purchase.purchase_no }}" required style="width:auto;min-width:100px;">
+        {% set current_status = (payment_purchase.payment_status or '')|lower %}
+        {% if current_status not in ['paid', 'unpaid'] %}
+        <option value="" selected disabled>{{ payment_purchase.payment_status or 'Select status' }}</option>
+        {% endif %}
+        <option value="Paid" {% if current_status == 'paid' %}selected{% endif %}>Paid</option>
+        <option value="Unpaid" {% if current_status == 'unpaid' %}selected{% endif %}>Unpaid</option>
+    </select>
+    <button class="btn btn-sm" type="submit">Save Status</button>
+</form>

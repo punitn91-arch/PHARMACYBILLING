@@ -222,7 +222,10 @@ td {
             <b>Payment Mode:</b> {{ purchase.payment_mode or '-' }}
         </div>
         <div class="meta-item">
-            <b>Payment Status:</b> {{ purchase.payment_status or '-' }}
+            <b>Payment Status:</b>
+            {% with payment_purchase=purchase %}
+            {% include 'vendor_payment_status_form.html' %}
+            {% endwith %}
         </div>
         <div class="meta-item">
             <b>Created By:</b> {{ purchase.created_by or '-' }}

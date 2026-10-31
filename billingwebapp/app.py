@@ -13519,6 +13519,62 @@ def view_vendor_purchase(purchase_id):
         mode=mode
     )
 
+@app.route("/vendor/purchase/<int:purchase_id>/payment-status", methods=["POST"])
+@login_required
+@inventory_access_required
+def update_vendor_purchase_payment_status(purchase_id):
+    purchase = VendorPurchase.query.filter_by(id=purchase_id).with_for_update().populate_existing().first_or_404()
+    target = url_for("view_vendor_purchase", purchase_id=purchase.id)
+    if request.form.get("return_to") == "vendor":
+        target = url_for("edit_vendor", id=purchase.vendor_id)
+    elif request.form.get("mode") in ("edit", "return"):
+        target = url_for("view_vendor_purchase", purchase_id=purchase.id, mode=request.form["mode"])
+
+    status = (request.form.get("payment_status") or "").strip().lower()
+    if status not in ("paid", "unpaid"):
+        flash("Please select Paid or Unpaid.", "danger")
+        return redirect(target)
+
+    old_status = (purchase.payment_status or "").strip().lower()
+    # Re-saving the current status must never apply the balance adjustment twice.
+    if old_status == status:
+        flash("Payment status is already " + status.title() + ".", "info")
+        return redirect(target)
+    if old_status not in ("paid", "unpaid", "partial"):
+        flash("This bill's existing payment status needs review before updating.", "danger")
+        return redirect(target)
+
+    total = max(to_decimal(purchase.total_amount or 0), Decimal("0"))
+    previous_due = Decimal("0")
+    if old_status == "unpaid":
+        previous_due = total
+    elif old_status == "partial":
+        if purchase.paid_amount is None:
+            flash("Paid amount is missing for this partial bill. Please review it before updating.", "danger")
+            return redirect(target)
+        previous_due = max(total - max(to_decimal(purchase.paid_amount), Decimal("0")), Decimal("0"))
+    new_due = total if status == "unpaid" else Decimal("0")
+    before = {"payment_status": purchase.payment_status, "paid_amount": purchase.paid_amount}
+    try:
+        adjust_vendor_outstanding(purchase.vendor_id, new_due - previous_due)
+        purchase.payment_status = status.title()
+        purchase.paid_amount = float(total) if status == "paid" else 0
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Unable to update payment status for purchase_id=%s", purchase_id)
+        flash("Unable to update payment status. Please try again.", "danger")
+        return redirect(target)
+    record_audit_event(
+        "UPDATE_VENDOR_PURCHASE_PAYMENT", entity_type="VENDOR_PURCHASE",
+        entity_id=purchase.id, ref_code=purchase.invoice_no or purchase.purchase_no,
+        before=before,
+        after={"payment_status": purchase.payment_status, "paid_amount": purchase.paid_amount},
+    )
+    flash("Bill payment status updated to " + status.title() + ".", "success")
+    return redirect(target)
+
+
 @app.route("/vendor/purchase/<int:purchase_id>/bill-file")
 @login_required
 @inventory_access_required

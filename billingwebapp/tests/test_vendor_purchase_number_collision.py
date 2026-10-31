@@ -489,6 +489,85 @@ class VendorPurchaseNumberSaveTests(unittest.TestCase):
             },
         )
 
+    def test_saved_bill_payment_status_updates_balance_without_changing_stock(self):
+        tenant_id, vendor_id = self._seed_tenant("payment")
+        client = self._login("payment")
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            vendor.outstanding_balance = 175
+            vendor.payment_status = "Unpaid"
+            bill = self.app_module.VendorPurchase(
+                vendor_id=vendor_id, purchase_no="PB-00001", invoice_no="PAY-001",
+                payment_status="Unpaid", paid_amount=0, total_amount=100,
+            )
+            self.db.session.add(bill)
+            self.db.session.commit()
+            bill_id = bill.id
+        endpoint = f"/vendor/purchase/{bill_id}/payment-status"
+        for status, expected_due, expected_paid in (
+            ("Paid", 75, 100), ("Paid", 75, 100),
+            ("Unpaid", 175, 0), ("Unpaid", 175, 0),
+        ):
+            response = client.post(endpoint, data={"payment_status": status, "return_to": "vendor"})
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, f"/vendor/edit/{vendor_id}")
+            with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+                bill = self.app_module.VendorPurchase.query.get(bill_id)
+                vendor = self.app_module.Vendor.query.get(vendor_id)
+                self.assertEqual(bill.payment_status, status)
+                self.assertEqual(bill.paid_amount, expected_paid)
+                self.assertEqual(vendor.outstanding_balance, expected_due)
+                self.assertEqual(vendor.payment_status, "Unpaid")
+                self.assertEqual(self.app_module.Medicine.query.one().qty, 10)
+                self.assertEqual(self.app_module.StockHistory.query.count(), 0)
+        for page in (f"/vendor/edit/{vendor_id}", f"/vendor/purchase/{bill_id}?mode=edit"):
+            response = client.get(page)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(endpoint.encode(), response.data)
+            self.assertIn(b"Save Status", response.data)
+
+    def test_partial_bill_payment_status_validation_tenant_access_and_csrf(self):
+        tenant_id, vendor_id = self._seed_tenant("partialpay")
+        self._seed_tenant("otherpay")
+        client = self._login("partialpay")
+        other_client = self._login("otherpay")
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            vendor.outstanding_balance = 60
+            vendor.payment_status = "Unpaid"
+            bill = self.app_module.VendorPurchase(
+                vendor_id=vendor_id, purchase_no="PB-00001", payment_status="Partial",
+                paid_amount=40, total_amount=100,
+            )
+            self.db.session.add(bill)
+            self.db.session.commit()
+            bill_id = bill.id
+        endpoint = f"/vendor/purchase/{bill_id}/payment-status"
+        self.assertEqual(other_client.post(endpoint, data={"payment_status": "Paid"}).status_code, 404)
+        self.assertEqual(client.get(endpoint).status_code, 405)
+        client.post(endpoint, data={"payment_status": "invalid"})
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            self.assertEqual(self.app_module.VendorPurchase.query.get(bill_id).payment_status, "Partial")
+            self.assertEqual(self.app_module.Vendor.query.get(vendor_id).outstanding_balance, 60)
+        self.app.config["CSRF_PROTECTION"] = True
+        try:
+            response = client.post(endpoint, data={"payment_status": "Paid"}, headers={"Accept": "application/json"})
+            self.assertEqual(response.status_code, 400)
+            page = client.get(f"/vendor/purchase/{bill_id}")
+            self.assertIn(b'name="_csrf_token"', page.data)
+            with client.session_transaction() as session:
+                token = session["_csrf_token"]
+            response = client.post(endpoint, data={"payment_status": "Paid", "_csrf_token": token, "mode": "edit"})
+            self.assertEqual(response.location, f"/vendor/purchase/{bill_id}?mode=edit")
+        finally:
+            self.app.config["CSRF_PROTECTION"] = False
+        with self.app.app_context(), self.app_module.tenant_context(tenant_id):
+            self.assertEqual(self.app_module.VendorPurchase.query.get(bill_id).paid_amount, 100)
+            vendor = self.app_module.Vendor.query.get(vendor_id)
+            self.assertEqual(vendor.outstanding_balance, 0)
+            self.assertEqual(vendor.payment_status, "Paid")
+            self.assertEqual(self.app_module.AuditLog.query.filter_by(action="UPDATE_VENDOR_PURCHASE_PAYMENT").count(), 1)
+
     def test_tenant_numbering_duplicates_concurrency_and_stock_integrity(self):
         alpha_id, alpha_vendor_id = self._seed_tenant("alpha")
         beta_id, beta_vendor_id = self._seed_tenant("beta")
