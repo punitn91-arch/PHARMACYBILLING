@@ -223,9 +223,13 @@ td {
         </div>
         <div class="meta-item">
             <b>Payment Status:</b>
+            {% if mode == "edit" %}
             {% with payment_purchase=purchase %}
             {% include 'vendor_payment_status_form.html' %}
             {% endwith %}
+            {% else %}
+            {{ purchase.payment_status or '-' }}
+            {% endif %}
         </div>
         <div class="meta-item">
             <b>Created By:</b> {{ purchase.created_by or '-' }}

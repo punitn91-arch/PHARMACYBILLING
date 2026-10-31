@@ -1036,9 +1036,7 @@ td {
                         <td>{{ b.purchase_date.strftime('%d-%m-%Y') if b.purchase_date else '-' }}</td>
                         <td>{{ '%.2f'|format(b.total_amount or 0) }}</td>
                         <td>
-                            {% with payment_purchase=b, payment_return_to='vendor' %}
-                            {% include 'vendor_payment_status_form.html' %}
-                            {% endwith %}
+                            {{ b.payment_status or '-' }}
                         </td>
                         <td>
                             {% if b.bill_attachment_ref %}

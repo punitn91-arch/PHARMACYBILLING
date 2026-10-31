@@ -520,11 +520,20 @@ class VendorPurchaseNumberSaveTests(unittest.TestCase):
                 self.assertEqual(vendor.payment_status, "Unpaid")
                 self.assertEqual(self.app_module.Medicine.query.one().qty, 10)
                 self.assertEqual(self.app_module.StockHistory.query.count(), 0)
-        for page in (f"/vendor/edit/{vendor_id}", f"/vendor/purchase/{bill_id}?mode=edit"):
+        for page in (
+            f"/vendor/edit/{vendor_id}",
+            f"/vendor/purchase/{bill_id}",
+            f"/vendor/purchase/{bill_id}?mode=return",
+        ):
             response = client.get(page)
             self.assertEqual(response.status_code, 200)
-            self.assertIn(endpoint.encode(), response.data)
-            self.assertIn(b"Save Status", response.data)
+            self.assertNotIn(endpoint.encode(), response.data)
+            self.assertNotIn(b"Save Status", response.data)
+            self.assertIn(b"Unpaid", response.data)
+        response = client.get(f"/vendor/purchase/{bill_id}?mode=edit")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(endpoint.encode(), response.data)
+        self.assertIn(b"Save Status", response.data)
 
     def test_partial_bill_payment_status_validation_tenant_access_and_csrf(self):
         tenant_id, vendor_id = self._seed_tenant("partialpay")
@@ -553,7 +562,7 @@ class VendorPurchaseNumberSaveTests(unittest.TestCase):
         try:
             response = client.post(endpoint, data={"payment_status": "Paid"}, headers={"Accept": "application/json"})
             self.assertEqual(response.status_code, 400)
-            page = client.get(f"/vendor/purchase/{bill_id}")
+            page = client.get(f"/vendor/purchase/{bill_id}?mode=edit")
             self.assertIn(b'name="_csrf_token"', page.data)
             with client.session_transaction() as session:
                 token = session["_csrf_token"]
